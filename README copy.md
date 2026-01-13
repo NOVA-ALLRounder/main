@@ -25,3 +25,6 @@ Outputs are written under `outputs/` with:
 ## Notes
 - No external APIs are used. All behavior is deterministic with the configured seed.
 - The corpus in `data/corpus.json` is small and meant as a placeholder for real crawled data.
+
+
+--test
