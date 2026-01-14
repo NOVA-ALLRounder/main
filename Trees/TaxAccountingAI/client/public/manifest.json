@@ -1,0 +1,31 @@
+{
+    "name": "TREES - AI CFO",
+    "short_name": "TREES",
+    "description": "AI 세무/재무 비서 - 스타트업을 위한 지능형 CFO 시스템",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#3b82f6",
+    "orientation": "portrait-primary",
+    "icons": [
+        {
+            "src": "/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": [
+        "finance",
+        "business",
+        "productivity"
+    ],
+    "lang": "ko",
+    "dir": "ltr"
+}
