@@ -1,0 +1,6 @@
+numpy
+json
+logging
+deap
+random
+sklearn
