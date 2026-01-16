@@ -1,0 +1,18 @@
+# Virtual Science Lab (VSL) Dependencies
+
+# Core Framework
+langgraph>=0.0.30
+langchain-core>=0.1.0
+
+# Optional: For DAACS v2 CLI Provider integration
+# (CLI tools are external, no pip install needed)
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Scientific Libraries (for experiments)
+numpy>=1.20.0
+scipy>=1.7.0
+pandas>=1.3.0
+matplotlib>=3.4.0
+scikit-learn>=1.0.0

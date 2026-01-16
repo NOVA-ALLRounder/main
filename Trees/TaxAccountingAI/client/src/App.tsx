@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   XAxis,
   YAxis,
@@ -11,6 +11,8 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Rocket,
   Stethoscope,
@@ -36,7 +38,10 @@ import {
   XCircle,
   Check,
   LogOut,
-  Building
+  Building,
+  FileText,
+  X,
+  Coins
 } from "lucide-react";
 import {
   api,
@@ -44,11 +49,126 @@ import {
   type Recommendation,
   type Competition,
   type RiskAnalysis,
-  type CalendarAlert
+  type CalendarAlert,
+  type MemoryRecord,
+  type GraphNode,
+  type GraphEdge
 } from "./services/api";
 import { LoginPage } from "./components/LoginPage";
 
 // --- Components ---
+
+type DecisionRecord = {
+  id: string;
+  title: string;
+  summary: string;
+  status: "accepted" | "rejected";
+  createdAt: string;
+  reasons: string[];
+  impact: string;
+  outcomeStatus: "pending" | "positive" | "negative" | "neutral";
+  outcomeMemo?: string;
+  priorityScore?: number;
+  runwayMonths?: number;
+  riskScore?: number;
+  riskLevel?: "safe" | "warning" | "critical";
+  drivers?: string[] | { label: string; score: number }[];
+  rejectionReason?: string;
+  relatedTab?: string;
+  actionKey?: string;
+};
+
+type PresetDataset = {
+  id: string;
+  industry: "startup" | "hospital" | "commerce" | "saas" | "manufacturing" | "education" | "franchise";
+  name: string;
+  persona: string;
+  summary: string;
+  badge?: string;
+  meta: {
+    cash: number;
+    monthlyRevenue: number;
+    monthlyExpense: number;
+    breakdown?: Record<string, number>;
+  };
+  history: { month: string; revenue: number; expense: number }[];
+};
+
+const buildPresetHistory = (
+  baseRevenue: number,
+  baseExpense: number,
+  trend: number,
+  seasonality: number
+) => {
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, idx) => {
+    const offset = 11 - idx;
+    const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    const seasonal = Math.sin((idx / 12) * Math.PI * 2) * seasonality;
+    const trendFactor = 1 + trend * (idx / 11);
+    const revenue = Math.max(0, Math.round(baseRevenue * trendFactor * (1 + seasonal)));
+    const expense = Math.max(0, Math.round(baseExpense * (1 + seasonal * 0.6) * (1 + trend * 0.4 * (idx / 11))));
+    return { month, revenue, expense };
+  });
+};
+
+const PRESET_DATASETS: PresetDataset[] = [
+  { id: "startup-funded", industry: "startup", name: "Startup/Series A 확장", persona: "Series A 확장 단계", summary: "공격적 채용/마케팅 집행", badge: "공격", meta: { cash: 1500000000, monthlyRevenue: 70000000, monthlyExpense: 170000000, breakdown: { 인건비: 80000000, 마케팅: 35000000, 서버: 12000000, RnD: 25000000, 기타: 18000000 } }, history: buildPresetHistory(70000000, 170000000, 0.3, 0.1) },
+  { id: "startup-pre", industry: "startup", name: "Startup/예비창업자", persona: "예비창업자", summary: "보수적 운영, 비용 최소화", badge: "보수", meta: { cash: 30000000, monthlyRevenue: 1500000, monthlyExpense: 4500000, breakdown: { 인건비: 1500000, 개발: 1200000, 운영비: 800000, 기타: 1000000 } }, history: buildPresetHistory(1500000, 4500000, 0.05, 0.03) },
+  { id: "startup-self", industry: "startup", name: "Startup/자기자본 1억", persona: "자기자본 1억 스타트업", summary: "현실적 성장, 유료 전환 단계", badge: "현실", meta: { cash: 100000000, monthlyRevenue: 12000000, monthlyExpense: 18000000, breakdown: { 인건비: 8000000, 마케팅: 3000000, 서버: 2000000, 기타: 5000000 } }, history: buildPresetHistory(12000000, 18000000, 0.12, 0.06) },
+  { id: "hospital-clinic", industry: "hospital", name: "Hospital/동네의원 안정", persona: "동네의원", summary: "현실적 운영, 보험청구 안정", badge: "현실", meta: { cash: 260000000, monthlyRevenue: 110000000, monthlyExpense: 85000000, breakdown: { 인건비: 36000000, 약품: 16000000, 임차료: 12000000, 장비: 9000000, 기타: 12000000 } }, history: buildPresetHistory(110000000, 85000000, 0.06, 0.04) },
+  { id: "hospital-dental", industry: "hospital", name: "Hospital/치과 성장", persona: "치과 성장 단계", summary: "공격적 확장, 비급여 강화", badge: "공격", meta: { cash: 220000000, monthlyRevenue: 150000000, monthlyExpense: 130000000, breakdown: { 인건비: 48000000, 재료비: 22000000, 임차료: 13000000, 마케팅: 18000000, 기타: 29000000 } }, history: buildPresetHistory(150000000, 130000000, 0.12, 0.05) },
+  { id: "hospital-delay", industry: "hospital", name: "Hospital/요양급여 지연", persona: "요양급여 지연 리스크", summary: "보수적 운영, 현금흐름 압박", badge: "보수", meta: { cash: 180000000, monthlyRevenue: 70000000, monthlyExpense: 90000000, breakdown: { 인건비: 38000000, 약품: 15000000, 임차료: 10000000, 운영비: 14000000, 기타: 13000000 } }, history: buildPresetHistory(70000000, 90000000, 0.03, 0.05) },
+  { id: "commerce-marketplace", industry: "commerce", name: "E-commerce/마켓플레이스 셀러", persona: "오픈마켓 셀러", summary: "보수적 운영, 낮은 마진", badge: "보수", meta: { cash: 100000000, monthlyRevenue: 140000000, monthlyExpense: 135000000, breakdown: { 매입: 65000000, 광고: 22000000, 물류: 20000000, 인건비: 13000000, 기타: 15000000 } }, history: buildPresetHistory(140000000, 135000000, 0.04, 0.06) },
+  { id: "commerce-d2c", industry: "commerce", name: "E-commerce/D2C 성장", persona: "D2C 브랜드 성장", summary: "공격적 성장, 광고 확대", badge: "공격", meta: { cash: 320000000, monthlyRevenue: 280000000, monthlyExpense: 240000000, breakdown: { 매입: 105000000, 광고: 55000000, 물류: 30000000, 인건비: 22000000, 기타: 28000000 } }, history: buildPresetHistory(280000000, 240000000, 0.14, 0.07) },
+  { id: "commerce-seasonal", industry: "commerce", name: "E-commerce/시즌 편차", persona: "시즌 편차 큰 쇼핑몰", summary: "현실적 운영, 시즌 변동 큼", badge: "현실", meta: { cash: 120000000, monthlyRevenue: 90000000, monthlyExpense: 100000000, breakdown: { 매입: 45000000, 광고: 20000000, 물류: 15000000, 인건비: 10000000, 기타: 10000000 } }, history: buildPresetHistory(90000000, 100000000, 0.06, 0.12) },
+  { id: "saas-growth", industry: "saas", name: "SaaS/ARR 성장", persona: "PLG 성장 SaaS", summary: "공격적 성장, 인프라 확장", badge: "공격", meta: { cash: 2400000000, monthlyRevenue: 150000000, monthlyExpense: 260000000, breakdown: { 인건비: 120000000, 마케팅: 50000000, 인프라: 25000000, 고객성공: 20000000, 기타: 45000000 } }, history: buildPresetHistory(150000000, 260000000, 0.22, 0.04) },
+  { id: "saas-stable", industry: "saas", name: "SaaS/중견 안정", persona: "중견 SaaS", summary: "현실적 운영, 수익 안정", badge: "현실", meta: { cash: 800000000, monthlyRevenue: 120000000, monthlyExpense: 110000000, breakdown: { 인건비: 55000000, 마케팅: 15000000, 인프라: 12000000, 고객성공: 12000000, 기타: 16000000 } }, history: buildPresetHistory(120000000, 110000000, 0.1, 0.03) },
+  { id: "saas-bootstrap", industry: "saas", name: "SaaS/부트스트랩", persona: "부트스트랩 SaaS", summary: "보수적 운영, 비용 절감", badge: "보수", meta: { cash: 120000000, monthlyRevenue: 35000000, monthlyExpense: 45000000, breakdown: { 인건비: 22000000, 인프라: 6000000, 마케팅: 5000000, 운영: 5000000, 기타: 7000000 } }, history: buildPresetHistory(35000000, 45000000, 0.08, 0.03) },
+  { id: "manufacturing-capex", industry: "manufacturing", name: "제조/설비투자", persona: "설비투자 확장", summary: "공격적 투자, 고정비 증가", badge: "공격", meta: { cash: 1200000000, monthlyRevenue: 500000000, monthlyExpense: 520000000, breakdown: { 원재료: 250000000, 인건비: 90000000, 설비리스: 70000000, 물류: 40000000, 기타: 70000000 } }, history: buildPresetHistory(500000000, 520000000, 0.15, 0.06) },
+  { id: "manufacturing-stable", industry: "manufacturing", name: "제조/수주 안정", persona: "수주 안정 제조업", summary: "현실적 운영, 마진 안정", badge: "현실", meta: { cash: 900000000, monthlyRevenue: 450000000, monthlyExpense: 400000000, breakdown: { 원재료: 210000000, 인건비: 80000000, 설비유지: 35000000, 물류: 35000000, 기타: 40000000 } }, history: buildPresetHistory(450000000, 400000000, 0.08, 0.04) },
+  { id: "manufacturing-cost", industry: "manufacturing", name: "제조/원가 압박", persona: "원가 압박 제조업", summary: "보수적 운영, 원가 상승", badge: "보수", meta: { cash: 600000000, monthlyRevenue: 320000000, monthlyExpense: 340000000, breakdown: { 원재료: 190000000, 인건비: 70000000, 설비유지: 25000000, 물류: 25000000, 기타: 30000000 } }, history: buildPresetHistory(320000000, 340000000, 0.03, 0.05) },
+  { id: "education-online", industry: "education", name: "교육/온라인 확장", persona: "온라인 교육 성장", summary: "공격적 성장, 마케팅 확대", badge: "공격", meta: { cash: 450000000, monthlyRevenue: 180000000, monthlyExpense: 210000000, breakdown: { 콘텐츠: 70000000, 마케팅: 50000000, 인건비: 40000000, 플랫폼: 20000000, 기타: 30000000 } }, history: buildPresetHistory(180000000, 210000000, 0.18, 0.07) },
+  { id: "education-offline", industry: "education", name: "교육/오프라인 학원", persona: "오프라인 학원", summary: "현실적 운영, 안정적 수강", badge: "현실", meta: { cash: 250000000, monthlyRevenue: 120000000, monthlyExpense: 105000000, breakdown: { 인건비: 45000000, 임차료: 20000000, 마케팅: 15000000, 운영비: 10000000, 기타: 15000000 } }, history: buildPresetHistory(120000000, 105000000, 0.06, 0.09) },
+  { id: "education-small", industry: "education", name: "교육/소형 학원", persona: "소형 학원", summary: "보수적 운영, 비용 절감", badge: "보수", meta: { cash: 80000000, monthlyRevenue: 40000000, monthlyExpense: 48000000, breakdown: { 인건비: 20000000, 임차료: 10000000, 마케팅: 5000000, 운영비: 5000000, 기타: 8000000 } }, history: buildPresetHistory(40000000, 48000000, 0.04, 0.1) },
+  { id: "franchise-growth", industry: "franchise", name: "프랜차이즈/신규점포 확장", persona: "다점포 확장", summary: "공격적 확장, 고정비 증가", badge: "공격", meta: { cash: 700000000, monthlyRevenue: 260000000, monthlyExpense: 300000000, breakdown: { 원재료: 120000000, 인건비: 70000000, 임차료: 40000000, 마케팅: 30000000, 기타: 40000000 } }, history: buildPresetHistory(260000000, 300000000, 0.12, 0.08) },
+  { id: "franchise-core", industry: "franchise", name: "프랜차이즈/1~2호점", persona: "초기 프랜차이즈", summary: "현실적 운영, 매출 안정", badge: "현실", meta: { cash: 300000000, monthlyRevenue: 150000000, monthlyExpense: 140000000, breakdown: { 원재료: 65000000, 인건비: 35000000, 임차료: 20000000, 마케팅: 10000000, 기타: 10000000 } }, history: buildPresetHistory(150000000, 140000000, 0.07, 0.07) },
+  { id: "franchise-stagnant", industry: "franchise", name: "프랜차이즈/매출 정체", persona: "매출 정체 점포", summary: "보수적 운영, 매출 정체", badge: "보수", meta: { cash: 200000000, monthlyRevenue: 110000000, monthlyExpense: 125000000, breakdown: { 원재료: 55000000, 인건비: 30000000, 임차료: 20000000, 마케팅: 8000000, 기타: 12000000 } }, history: buildPresetHistory(110000000, 125000000, 0.02, 0.06) },
+];
+
+const PRESET_GROUPS = [
+  { id: "startup", label: "스타트업", desc: "투자/예비/자기자본", items: PRESET_DATASETS.filter((item) => item.industry === "startup") },
+  { id: "hospital", label: "병의원", desc: "의원/치과/요양급여", items: PRESET_DATASETS.filter((item) => item.industry === "hospital") },
+  { id: "commerce", label: "이커머스", desc: "마켓플레이스/D2C/시즌", items: PRESET_DATASETS.filter((item) => item.industry === "commerce") },
+  { id: "saas", label: "IT SaaS", desc: "PLG/중견/부트스트랩", items: PRESET_DATASETS.filter((item) => item.industry === "saas") },
+  { id: "manufacturing", label: "제조", desc: "설비투자/수주안정/원가압박", items: PRESET_DATASETS.filter((item) => item.industry === "manufacturing") },
+  { id: "education", label: "교육", desc: "온라인/오프라인/소형", items: PRESET_DATASETS.filter((item) => item.industry === "education") },
+  { id: "franchise", label: "프랜차이즈", desc: "확장/초기/정체", items: PRESET_DATASETS.filter((item) => item.industry === "franchise") },
+];
+
+const DashboardEmptyState = ({ status, onSetup }: { status: "none" | "partial"; onSetup: () => void }) => {
+  const title = status === "partial" ? "재무 데이터가 아직 부족합니다." : "재무 데이터가 아직 없습니다.";
+  const desc = status === "partial" ? "현금, 매출, 지출 중 2개 이상을 입력하면 대시보드가 활성화됩니다." : "설정에서 프리셋 데이터셋을 적용하면 대시보드가 활성화됩니다.";
+  return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      <div className="p-6 rounded-xl border bg-muted/40 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h3 className="text-base font-semibold">{title}</h3>
+          <p className="text-sm text-muted-foreground mt-1">{desc}</p>
+        </div>
+        <button onClick={onSetup} className="text-sm px-4 py-2 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">데이터 입력하러 가기</button>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map((i) => <div key={i} className="h-28 rounded-xl border bg-muted/30" />)}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 h-60 rounded-xl border bg-muted/30" />
+        <div className="lg:col-span-1 h-60 rounded-xl border bg-muted/30" />
+      </div>
+    </div>
+  );
+};
 
 const SidebarItem = ({
   icon: Icon,
@@ -321,16 +441,20 @@ const RiskCard = ({ risk }: { risk: RiskAnalysis }) => {
                 onClick={() => toggleExpand(i)}
                 className={`flex flex-col p-3 rounded-lg border transition-all cursor-pointer ${expandedItem === i ? 'bg-blue-50/30 ring-1 ring-blue-100' : 'hover:bg-gray-50'}`}
               >
-                <div className="flex items-center justify-between w-full">
+                <div className="flex items-center justify-between w-full group-hover:pl-1 transition-all">
                   <div className="flex items-center gap-3">
                     <div
                       onClick={(e) => toggleCheck(i, e)}
-                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${checkedItems.has(i) ? 'bg-primary border-primary' : 'border-gray-300 group-hover:border-primary'}`}
+                      className={`w-6 h-6 rounded border-2 flex items-center justify-center transition-all cursor-pointer shadow-sm hover:scale-110 ${checkedItems.has(i) ? 'bg-primary border-primary' : 'border-gray-300 bg-white group-hover:border-primary'}`}
                     >
-                      {checkedItems.has(i) && <Check className="w-3.5 h-3.5 text-white" />}
+                      {checkedItems.has(i) && <Check className="w-4 h-4 text-white" />}
                     </div>
                     <div>
-                      <div className="text-sm font-bold text-gray-800">{item.task}</div>
+                      <div className="text-base font-bold text-gray-800 flex items-center gap-2">
+                        {item.task}
+                        <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${expandedItem === i ? 'rotate-90' : ''}`} />
+                      </div>
+
                       {item.amount > 0 && !expandedItem && (
                         <div className="text-xs text-muted-foreground">
                           비용/효과: <span className="font-medium text-gray-700">{item.amount.toLocaleString()}원</span>
@@ -558,27 +682,70 @@ const TaxSimulator = ({ businessType = 'startup' }: { businessType?: string }) =
       </div>
 
       <div className="space-y-3 mb-6 flex-1">
-        {items.map((item) => (
-          <div
-            key={item.key}
-            onClick={() => toggle(item.key)}
-            className={`p-3 rounded-lg border cursor-pointer transition-colors flex items-center gap-3 ${toggles[item.key] ? 'bg-primary/5 border-primary' : 'hover:bg-muted/50'}`}
-          >
-            <div className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 ${toggles[item.key] ? 'bg-primary border-primary text-white' : 'border-gray-400'}`}>
-              {toggles[item.key] && <CheckCircle className="w-3.5 h-3.5" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{item.label}</span>
-                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded hidden sm:inline">
-                  {Math.round(item.rate * 100)}% 공제
-                </span>
+        {items.map((item) => {
+          // Find dynamic detail from result if available
+          const dynamicDetail = result?.details?.find((d: any) => d.key === item.key);
+
+          // Let's use a separate state for expansion if we want independent control, 
+          // but for now, let's show detail if checked (simulated)
+
+          return (
+            <div
+              key={item.key}
+              className={`rounded-lg border transition-all ${toggles[item.key] ? 'bg-primary/5 border-primary shadow-sm' : 'hover:bg-muted/50'}`}
+            >
+              <div
+                onClick={() => toggle(item.key)}
+                className="p-3 cursor-pointer flex items-center gap-3"
+              >
+                <div className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${toggles[item.key] ? 'bg-primary border-primary text-white' : 'border-gray-400'}`}>
+                  {toggles[item.key] && <CheckCircle className="w-3.5 h-3.5" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{item.label}</span>
+                    <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded hidden sm:inline">
+                      {Math.round(item.rate * 100)}% 공제
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{item.desc}</p>
+                </div>
+                <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${toggles[item.key] ? 'rotate-90' : ''}`} />
               </div>
-              <p className="text-xs text-muted-foreground">{item.desc}</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">{item.legal}</p>
+
+              {/* Expanded Detail View */}
+              {toggles[item.key] && (
+                <div className="px-3 pb-3 pl-11">
+                  <div className="bg-white/50 p-3 rounded text-xs text-gray-600 space-y-2 border border-blue-100">
+                    <p className="font-semibold text-blue-700 mb-1">💡 절세 솔루션</p>
+                    <p>{dynamicDetail?.description || "세액 공제 요건을 검토 중입니다..."}</p>
+
+                    {dynamicDetail?.references && (
+                      <div className="mt-2 pt-2 border-t border-gray-100">
+                        <span className="text-[10px] text-gray-400 font-bold block mb-1">관련 법령/가이드</span>
+                        <div className="flex flex-wrap gap-2">
+                          {dynamicDetail.references.map((ref: any, idx: number) => (
+                            <a
+                              key={idx}
+                              href={ref.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border hover:bg-gray-100 text-[10px] text-gray-500"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <FileText className="w-3 h-3" />
+                              {ref.title}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="bg-muted/30 p-4 rounded-lg border-t border-dashed border-gray-200">
@@ -703,9 +870,16 @@ const TaxCalendar = ({ alerts }: { alerts: CalendarAlert[] }) => {
 const FinancialAnalysis = ({ revenue = 150000000, industry = 'startup' }: { revenue?: number; industry?: string }) => {
   const [analysis, setAnalysis] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [quickRatios, setQuickRatios] = useState<Record<string, any> | null>(null);
+  const [quickHealth, setQuickHealth] = useState<any | null>(null);
+  const [quickLoading, setQuickLoading] = useState(false);
 
   useEffect(() => {
     fetchAnalysis();
+  }, [revenue, industry]);
+
+  useEffect(() => {
+    fetchQuickStats();
   }, [revenue, industry]);
 
   const fetchAnalysis = async () => {
@@ -717,6 +891,22 @@ const FinancialAnalysis = ({ revenue = 150000000, industry = 'startup' }: { reve
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchQuickStats = async () => {
+    setQuickLoading(true);
+    try {
+      const [ratiosRes, healthRes] = await Promise.all([
+        api.getFinancialRatios(revenue, industry),
+        api.getFinancialHealth(revenue, industry)
+      ]);
+      setQuickRatios(ratiosRes?.ratios || null);
+      setQuickHealth(healthRes || null);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setQuickLoading(false);
     }
   };
 
@@ -780,6 +970,40 @@ const FinancialAnalysis = ({ revenue = 150000000, industry = 'startup' }: { reve
           ))}
         </div>
       )}
+
+      <div className="border-t pt-3 mt-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold">⚡ 빠른 지표 (Health/Ratios API)</p>
+          <button
+            onClick={fetchQuickStats}
+            disabled={quickLoading}
+            className="text-[10px] px-2 py-1 rounded border hover:bg-muted disabled:opacity-60"
+          >
+            {quickLoading ? "갱신중..." : "새로고침"}
+          </button>
+        </div>
+        {quickLoading && (
+          <div className="text-xs text-muted-foreground mb-2">불러오는 중...</div>
+        )}
+        {!quickLoading && !quickHealth && !quickRatios && (
+          <div className="text-xs text-muted-foreground mb-2">빠른 지표를 불러오지 못했습니다.</div>
+        )}
+        {quickHealth && (
+          <div className="text-xs text-muted-foreground mb-2">
+            재무 건전성: <span className="font-semibold text-gray-800">{quickHealth.total_score || 0}/100</span> ({quickHealth.grade || '-'})
+          </div>
+        )}
+        {quickRatios && (
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(quickRatios).slice(0, 3).map(([key, ratio]: [string, any]) => (
+              <div key={key} className="p-2 rounded bg-muted/10 text-center">
+                <p className="text-[10px] text-muted-foreground truncate">{ratio.name}</p>
+                <p className="font-bold text-xs">{ratio.value}{ratio.unit}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -787,8 +1011,11 @@ const FinancialAnalysis = ({ revenue = 150000000, industry = 'startup' }: { reve
 // 5. Business Lookup Component
 const BusinessLookup = () => {
   const [bizNum, setBizNum] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+
 
   const handleLookup = async () => {
     if (bizNum.replace(/-/g, '').length !== 10) {
@@ -797,7 +1024,8 @@ const BusinessLookup = () => {
     }
     setLoading(true);
     try {
-      const res = await api.lookupBusiness(bizNum);
+      // Pass apiKey if user provided it
+      const res = await api.lookupBusiness(bizNum, apiKey);
       setResult(res);
     } catch (e) {
       console.error(e);
@@ -873,9 +1101,29 @@ const BusinessLookup = () => {
             <p className="text-red-600 text-sm">{result.message}</p>
           )}
           {result.message?.includes('MOCK') && (
-            <p className="text-xs text-muted-foreground mt-2 border-t pt-2">
-              ⚠️ 테스트 데이터입니다. 실제 데이터는 DATA_GO_KR_API_KEY 환경변수 설정 필요.
-            </p>
+            <div className="mt-3 pt-3 border-t border-red-200">
+              <p className="text-xs text-red-600 mb-2 font-medium">
+                ⚠️ 테스트 데이터입니다. 실제 조회를 위해 API 키가 필요합니다.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  placeholder="공공데이터포털 API Key 입력"
+                  className="flex-1 px-2 py-1 text-xs border rounded bg-white"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                <button
+                  onClick={handleLookup}
+                  className="px-2 py-1 bg-gray-800 text-white text-xs rounded hover:bg-black"
+                >
+                  재조회
+                </button>
+              </div>
+              <a href="https://www.data.go.kr/data/15081808/openapi.do" target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline mt-1 block">
+                키 발급받기 (공공데이터포털) &rarr;
+              </a>
+            </div>
           )}
         </div>
       )}
@@ -883,25 +1131,74 @@ const BusinessLookup = () => {
   );
 };
 
-const PredictionCard = ({ rec }: { rec: Recommendation }) => (
-  <div className="p-6 bg-card rounded-xl border shadow-sm hover:shadow-md transition-shadow">
-    <div className="flex justify-between items-start mb-2">
-      <div className="flex items-center gap-2">
-        <Calendar className="w-5 h-5 text-primary" />
-        <h3 className="font-bold text-lg">{rec.title}</h3>
+const PredictionCard = ({ rec }: { rec: Recommendation }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div
+      onClick={() => setIsExpanded(!isExpanded)}
+      className={`p-6 bg-card rounded-xl border shadow-sm hover:shadow-md transition-all cursor-pointer ${isExpanded ? 'ring-2 ring-primary/20' : ''}`}
+    >
+      <div className="flex justify-between items-start mb-2">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-5 h-5 text-primary" />
+          <h3 className="font-bold text-lg">{rec.title}</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-sidebar-accent px-2 py-1 rounded">2026 예측</span>
+          <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+        </div>
       </div>
-      <span className="text-xs bg-sidebar-accent px-2 py-1 rounded">2026 예측</span>
+
+      <div className="mt-4 space-y-2">
+        <p className="text-sm text-muted-foreground">예상 공고일</p>
+        <p className="text-xl font-semibold text-primary">{rec.predicted_date}</p>
+        <p className="text-xs text-muted-foreground">구간: {rec.range}</p>
+      </div>
+
+      <div className="mt-4 pt-4 border-t text-xs text-muted-foreground">
+        <p>근거: {rec.reason} ({rec.confidence})</p>
+      </div>
+
+      {/* Expanded Details */}
+      {isExpanded && (
+        <div className="mt-4 pt-4 border-t border-dashed space-y-3 animate-in fade-in slide-in-from-top-1">
+          {rec.funding_limit && (
+            <div>
+              <span className="block font-semibold text-gray-700 mb-1">💰 지원 규모</span>
+              <p className="text-sm">{rec.funding_limit}</p>
+            </div>
+          )}
+          {rec.eligibility && (
+            <div>
+              <span className="block font-semibold text-gray-700 mb-1">📋 신청 자격</span>
+              <p className="text-sm text-gray-600">{rec.eligibility}</p>
+            </div>
+          )}
+          {rec.strategy && (
+            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+              <span className="block font-semibold text-blue-700 mb-1">💡 선정 전략</span>
+              <p className="text-sm text-gray-700 leading-relaxed">{rec.strategy}</p>
+            </div>
+          )}
+          {rec.link && (
+            <div className="pt-2 text-right">
+              <a
+                href={rec.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center text-xs font-bold text-primary hover:underline bg-primary/5 px-2 py-1 rounded"
+                onClick={(e) => e.stopPropagation()}
+              >
+                공고 상세 보기 <ExternalLink className="w-3 h-3 ml-1" />
+              </a>
+            </div>
+          )}
+        </div>
+      )}
     </div>
-    <div className="mt-4 space-y-2">
-      <p className="text-sm text-muted-foreground">예상 공고일</p>
-      <p className="text-xl font-semibold text-primary">{rec.predicted_date}</p>
-      <p className="text-xs text-muted-foreground">구간: {rec.range}</p>
-    </div>
-    <div className="mt-4 pt-4 border-t text-xs text-muted-foreground">
-      근거: {rec.reason} ({rec.confidence})
-    </div>
-  </div>
-);
+  );
+};
 
 const CompetitionCard = ({ comp }: { comp: Competition }) => (
   <div className="p-5 bg-card rounded-xl border shadow-sm flex flex-col gap-3">
@@ -1190,17 +1487,21 @@ const Onboarding = ({ onStart }: { onStart: (name: string, company: string, bizN
 
 // --- Main App ---
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState<string>("dashboard");
+function App() {
+  const [activeTab, setActiveTab] = useState<string>("home");
   const [dashboardTab, setDashboardTab] = useState<"home" | "accounting" | "management">("home");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); // Keep existing isSidebarOpen
-  const [isLoading, setIsLoading] = useState(true); // New general isLoading
+  const [isLoading, setIsLoading] = useState(false); // New general isLoading
+  const [isQuestionOpen, setIsQuestionOpen] = useState(false);
+  const [isSilent, setIsSilent] = useState(false);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [showDecisionDetails, setShowDecisionDetails] = useState(false);
+  const [showDecisionSimulation, setShowDecisionSimulation] = useState(false);
 
   // -- Tax/Accounting Feature States --
   const [vatRevenue, setVatRevenue] = useState(0);
   const [vatPurchase, setVatPurchase] = useState(0);
-  // Simple VAT Calculation: (Revenue * 10%) - (Purchase * 10%)
-  const estimatedVat = Math.max(0, (vatRevenue * 0.1) - (vatPurchase * 0.1));
+
 
   const [deductionChecklist, setDeductionChecklist] = useState([
     { id: 1, label: "사업용 신용카드 등록", checked: false, tip: "홈택스에 등록된 카드만 공제 가능" },
@@ -1219,6 +1520,60 @@ export default function App() {
   const [runwayBurn, setRunwayBurn] = useState(12500000);
   const estimatedMonths = runwayBurn > 0 ? (runwayCash / runwayBurn).toFixed(1) : "∞";
 
+  const [financeDatasets, setFinanceDatasets] = useState<Record<string, { cash: number; monthlyRevenue: number; monthlyExpense: number; breakdown?: Record<string, number> }>>({});
+  const [activeDatasetName, setActiveDatasetName] = useState<string>("");
+  const [presetPreview, setPresetPreview] = useState<PresetDataset | null>(null);
+
+  const activeDatasetMetrics = useMemo(() => {
+    const dataset = activeDatasetName ? financeDatasets[activeDatasetName] : null;
+    return {
+      cash: Number(dataset?.cash || 0),
+      monthlyRevenue: Number(dataset?.monthlyRevenue || 0),
+      monthlyExpense: Number(dataset?.monthlyExpense || 0),
+    };
+  }, [activeDatasetName, financeDatasets]);
+
+  const dataStatus = useMemo(() => {
+    if (!activeDatasetName) return "none";
+    const filled = [activeDatasetMetrics.cash, activeDatasetMetrics.monthlyRevenue, activeDatasetMetrics.monthlyExpense].filter((value) => Number.isFinite(value) && value > 0).length;
+    if (filled >= 2) return "ready";
+    return "partial";
+  }, [activeDatasetName, activeDatasetMetrics.cash, activeDatasetMetrics.monthlyRevenue, activeDatasetMetrics.monthlyExpense]);
+
+  const localDashboardData = useMemo(() => {
+    if (dataStatus !== "ready") return null;
+    if (!activeDatasetName) return null;
+    const dataset = financeDatasets[activeDatasetName];
+    if (!dataset) return null;
+    const monthlyRevenue = dataset.monthlyRevenue || 0;
+    const monthlyExpense = dataset.monthlyExpense || 0;
+    const cash = dataset.cash || 0;
+    const yearlyRevenue = monthlyRevenue * 12;
+    const yearlyProfit = (monthlyRevenue - monthlyExpense) * 12;
+    return {
+      stats: [
+        { title: "예상 매출 (12M)", value: `₩${yearlyRevenue.toLocaleString()}`, change: "프리셋", trend: "neutral", desc: "데이터셋 기준" },
+        { title: "예상 순이익", value: `₩${yearlyProfit.toLocaleString()}`, change: yearlyProfit >= 0 ? "+" : "-", trend: yearlyProfit >= 0 ? "up" : "down", desc: "수익-지출 기준" },
+        { title: "현재 현금성 자산", value: `₩${cash.toLocaleString()}`, change: "프리셋", trend: "neutral", desc: "현금 입력값" },
+        { title: "평균 Burn Rate", value: `₩${monthlyExpense.toLocaleString()}`, change: "프리셋", trend: "neutral", desc: "월 평균 지출" },
+      ],
+      chart: Array.from({ length: 12 }, (_, i) => ({ name: `${i + 1}월`, income: monthlyRevenue, expense: monthlyExpense })),
+    };
+  }, [financeDatasets, activeDatasetName, dataStatus]);
+
+  const formatDelta = (value: number, unit = "") => {
+    const rounded = Math.round(value);
+    const prefix = rounded > 0 ? "+" : "";
+    return `${prefix}${rounded.toLocaleString()}${unit}`;
+  };
+
+  const applyPresetDataset = useCallback((preset: PresetDataset) => {
+    setFinanceDatasets((prev) => ({ ...prev, [preset.name]: { ...preset.meta } }));
+    setActiveDatasetName(preset.name);
+    setRunwayCash(preset.meta.cash);
+    setRunwayBurn(preset.meta.monthlyExpense);
+  }, []);
+
   const [showCompetitorCompare, setShowCompetitorCompare] = useState(false);
   // -----------------------------------
   // -----------------------------------
@@ -1228,6 +1583,15 @@ export default function App() {
 
   // Data States
   const [dashboardData, setDashboardData] = useState<any>(null);
+
+  // Effective dashboard data: use preset data when available, otherwise use API data
+  const effectiveDashboardData = useMemo(() => {
+    if (dataStatus === "ready" && activeDatasetName && localDashboardData) {
+      return localDashboardData;
+    }
+    return dashboardData;
+  }, [dataStatus, activeDatasetName, localDashboardData, dashboardData]);
+
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [competitions, setCompetitions] = useState<Competition[]>([]);
 
@@ -1235,10 +1599,135 @@ export default function App() {
   const [risk, setRisk] = useState<RiskAnalysis | null>(null);
   const [calendarAlerts, setCalendarAlerts] = useState<CalendarAlert[]>([]);
 
+  // Tax Simulation States
+  const [taxSimForm, setTaxSimForm] = useState<Record<string, boolean>>({
+    salary_increase: false,
+    equipment_depreciation: false,
+    rd_deduction: false,
+    investment_credit: false,
+  });
+  const [taxSimResult, setTaxSimResult] = useState<{
+    total_saving: number;
+    details: Array<{ item: string; amount: number }>;
+    message: string;
+  } | null>(null);
+  const [isSimulating, setIsSimulating] = useState(false);
+
+  // NTS Document States
+  const [ntsFile, setNtsFile] = useState<File | null>(null);
+  const [ntsPassword, setNtsPassword] = useState("");
+  const [ntsResult, setNtsResult] = useState<any>(null);
+  const [isUploadingNts, setIsUploadingNts] = useState(false);
+
+  // Subsidies State
+  const [subsidies, setSubsidies] = useState<Array<{
+    title: string;
+    org: string;
+    start_date: string;
+    end_date: string;
+    link: string;
+    tags: string[];
+  }>>([]);
+
+  // Business Lookup State
+  const [bizLookupResult, setBizLookupResult] = useState<any>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+
+  // --- Handler Functions (after state declarations) ---
+
+  // Tax Simulation Handler
+  const handleTaxSimulation = useCallback(async () => {
+    if (isSimulating) return;
+    setIsSimulating(true);
+    try {
+      const result = await api.simulateTax(taxSimForm);
+      setTaxSimResult(result);
+      showToast(`예상 절세액: ${result.total_saving.toLocaleString()}원`, "success");
+    } catch (err) {
+      console.error("Tax simulation failed:", err);
+      showToast("세금 시뮬레이션 실패", "error");
+    } finally {
+      setIsSimulating(false);
+    }
+  }, [taxSimForm, isSimulating]);
+
+  // NTS Document Upload Handler
+  const handleNtsUpload = useCallback(async () => {
+    if (!ntsFile || isUploadingNts) return;
+    setIsUploadingNts(true);
+    try {
+      const result = await api.uploadNTSDocument(ntsFile, ntsPassword);
+      setNtsResult(result);
+      showToast("국세청 문서 분석 완료", "success");
+    } catch (err) {
+      console.error("NTS upload failed:", err);
+      showToast("국세청 문서 업로드 실패", "error");
+    } finally {
+      setIsUploadingNts(false);
+    }
+  }, [ntsFile, ntsPassword, isUploadingNts]);
+
+  // Business Lookup Handler
+  const handleBizLookup = useCallback(async (bizNum: string) => {
+    if (isLookingUp || !bizNum) return;
+    setIsLookingUp(true);
+    setBizLookupResult(null);
+    try {
+      const result = await api.lookupBusiness(bizNum);
+      setBizLookupResult(result);
+      if (result?.valid) {
+        showToast("유효한 사업자등록번호입니다", "success");
+      } else {
+        showToast("유효하지 않은 사업자등록번호입니다", "error");
+      }
+    } catch (err) {
+      console.error("Business lookup failed:", err);
+      showToast("사업자조회 실패", "error");
+    } finally {
+      setIsLookingUp(false);
+    }
+  }, [isLookingUp]);
+
+
   // Chat States
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "안녕하세요! CEO님의 전담 AI CFO입니다. 무엇을 도와드릴까요?" },
+    { role: "assistant", content: "AI CFO 질문 패널입니다. 결정을 위한 근거가 필요하면 말씀해 주세요." },
   ]);
+  const loadingStartRef = useRef<number | null>(null);
+  const [decisionHistory, setDecisionHistory] = useState<DecisionRecord[]>([]);
+  const decisionCardRef = useRef<HTMLDivElement | null>(null);
+  const accountingRef = useRef<HTMLDivElement | null>(null);
+  const managementRef = useRef<HTMLDivElement | null>(null);
+  const dashboardRef = useRef<HTMLDivElement | null>(null);
+  const [highlightKey, setHighlightKey] = useState<"dashboard" | "accounting" | "management" | "home" | null>(null);
+  const [showRejectionModal, setShowRejectionModal] = useState(false);
+  const [rejectionInput, setRejectionInput] = useState("");
+  const [showOutcomeModal, setShowOutcomeModal] = useState(false);
+  const [outcomeTarget, setOutcomeTarget] = useState<DecisionRecord | null>(null);
+  const [outcomeStatus, setOutcomeStatus] = useState<"positive" | "negative" | "neutral">("neutral");
+  const [memoryHighlightId, setMemoryHighlightId] = useState<string | null>(null);
+  const [memoryFilterKey, setMemoryFilterKey] = useState<string | null>(null);
+  const [showSimilarOnly, setShowSimilarOnly] = useState(false);
+  const [similarityWeights, setSimilarityWeights] = useState({
+    priority: 1,
+    runway: 1,
+    risk: 1,
+  });
+  const [tonePreference, setTonePreference] = useState<"direct" | "neutral" | "soft">("neutral");
+  const [warningThreshold, setWarningThreshold] = useState(2);
+  const [summaryLength, setSummaryLength] = useState<"short" | "normal" | "detailed">("normal");
+  const [showSimilarOutcomes, setShowSimilarOutcomes] = useState(true);
+  const [memoryGraph, setMemoryGraph] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
+  const [graphPositions, setGraphPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [selectedGraphNode, setSelectedGraphNode] = useState<GraphNode | null>(null);
+  const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
+  const [layoutSaved, setLayoutSaved] = useState(false);
+  const [outcomeFilter, setOutcomeFilter] = useState<"all" | "positive" | "neutral" | "negative" | "pending">("all");
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
+  const [calibrationStep, setCalibrationStep] = useState(1);
+  const [isCalibrating, setIsCalibrating] = useState(false);
   const [user, setUser] = useState<{
     name: string;
     company: string;
@@ -1248,10 +1737,110 @@ export default function App() {
     activeMCPs: string[];
     rfiData: any;
   } | null>(null);
+  const [profileDraft, setProfileDraft] = useState<{
+    name: string;
+    company: string;
+    bizNum: string;
+    type: string;
+    targetRevenue: string;
+  }>({
+    name: "",
+    company: "",
+    bizNum: "",
+    type: "general",
+    targetRevenue: ""
+  });
 
   const [input, setInput] = useState("");
+  const [outcomeMemo, setOutcomeMemo] = useState("");
   const [showNotifications, setShowNotifications] = useState(false);
 
+  // Toast State
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Loading States
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
+
+  // Progressive loading message based on elapsed time
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingElapsed(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setLoadingElapsed(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
+  const getLoadingMessage = () => {
+    if (loadingElapsed < 2) return "생각하는 중...";
+    if (loadingElapsed < 5) return "세무 자료 검색 중...";
+    if (loadingElapsed < 10) return "AI가 분석하고 있어요...";
+    return "조금만 기다려 주세요...";
+  };
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isSavingRFI, setIsSavingRFI] = useState(false);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSavingCfoSettings, setIsSavingCfoSettings] = useState(false);
+  const [apiHealth, setApiHealth] = useState<{ status: string } | null>(null);
+  const [apiHealthCheckedAt, setApiHealthCheckedAt] = useState<string | null>(null);
+  const [apiHealthLoading, setApiHealthLoading] = useState(false);
+  const [apiHealthError, setApiHealthError] = useState<string | null>(null);
+  const [ntsDocTypes, setNtsDocTypes] = useState<Array<{ code: string; name: string; supported: boolean }>>([]);
+  const [ntsDocTypesLoading, setNtsDocTypesLoading] = useState(false);
+
+  const fetchApiHealth = useCallback(async () => {
+    setApiHealthLoading(true);
+    setApiHealthError(null);
+    try {
+      const res = await api.getHealth();
+      setApiHealth(res);
+      setApiHealthCheckedAt(new Date().toLocaleString());
+    } catch (e) {
+      console.error(e);
+      setApiHealth(null);
+      setApiHealthError("연결 실패");
+    } finally {
+      setApiHealthLoading(false);
+    }
+  }, []);
+
+  const fetchNtsDocTypes = useCallback(async () => {
+    setNtsDocTypesLoading(true);
+    try {
+      const res = await api.getNTSDocumentTypes();
+      setNtsDocTypes(res.types || []);
+    } catch (e) {
+      console.error(e);
+      setNtsDocTypes([]);
+    } finally {
+      setNtsDocTypesLoading(false);
+    }
+  }, []);
+
+  const mapMemoryToDecision = useCallback((record: MemoryRecord): DecisionRecord => {
+    return {
+      id: record.id,
+      title: record.title,
+      summary: record.summary,
+      status: record.status === 'accepted' ? 'accepted' : 'rejected',
+      createdAt: record.created_at,
+      reasons: record.reasons || [],
+      impact: record.impact || '',
+      priorityScore: record.priority_score || 50,
+      runwayMonths: record.runway_months || 0,
+      riskScore: record.risk_score || 0,
+      outcomeStatus: record.outcome_status || "pending",
+      outcomeMemo: record.outcome_memo || "",
+      rejectionReason: record.rejection_reason
+    };
+  }, []);
   // Initial Fetch
   useEffect(() => {
     if (user) {
@@ -1272,35 +1861,740 @@ export default function App() {
             ],
             chart: []
           });
-          alert("서버 연결에 실패하여 데모 모드로 전환됩니다. (백엔드 실행 여부를 확인하세요)");
+          showToast("서버 연결에 실패하여 데모 모드로 전환됩니다.", "error");
         });
       api.getRecommendations(user.type || 'startup').then(setRecommendations).catch(console.error);
       api.getCompetitions().then(setCompetitions).catch(console.error);
       // Advanced
       api.getTaxRisk(user.bizNum, safeMCPs).then(setRisk).catch(console.error);
       api.getCalendarAlerts().then(res => setCalendarAlerts(res.alerts)).catch(console.error);
+      api.getSubsidies().then(setSubsidies).catch(console.error);
     }
   }, [user]);
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
-    const userMsg: ChatMessage = { role: "user", content: input };
+  useEffect(() => {
+    fetchApiHealth();
+    fetchNtsDocTypes();
+  }, [fetchApiHealth, fetchNtsDocTypes]);
+
+  useEffect(() => {
+    if (!user) return;
+    setProfileDraft({
+      name: user.name || "",
+      company: user.company || "",
+      bizNum: user.bizNum || "",
+      type: user.type || "general",
+      targetRevenue: user.targetRevenue ? String(user.targetRevenue) : ""
+    });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    const storageKey = `taxai_memory_${user.bizNum || user.company}`;
+    api.getMemory(user.bizNum)
+      .then((res) => {
+        const mapped = (res.records || []).map(mapMemoryToDecision);
+        setDecisionHistory(mapped);
+        localStorage.setItem(storageKey, JSON.stringify(mapped));
+        if (mapped.length === 0) {
+          setShowCalibrationModal(true);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load decision history:", err);
+        const saved = localStorage.getItem(storageKey);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved) as DecisionRecord[];
+            if (Array.isArray(parsed)) {
+              setDecisionHistory(parsed);
+              if (parsed.length === 0) setShowCalibrationModal(true);
+            } else {
+              setShowCalibrationModal(true);
+            }
+          } catch (error) {
+            console.error("Failed to load local decision history:", error);
+            setShowCalibrationModal(true);
+          }
+        } else {
+          setShowCalibrationModal(true);
+        }
+      });
+  }, [user, mapMemoryToDecision]);
+
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `taxai_memory_${user.bizNum || user.company}`;
+    localStorage.setItem(storageKey, JSON.stringify(decisionHistory));
+  }, [decisionHistory, user]);
+
+  useEffect(() => {
+    if (!highlightKey) return;
+    const timer = window.setTimeout(() => setHighlightKey(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [highlightKey]);
+
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `taxai_similarity_weights_${user.bizNum || user.company}`;
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as { priority: number; runway: number; risk: number };
+        setSimilarityWeights((prev) => ({ ...prev, ...parsed }));
+      } catch (err) {
+        console.error("Failed to load similarity weights:", err);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `taxai_similarity_weights_${user.bizNum || user.company}`;
+    localStorage.setItem(storageKey, JSON.stringify(similarityWeights));
+  }, [similarityWeights, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `taxai_warning_prefs_${user.bizNum || user.company}`;
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as { tone: "direct" | "neutral" | "soft"; threshold: number; summaryLength?: "short" | "normal" | "detailed" };
+        if (parsed.tone) setTonePreference(parsed.tone);
+        if (parsed.threshold) setWarningThreshold(parsed.threshold);
+        if (parsed.summaryLength) setSummaryLength(parsed.summaryLength);
+      } catch (err) {
+        console.error("Failed to load warning preferences:", err);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const storageKey = `taxai_warning_prefs_${user.bizNum || user.company}`;
+    localStorage.setItem(storageKey, JSON.stringify({
+      tone: tonePreference,
+      threshold: warningThreshold,
+      summaryLength,
+    }));
+  }, [tonePreference, warningThreshold, summaryLength, user]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    api.getPreferences(user.bizNum).then((res) => {
+      const record = res.record;
+      if (!record) return;
+      if (record.similarity_weights) {
+        setSimilarityWeights((prev) => ({ ...prev, ...record.similarity_weights }));
+      }
+      if (record.warning_prefs) {
+        if (record.warning_prefs.tone) setTonePreference(record.warning_prefs.tone);
+        if (record.warning_prefs.threshold) setWarningThreshold(record.warning_prefs.threshold);
+        if (record.warning_prefs.summaryLength) setSummaryLength(record.warning_prefs.summaryLength);
+      }
+      if (record.graph_positions) {
+        setGraphPositions(record.graph_positions);
+      }
+    }).catch((err) => {
+      console.error("Failed to load preferences from server:", err);
+    });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    api.getMemoryGraph(user.bizNum).then((res) => {
+      setMemoryGraph(res);
+    }).catch((err) => {
+      console.error("Failed to load memory graph:", err);
+    });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    const payload = {
+      biz_num: user.bizNum,
+      similarity_weights: similarityWeights,
+      warning_prefs: {
+        tone: tonePreference,
+        threshold: warningThreshold,
+        summaryLength,
+      },
+    };
+    api.savePreferences(payload).catch((err) => {
+      console.error("Failed to save preferences:", err);
+    });
+  }, [similarityWeights, tonePreference, warningThreshold, summaryLength, user]);
+
+  const saveGraphPositions = () => {
+    if (!user?.bizNum) return;
+    const payload = {
+      biz_num: user.bizNum,
+      similarity_weights: similarityWeights,
+      warning_prefs: {
+        tone: tonePreference,
+        threshold: warningThreshold,
+        summaryLength,
+      },
+      graph_positions: graphPositions,
+    };
+    api.savePreferences(payload).catch((err) => {
+      console.error("Failed to save graph positions:", err);
+    });
+    setLayoutSaved(true);
+  };
+
+  const saveCfoSettings = async () => {
+    if (!user?.bizNum) return;
+    setIsSavingCfoSettings(true);
+    try {
+      const payload = {
+        biz_num: user.bizNum,
+        similarity_weights: similarityWeights,
+        warning_prefs: {
+          tone: tonePreference,
+          threshold: warningThreshold,
+          summaryLength,
+        },
+      };
+      await api.savePreferences(payload);
+      showToast("AI CFO 설정이 저장되었습니다.", "success");
+    } catch (err) {
+      console.error("Failed to save CFO settings:", err);
+      showToast("AI CFO 설정 저장에 실패했습니다.", "error");
+    } finally {
+      setIsSavingCfoSettings(false);
+    }
+  };
+
+  const handleProfileSave = async () => {
+    if (!authUser?.email) {
+      showToast("로그인 정보가 없습니다.", "error");
+      return;
+    }
+    setIsSavingProfile(true);
+    const trimmedName = profileDraft.name.trim();
+    const trimmedCompany = profileDraft.company.trim();
+    const rawBizNum = profileDraft.bizNum.trim();
+    const digitsBizNum = rawBizNum.replace(/[^0-9]/g, "");
+    if (digitsBizNum && digitsBizNum.length !== 10) {
+      showToast("사업자번호는 10자리여야 합니다.", "error");
+      setIsSavingProfile(false);
+      return;
+    }
+    const formattedBizNum = digitsBizNum
+      ? `${digitsBizNum.slice(0, 3)}-${digitsBizNum.slice(3, 5)}-${digitsBizNum.slice(5)}`
+      : "";
+    const trimmedType = profileDraft.type.trim() || "general";
+    const parsedTargetRevenue = profileDraft.targetRevenue
+      ? parseInt(profileDraft.targetRevenue.replace(/[^0-9]/g, ""), 10)
+      : undefined;
+
+    try {
+      const result = await api.updateProfile({
+        email: authUser.email,
+        name: trimmedName || undefined,
+        company: trimmedCompany || undefined,
+        biz_num: formattedBizNum || undefined,
+        type: trimmedType || undefined,
+        target_revenue: parsedTargetRevenue,
+      });
+      if (result.success) {
+        localStorage.setItem("user", JSON.stringify(result.user));
+        setAuthUser(result.user);
+        setUser((prev) => {
+          if (!prev) return prev;
+          const existingMCPs = prev.activeMCPs || [];
+          const nextMCPs = existingMCPs.includes(trimmedType)
+            ? existingMCPs
+            : [...existingMCPs, trimmedType];
+          return {
+            ...prev,
+            name: trimmedName || prev.name,
+            company: trimmedCompany || prev.company,
+            bizNum: formattedBizNum || prev.bizNum,
+            type: trimmedType || prev.type,
+            targetRevenue: parsedTargetRevenue,
+            activeMCPs: nextMCPs,
+          };
+        });
+        showToast("회사 정보가 저장되었습니다.", "success");
+      } else {
+        showToast(result.message || "회사 정보 저장 실패", "error");
+      }
+    } catch (err) {
+      console.error("Failed to update profile:", err);
+      showToast("회사 정보 저장 중 오류가 발생했습니다.", "error");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!layoutSaved) return;
+    const timer = window.setTimeout(() => setLayoutSaved(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [layoutSaved]);
+
+  useEffect(() => {
+    if (summaryLength === "short") {
+      setShowSimilarOutcomes(false);
+    } else {
+      setShowSimilarOutcomes(true);
+    }
+  }, [summaryLength]);
+
+  useEffect(() => {
+    if (!memoryHighlightId || activeTab !== "memory") return;
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`memory-${memoryHighlightId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [memoryHighlightId, activeTab]);
+
+  useEffect(() => {
+    if (!memoryHighlightId) return;
+    const timer = window.setTimeout(() => setMemoryHighlightId(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [memoryHighlightId]);
+
+  const parseStatValue = (raw?: string) => {
+    if (!raw) return null;
+    const numeric = raw.replace(/[^0-9.-]/g, "");
+    const parsed = Number(numeric);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const decisionContext = useMemo(() => {
+    const runway = Number(estimatedMonths);
+    const runwayText = Number.isFinite(runway) ? `${runway}개월` : "∞";
+    const riskTitle = risk?.title || "리스크 분석 중";
+    const riskLevel = risk?.level;
+    const penalty = risk?.estimated_penalty || 0;
+    const keyStat = effectiveDashboardData?.stats?.[0];
+    const cashStat = (effectiveDashboardData?.stats || []).find((stat: any) =>
+      /현금|잔액|cash/i.test(stat.title || "")
+    );
+    const cashValue = parseStatValue(cashStat?.value);
+
+    let actionKey = "stability";
+    let summary = "이번 주는 재무 안정성 유지가 우선입니다.";
+    let relatedTab: "home" | "accounting" | "management" = "home";
+    if (riskLevel === "critical") {
+      actionKey = "tax-risk";
+      summary = "이번 주는 세무 리스크 대응을 최우선으로 진행하세요.";
+      relatedTab = "accounting";
+    } else if (Number.isFinite(runway) && runway < 6) {
+      actionKey = "hiring-freeze";
+      summary = "이번 달 채용은 보류하는 것이 합리적입니다.";
+      relatedTab = "management";
+    } else if (riskLevel === "warning") {
+      actionKey = "cost-control";
+      summary = "단기 현금 흐름을 기준으로 비용 통제를 강화하세요.";
+      relatedTab = "management";
+    }
+
+    const reasons = [
+      risk ? `세무 리스크: ${riskTitle}` : null,
+      Number.isFinite(runway) ? `Runway ${runwayText}` : null,
+      keyStat ? `${keyStat.title}: ${keyStat.value}` : null,
+      cashValue !== null ? `현금성 자산: ${cashValue.toLocaleString()}원` : null,
+    ].filter(Boolean) as string[];
+
+    const impact = penalty > 0
+      ? `추정 세액 리스크 ${penalty.toLocaleString()}원`
+      : Number.isFinite(runway)
+        ? `현재 Burn 기준 ${runwayText} 내 현금 압박 가능성`
+        : "현금 흐름 변동 가능성 ↑";
+
+    const scoreFromRisk = riskLevel === "critical" ? 70 : riskLevel === "warning" ? 45 : 15;
+    const riskScore = risk?.score ?? scoreFromRisk;
+    const scoreFromRunway = Number.isFinite(runway) ? (runway < 3 ? 55 : runway < 6 ? 30 : 10) : 15;
+    const scoreFromPenalty = penalty > 0 ? Math.min(30, Math.floor(penalty / 10000000)) : 0;
+    const scoreFromCash = cashValue !== null && cashValue < 50000000 ? 15 : 0;
+    const priorityScore = Math.min(100, scoreFromRisk + scoreFromRunway + scoreFromPenalty + scoreFromCash);
+    const drivers = [
+      { label: "리스크", score: scoreFromRisk },
+      { label: "런웨이", score: scoreFromRunway },
+      { label: "세액", score: scoreFromPenalty },
+      { label: "현금", score: scoreFromCash },
+    ].filter((driver) => driver.score > 0);
+
+    return {
+      id: `decision-${actionKey}`,
+      summary,
+      reasons: reasons.length > 0 ? reasons.slice(0, 3) : ["재무 지표 안정성 점검 필요"],
+      impact,
+      actionKey,
+      priorityScore,
+      runwayMonths: Number.isFinite(runway) ? runway : undefined,
+      riskScore,
+      drivers,
+      relatedTab,
+    };
+  }, [risk, effectiveDashboardData, estimatedMonths]);
+
+  const similarOutcomes = useMemo(() => {
+    const sameId = decisionHistory.filter((record) => record.id === decisionContext.id);
+    const sameAction = decisionHistory.filter((record) =>
+      record.id !== decisionContext.id && record.id.includes(decisionContext.actionKey)
+    );
+    return [...sameId, ...sameAction]
+      .filter((record) => record.outcomeStatus !== "pending")
+      .slice(0, 3);
+  }, [decisionHistory, decisionContext.id, decisionContext.actionKey]);
+
+  const hasNegativeOutcome = useMemo(() => {
+    return similarOutcomes.some((record) => record.outcomeStatus === "negative");
+  }, [similarOutcomes]);
+
+  const negativeOutcomeTarget = useMemo(() => {
+    return similarOutcomes.find((record) => record.outcomeStatus === "negative") || null;
+  }, [similarOutcomes]);
+
+
+
+  const getSimilarityScore = useCallback((record: DecisionRecord) => {
+    let score = 0;
+    if (record.id.includes(decisionContext.actionKey)) score += 2;
+    if (record.priorityScore !== undefined) {
+      const diff = Math.abs(record.priorityScore - decisionContext.priorityScore);
+      if (diff <= 10) score += 2 * similarityWeights.priority;
+      else if (diff <= 25) score += 1 * similarityWeights.priority;
+    }
+    if (record.runwayMonths !== undefined && decisionContext.runwayMonths !== undefined) {
+      const diff = Math.abs(record.runwayMonths - decisionContext.runwayMonths);
+      if (diff <= 1) score += 2 * similarityWeights.runway;
+      else if (diff <= 3) score += 1 * similarityWeights.runway;
+    }
+    if (record.riskScore !== undefined && decisionContext.riskScore !== undefined) {
+      const diff = Math.abs(record.riskScore - decisionContext.riskScore);
+      if (diff <= 10) score += 2 * similarityWeights.risk;
+      else if (diff <= 25) score += 1 * similarityWeights.risk;
+    }
+    const reasonText = record.reasons.join(" ");
+    const currentText = decisionContext.reasons.join(" ");
+    const keywords = ["Runway", "세무", "현금"];
+    const overlap = keywords.filter((keyword) => reasonText.includes(keyword) && currentText.includes(keyword)).length;
+    score += overlap;
+    return score;
+  }, [
+    decisionContext.actionKey,
+    decisionContext.priorityScore,
+    decisionContext.runwayMonths,
+    decisionContext.riskScore,
+    decisionContext.reasons,
+    similarityWeights.priority,
+    similarityWeights.runway,
+    similarityWeights.risk,
+  ]);
+
+  const getSimilarityReason = useCallback((record: DecisionRecord) => {
+    const reasons = [];
+    if (record.id.includes(decisionContext.actionKey)) reasons.push("유사 결정");
+    if (record.reasons.some((reason) => reason.includes("Runway"))) reasons.push("런웨이");
+    if (record.reasons.some((reason) => reason.includes("세무"))) reasons.push("세무 리스크");
+    if (record.reasons.some((reason) => reason.includes("현금"))) reasons.push("현금");
+    return reasons.length > 0 ? reasons.join(" · ") : "참고 결정";
+  }, [decisionContext.actionKey]);
+
+  const filteredMemory = useMemo(() => {
+    return decisionHistory.filter((record) => {
+      if (!memoryFilterKey) return true;
+      if (!record.id.includes(memoryFilterKey)) return false;
+      if (!showSimilarOnly) return true;
+      return getSimilarityScore(record) >= 2;
+    });
+  }, [decisionHistory, memoryFilterKey, showSimilarOnly, getSimilarityScore]);
+
+  const filteredMemoryWithOutcome = useMemo(() => {
+    if (outcomeFilter === "all") return filteredMemory;
+    return filteredMemory.filter((record) => record.outcomeStatus === outcomeFilter);
+  }, [filteredMemory, outcomeFilter]);
+
+  const bestSimilarId = useMemo(() => {
+    if (!showSimilarOnly || filteredMemoryWithOutcome.length === 0) return null;
+    const sorted = [...filteredMemoryWithOutcome].sort((a, b) => getSimilarityScore(b) - getSimilarityScore(a));
+    return sorted[0]?.id || null;
+  }, [filteredMemoryWithOutcome, showSimilarOnly, getSimilarityScore]);
+
+  const graphLayout = useMemo(() => {
+    if (!memoryGraph || memoryGraph.nodes.length === 0) return null;
+    const nodes = memoryGraph.nodes;
+    const radius = 110;
+    const center = 150;
+    const positions = nodes.map((node, idx) => {
+      const angle = (2 * Math.PI * idx) / nodes.length;
+      return {
+        id: node.id,
+        x: center + radius * Math.cos(angle),
+        y: center + radius * Math.sin(angle),
+      };
+    });
+    const positionMap = positions.reduce<Record<string, { x: number; y: number }>>((acc, item) => {
+      acc[item.id] = { x: item.x, y: item.y };
+      return acc;
+    }, {});
+    return { positions, positionMap };
+  }, [memoryGraph]);
+
+  useEffect(() => {
+    if (!graphLayout) return;
+    setGraphPositions(graphLayout.positionMap);
+  }, [graphLayout]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    const storageKey = `taxai_graph_positions_${user.bizNum}`;
+    const saved = localStorage.getItem(storageKey);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Record<string, { x: number; y: number }>;
+        setGraphPositions(parsed);
+      } catch (err) {
+        console.error("Failed to load graph positions:", err);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user?.bizNum) return;
+    const storageKey = `taxai_graph_positions_${user.bizNum}`;
+    localStorage.setItem(storageKey, JSON.stringify(graphPositions));
+  }, [graphPositions, user]);
+
+  const warningTone = useMemo(() => {
+    if (!hasNegativeOutcome) return "none";
+    if (!negativeOutcomeTarget) return "none";
+    const score = getSimilarityScore(negativeOutcomeTarget);
+    if (score >= warningThreshold + 1) return "strong";
+    if (score >= warningThreshold) return "soft";
+    return "none";
+  }, [hasNegativeOutcome, negativeOutcomeTarget, getSimilarityScore, warningThreshold]);
+
+  const warningMessage = useMemo(() => {
+    if (warningTone === "none") return "";
+    if (tonePreference === "direct") {
+      return warningTone === "strong"
+        ? "과거 동일 판단에서 부정 결과가 발생했습니다. 이 결정은 재검토가 필요합니다."
+        : "유사 판단에서 부정 결과가 있었습니다. 신중히 접근하세요.";
+    }
+    if (tonePreference === "soft") {
+      return warningTone === "strong"
+        ? "이전에 비슷한 판단에서 어려움이 있었습니다. 다시 살펴보는 것을 권장합니다."
+        : "유사한 판단에서 아쉬운 결과가 있었습니다. 참고해 주세요.";
+    }
+    return warningTone === "strong"
+      ? "과거 동일 판단에서 부정 결과가 있었습니다. 재검토 권장."
+      : "유사 판단에서 부정 결과가 있었습니다. 유의하세요.";
+  }, [warningTone, tonePreference]);
+
+  // mapMemoryToDecision is already defined earlier in the component
+
+  const mapDecisionToMemory = (record: DecisionRecord, bizNum: string): MemoryRecord => ({
+    id: record.id,
+    biz_num: bizNum,
+    title: record.title,
+    summary: record.summary,
+    status: record.status,
+    created_at: record.createdAt,
+    reasons: record.reasons,
+    impact: record.impact,
+    outcome_status: record.outcomeStatus,
+    outcome_memo: record.outcomeMemo,
+    priority_score: record.priorityScore,
+    runway_months: record.runwayMonths,
+    risk_score: record.riskScore,
+    rejection_reason: record.rejectionReason,
+  });
+
+  const recordDecision = (status: "accepted" | "rejected", rejectionReason?: string) => {
+    const now = new Date().toISOString();
+    // Unique ID generation to allow history accumulation
+    const uniqueId = `${decisionContext.id}-${Date.now()}`;
+
+    const next: DecisionRecord = {
+      id: uniqueId,
+      title: decisionContext.summary,
+      summary: decisionContext.impact,
+      status,
+      createdAt: now,
+      reasons: decisionContext.reasons,
+      impact: decisionContext.impact,
+      outcomeStatus: "pending",
+      priorityScore: decisionContext.priorityScore,
+      runwayMonths: decisionContext.runwayMonths,
+      riskScore: decisionContext.riskScore,
+      rejectionReason,
+    };
+
+    setDecisionHistory((prev) => [next, ...prev]);
+
+    if (user?.bizNum) {
+      api.saveDecisionMemory(mapDecisionToMemory(next, user.bizNum)).catch((err) => {
+        console.error("Failed to save decision memory:", err);
+      });
+    }
+  };
+
+  const buildLocalAnswer = (prompt: string) => {
+    const buildConclusion = (summary: string) => {
+      if (tonePreference === "direct") {
+        return `결론: ${summary} 즉시 대응이 필요합니다.`;
+      }
+      if (tonePreference === "soft") {
+        return `결론: ${summary} 참고 부탁드립니다.`;
+      }
+      return `결론: ${summary}`;
+    };
+
+    const currentBurn = runwayBurn;
+    const currentCash = runwayCash;
+    const nextBurn = Math.round(currentBurn * 1.15);
+    const nextRunway = nextBurn > 0 ? (currentCash / nextBurn).toFixed(1) : "∞";
+    const simulationText = `시뮬레이션(간단): 월 Burn이 15% 증가하면 Runway가 약 ${nextRunway}개월로 감소합니다.`;
+
+    if (/시뮬|simulation/i.test(prompt)) {
+      return `${buildConclusion(decisionContext.summary)}\n\n${simulationText}\n\n현재 Burn: ${currentBurn.toLocaleString()}원 → 예상 Burn: ${nextBurn.toLocaleString()}원`;
+    }
+    if (/근거|이유|why/i.test(prompt)) {
+      const reasons = summaryLength === "short"
+        ? decisionContext.reasons.slice(0, 1)
+        : decisionContext.reasons;
+      return `${buildConclusion(decisionContext.summary)}\n\n근거:\n- ${reasons.join("\n- ")}`;
+    }
+    if (/자세히|detail/i.test(prompt)) {
+      return `요약: ${decisionContext.summary}\n\n근거:\n- ${decisionContext.reasons.join("\n- ")}\n\n영향: ${decisionContext.impact}`;
+    }
+    if (summaryLength === "detailed") {
+      return `${buildConclusion(decisionContext.summary)}\n\n근거:\n- ${decisionContext.reasons.join("\n- ")}\n\n영향: ${decisionContext.impact}`;
+    }
+    if (summaryLength === "short") {
+      return `${buildConclusion(decisionContext.summary)}`;
+    }
+    return `${buildConclusion(decisionContext.summary)}\n근거: ${decisionContext.reasons[0] || "추가 지표를 확인 중입니다."}`;
+  };
+
+  const openDecisionAction = (action: "details" | "simulation") => {
+    const targetTab = action === "simulation" ? "management" : decisionContext.relatedTab;
+    setActiveTab("home");
+    setIsDetailOpen(true);
+    setHighlightKey(null);
+    if (action === "details") {
+      setShowDecisionDetails(true);
+      setDashboardTab(targetTab);
+      setHighlightKey(targetTab);
+    }
+    if (action === "simulation") {
+      setShowDecisionSimulation(true);
+      setDashboardTab(targetTab);
+      setHighlightKey(targetTab);
+    }
+    setTimeout(() => {
+      if (targetTab === "accounting") {
+        accountingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (targetTab === "management") {
+        managementRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        dashboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+  };
+
+  const openRelatedScreen = () => {
+    setActiveTab("home");
+    setIsDetailOpen(true);
+    setHighlightKey(null);
+    setDashboardTab(decisionContext.relatedTab);
+    setHighlightKey(decisionContext.relatedTab);
+    setTimeout(() => {
+      if (decisionContext.relatedTab === "accounting") {
+        accountingRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (decisionContext.relatedTab === "management") {
+        managementRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else {
+        dashboardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 100);
+  };
+
+  const handleSend = async (overrideText?: string) => {
+    if (isLoading) return;
+    const messageText = (overrideText ?? input).trim();
+    if (!messageText) return;
+    const userMsg: ChatMessage = { role: "user", content: messageText };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
+    loadingStartRef.current = performance.now();
+
+    const prompt = userMsg.content.trim();
+    if (/자세히|근거|이유|시뮬|simulation|detail/i.test(prompt)) {
+      if (/근거|이유/i.test(prompt)) {
+        openDecisionAction("details");
+      }
+      if (/시뮬|simulation/i.test(prompt)) {
+        openDecisionAction("simulation");
+      }
+      const localReply: ChatMessage = {
+        role: "assistant",
+        content: buildLocalAnswer(prompt),
+      };
+      setMessages((prev) => [...prev, localReply]);
+      setIsLoading(false);
+      return;
+    }
 
     try {
-      const res = await api.chat(userMsg.content, messages);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: res.response, context: res.context },
-      ]);
+      const history = messages.map(({ role, content }) => ({ role, content }));
+
+      // Add empty assistant message first for streaming
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      // Use streaming API
+      api.chatStream(
+        userMsg.content,
+        history,
+        user?.bizNum,
+        (chunk: string) => {
+          // Update the last message with new chunk
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastMsg = updated[updated.length - 1];
+            if (lastMsg && lastMsg.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...lastMsg,
+                content: lastMsg.content + chunk
+              };
+            }
+            return updated;
+          });
+        },
+        () => {
+          // Done streaming
+          const elapsed = loadingStartRef.current ? performance.now() - loadingStartRef.current : 0;
+          setMessages((prev) => {
+            const updated = [...prev];
+            const lastMsg = updated[updated.length - 1];
+            if (lastMsg && lastMsg.role === "assistant") {
+              updated[updated.length - 1] = {
+                ...lastMsg,
+                latencyMs: Math.round(elapsed)
+              };
+            }
+            return updated;
+          });
+          setIsLoading(false);
+        }
+      );
     } catch (error) {
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "죄송합니다. 오류가 발생했습니다." },
       ]);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -1332,9 +2626,7 @@ export default function App() {
 
   // Restore user state on mount if authUser exists
   useEffect(() => {
-    console.log("Restoring user state check:", { authUser, user });
     if (authUser && authUser.onboarding_completed && authUser.biz_num && !user) {
-      console.log("Restoring user state now...");
       setUser({
         name: authUser.name,
         company: authUser.company,
@@ -1391,6 +2683,20 @@ export default function App() {
     return <Onboarding onStart={handleOnboardingComplete} />;
   }
 
+  const pageTitle = {
+    home: "AI CFO 브리핑",
+    risk: "세무 리스크",
+    accounting: "회계/증빙 관리",
+    runway: "Runway / Burn",
+    competitions: "R&D / 정부지원",
+    hospital_claims: "보험 청구 심사",
+    hospital_pnl: "진료과별 손익",
+    commerce_roas: "ROAS / 마케팅",
+    commerce_inventory: "재고 / 정산",
+    memory: "결정 히스토리",
+    settings: "My Page & Settings",
+  }[activeTab] || "AI CFO OS";
+
   return (
     <div className="min-h-screen bg-background flex text-foreground font-sans">
       {/* Sidebar */}
@@ -1411,30 +2717,50 @@ export default function App() {
         </div>
 
         <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
-          {/* Section 1: CFO Core */}
+          {/* HOME */}
           <div>
-            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">CFO CORE</div>
+            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">HOME</div>
             <div className="space-y-1">
-              <SidebarItem icon={LayoutDashboard} label="재무 대시보드" active={activeTab === "dashboard"} onClick={() => setActiveTab("dashboard")} />
-              <SidebarItem icon={AlertTriangle} label="세무 리스크" active={activeTab === "risk"} onClick={() => setActiveTab("risk")} />
-              <SidebarItem icon={Calculator} label="회계/증빙 관리" active={activeTab === "accounting"} onClick={() => setActiveTab("accounting")} />
-              <SidebarItem icon={MessageSquare} label="AI 자문 (Domain Specific)" active={activeTab === "chat"} onClick={() => setActiveTab("chat")} />
+              <SidebarItem icon={LayoutDashboard} label="AI CFO 브리핑" active={activeTab === "home"} onClick={() => setActiveTab("home")} />
             </div>
           </div>
 
-          {/* Section 2: Domain MCPs */}
+          {/* DETECT */}
           <div>
-            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider flex justify-between items-center">
-              <span>DOMAIN EXTENSIONS</span>
-              <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">ON</span>
+            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">DETECT</div>
+            <div className="space-y-1">
+              <SidebarItem icon={AlertTriangle} label="세무 리스크" active={activeTab === "risk"} onClick={() => setActiveTab("risk")} />
+              <SidebarItem icon={Calculator} label="회계/증빙 관리" active={activeTab === "accounting"} onClick={() => setActiveTab("accounting")} />
             </div>
+          </div>
+
+          {/* DECIDE */}
+          <div>
+            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">DECIDE</div>
             <div className="space-y-1">
               {(user.activeMCPs || []).includes('startup') && (
                 <>
+                  <SidebarItem icon={TrendingUp} label="Runway / Burn" active={activeTab === "runway"} onClick={() => setActiveTab("runway")} />
                   <SidebarItem icon={Rocket} label="R&D / 정부지원" active={activeTab === "competitions"} onClick={() => setActiveTab("competitions")} />
-                  <SidebarItem icon={TrendingUp} label="Runway / Burn Rate" active={activeTab === "runway"} onClick={() => setActiveTab("runway")} />
                 </>
               )}
+            </div>
+          </div>
+
+          {/* EXPLAIN */}
+          <div>
+            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">EXPLAIN</div>
+            <div className="space-y-1">
+              <SidebarItem
+                icon={Activity}
+                label="재무 근거 대시보드"
+                active={activeTab === "home" && isDetailOpen && dashboardTab === "home"}
+                onClick={() => {
+                  setActiveTab("home");
+                  setIsDetailOpen(true);
+                  setDashboardTab("home");
+                }}
+              />
               {(user.activeMCPs || []).includes('hospital') && (
                 <>
                   <SidebarItem icon={Stethoscope} label="보험 청구 심사" active={activeTab === "hospital_claims"} onClick={() => setActiveTab("hospital_claims")} />
@@ -1447,6 +2773,14 @@ export default function App() {
                   <SidebarItem icon={Building2} label="재고 / 정산" active={activeTab === "commerce_inventory"} onClick={() => setActiveTab("commerce_inventory")} />
                 </>
               )}
+            </div>
+          </div>
+
+          {/* MEMORY */}
+          <div>
+            <div className="text-xs font-semibold text-gray-400 mb-2 px-3 tracking-wider">MEMORY</div>
+            <div className="space-y-1">
+              <SidebarItem icon={FileText} label="결정 히스토리" active={activeTab === "memory"} onClick={() => setActiveTab("memory")} />
             </div>
           </div>
         </nav>
@@ -1480,9 +2814,21 @@ export default function App() {
         <header className="h-16 border-b bg-background/80 backdrop-blur-sm sticky top-0 z-10 px-6 flex items-center justify-between">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-accent rounded-md md:hidden"><Menu className="w-5 h-5" /></button>
           <h1 className="font-semibold text-lg opacity-80 pl-4 md:pl-0">
-            {activeTab === 'dashboard' ? `${user.type.toUpperCase()} Dashboard` : activeTab === 'chat' ? 'AI CFO Chat' : 'Domain Intelligence'}
+            {pageTitle}
           </h1>
           <div className="flex items-center gap-4 relative">
+            <button
+              onClick={() => setIsQuestionOpen(true)}
+              className="p-2 hover:bg-accent rounded-full transition-colors"
+              aria-label="질문 패널 열기"
+            >
+              <MessageSquare className="w-5 h-5 text-muted-foreground" />
+            </button>
+            {isSilent && (
+              <span className="text-xs font-medium text-orange-600 bg-orange-100 px-2 py-1 rounded-full">
+                SILENT
+              </span>
+            )}
             <button
               onClick={() => setShowNotifications(!showNotifications)}
               className="p-2 hover:bg-accent rounded-full relative transition-colors"
@@ -1519,7 +2865,7 @@ export default function App() {
         <div className="flex-1 overflow-auto p-6">
 
           {/* DASHBOARD VIEW */}
-          {activeTab === "dashboard" && !dashboardData && (
+          {activeTab === "home" && !effectiveDashboardData && dataStatus !== "none" && dataStatus !== "partial" && (
             <div className="max-w-6xl mx-auto flex items-center justify-center py-20">
               <div className="text-center">
                 <div className="mx-auto w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4" />
@@ -1527,269 +2873,522 @@ export default function App() {
               </div>
             </div>
           )}
-          {activeTab === "dashboard" && dashboardData && (
-            <div className="max-w-7xl mx-auto space-y-6">
-
-              {/* Tab Navigation */}
-              {/* Tab Navigation - Full Width Sticky Header */}
-              {/* Tab Navigation - Full Width Sticky Header */}
-              {/* Tab Navigation - Full Width Sticky Header */}
-              {/* Tab Navigation - Static Header (Scrolls with page) */}
-              <div className="-mx-6 px-6 py-2 bg-background border-y mb-8 shadow-sm">
-                <div className="max-w-7xl mx-auto flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setDashboardTab("home")}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "home" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
-                      }`}
-                  >
-                    <LayoutDashboard className="w-4 h-4" />
-                    대시보드
-                  </button>
-                  <button
-                    onClick={() => setDashboardTab("accounting")}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "accounting" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
-                      }`}
-                  >
-                    <Calculator className="w-4 h-4" />
-                    세무/회계
-                  </button>
-                  <button
-                    onClick={() => setDashboardTab("management")}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "management" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
-                      }`}
-                  >
-                    <Building className="w-4 h-4" />
-                    경영 지원
-                  </button>
-                </div>
-              </div>
-
-              {/* === HOME TAB === */}
-              {dashboardTab === "home" && (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="md:hidden">
-                    <h2 className="text-xl font-bold">환영합니다, {user?.name || '대표'}님! 👋</h2>
-                    <p className="text-sm text-muted-foreground">{user?.company || '우리 회사'}의 재무 현황입니다.</p>
-                  </div>
-
-                  {/* 1. Stats Grid */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    {dashboardData.stats?.map((stat: any, i: number) => (
-                      <div key={i} className="p-5 bg-card rounded-xl border shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="text-sm font-medium text-muted-foreground">{stat.title}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${stat.trend === 'up' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                            {stat.trend === 'up' ? '▲' : '▼'} {stat.change}
-                          </span>
-                        </div>
-                        <div className="text-2xl font-bold">{stat.value}</div>
-                        <div className="text-xs text-muted-foreground mt-1">{stat.desc}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Financial Chart */}
-                    <div className="lg:col-span-2 p-6 bg-card rounded-xl border shadow-sm flex flex-col h-auto min-h-[400px] lg:h-full">
-                      <h3 className="font-bold flex items-center gap-2 mb-6">
-                        <Activity className="w-5 h-5 text-primary" />
-                        재무 트렌드 (2026)
-                      </h3>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={dashboardData.chart || []}>
-                          <defs>
-                            <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.1} />
-                              <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                            </linearGradient>
-                            <linearGradient id="colorExpense" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#ef4444" stopOpacity={0.1} />
-                              <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                            </linearGradient>
-                          </defs>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#888', fontSize: 12 }} dy={10} />
-                          <YAxis axisLine={false} tickLine={false} tick={{ fill: '#888', fontSize: 12 }} tickFormatter={(value) => `${value / 10000}만`} />
-                          <Tooltip
-                            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                            formatter={(value: any) => `${(value || 0).toLocaleString()}원`}
-                          />
-                          <Area type="monotone" dataKey="income" stroke="hsl(var(--primary))" fillOpacity={1} fill="url(#colorIncome)" strokeWidth={2} name="수입" />
-                          <Area type="monotone" dataKey="expense" stroke="#ef4444" fillOpacity={1} fill="url(#colorExpense)" strokeWidth={2} name="지출" />
-                        </AreaChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    {/* Risk Analysis Card */}
-                    <div className="lg:col-span-1">
-                      {risk && risk.action_items && <RiskCard risk={risk} />}
-                    </div>
-                  </div>
-
-                  {/* Domain Specific Widgets */}
-                  {(user.type === 'hospital' || user.activeMCPs.includes('hospital')) && (
-                    <div className="p-6 bg-blue-50 rounded-xl border border-blue-100">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Stethoscope className="w-5 h-5 text-blue-600" />
-                        <h3 className="font-bold text-blue-800">병원 경영 리포트 요약</h3>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white p-3 rounded-lg shadow-sm">
-                          <p className="text-xs text-gray-500">보험 청구 삭감률</p>
-                          <p className="text-lg font-bold text-red-500">2.4% <span className="text-xs font-normal text-gray-400">▼0.1%</span></p>
-                        </div>
-                        <div className="bg-white p-3 rounded-lg shadow-sm">
-                          <p className="text-xs text-gray-500">비급여 매출 비중</p>
-                          <p className="text-lg font-bold text-blue-600">35% <span className="text-xs font-normal text-gray-400">-</span></p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {(user.type === 'commerce' || user.activeMCPs.includes('commerce')) && (
-                    <div className="p-6 bg-indigo-50 rounded-xl border border-indigo-100">
-                      <div className="flex items-center gap-2 mb-2">
-                        <ShoppingBag className="w-5 h-5 text-indigo-600" />
-                        <h3 className="font-bold text-indigo-800">이커머스 현황 요약</h3>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-white p-3 rounded-lg shadow-sm">
-                          <p className="text-xs text-gray-500">이번 달 ROAS</p>
-                          <p className="text-lg font-bold text-indigo-600">340% <span className="text-xs font-normal text-gray-400">▲15%</span></p>
-                        </div>
-                        <div className="bg-white p-3 rounded-lg shadow-sm">
-                          <p className="text-xs text-gray-500">재고 회전일</p>
-                          <p className="text-lg font-bold text-green-600">14일 <span className="text-xs font-normal text-gray-400">빠름</span></p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* === ACCOUNTING TAB === */}
-              {dashboardTab === "accounting" && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="col-span-1 space-y-6">
-                    <TaxSimulator businessType={user?.type || 'startup'} />
-                    <TaxCalendar alerts={calendarAlerts} />
-                  </div>
-                  <div className="col-span-1">
-                    <FinancialAnalysis revenue={user?.targetRevenue || 150000000} industry={user?.type || 'startup'} />
-                  </div>
-                </div>
-              )}
-
-              {/* === MANAGEMENT TAB === */}
-              {dashboardTab === "management" && (
-                <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="xl:col-span-5 space-y-6">
-                    <BusinessLookup />
-                    {/* Placeholder for Smart NTS */}
-                    <div className="p-6 bg-card rounded-xl border shadow-sm border-dashed">
-                      <h3 className="font-bold mb-2 flex items-center gap-2"><div className="w-2 h-2 bg-green-500 rounded-full" />스마트 문서 관리</h3>
-                      <p className="text-sm text-muted-foreground mb-4">홈택스 PDF를 업로드하면 자동으로 분석합니다.</p>
-                      <button
-                        onClick={() => setActiveTab('settings')}
-                        className="w-full py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80"
-                      >
-                        문서 업로드 페이지로 이동
-                      </button>
-                    </div>
-                  </div>
-                  <div className="xl:col-span-7">
-                    <div className="p-6 bg-card rounded-xl border shadow-sm h-full">
-                      <h3 className="font-semibold text-lg flex items-center gap-2 mb-4">
-                        <Rocket className="w-5 h-5 text-primary" />
-                        2026년 맞춤 지원사업 예측
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {recommendations.map((rec, i) => (
-                          <PredictionCard key={i} rec={rec} />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+          {activeTab === "home" && (dataStatus === "none" || dataStatus === "partial") && !effectiveDashboardData && (
+            <DashboardEmptyState status={dataStatus as "none" | "partial"} onSetup={() => setActiveTab("settings")} />
           )}
-          {/* CHAT VIEW */}
-          {activeTab === "chat" && (
-            <div className="max-w-4xl mx-auto h-[calc(100vh-8rem)] flex flex-col bg-card rounded-xl border shadow-sm overflow-hidden">
-              <div className="p-4 border-b bg-background/50 backdrop-blur">
-                <h2 className="font-semibold flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-primary" />
-                  AI {user.type === 'hospital' ? '병원경영' : user.type === 'startup' ? '스타트업' : '세무'} 어드바이저
-                </h2>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"
-                      }`}
-                  >
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-3 ${m.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
-                        }`}
-                    >
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed">{m.content}</p>
-
-                      {/* Source Context Display */}
-                      {m.context && m.context.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-black/10 text-xs space-y-1">
-                          <p className="font-semibold opacity-70">참고 자료 (RAG):</p>
-                          {m.context.map((ctx, idx) => (
-                            <div key={idx} className="bg-black/5 p-2 rounded">
-                              <span className="font-bold">[{ctx.source}] </span>
-                              {ctx.content.slice(0, 80)}...
-                            </div>
-                          ))}
-                        </div>
+          {activeTab === "home" && effectiveDashboardData && (
+            <div className="max-w-7xl mx-auto space-y-6">
+              {/* A. Executive Dashboard (6 KPI) */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {effectiveDashboardData.stats?.map((stat: any, i: number) => (
+                  <div key={i} className="p-5 bg-card rounded-xl border shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex justify-between items-start mb-2">
+                      {summaryLength !== "short" && (
+                        <span className="text-sm font-medium text-muted-foreground">{stat.title}</span>
                       )}
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${stat.trend === 'up' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                        {stat.trend === 'up' ? '▲' : '▼'} {stat.change}
+                      </span>
                     </div>
+                    <div className="text-2xl font-bold">{stat.value}</div>
+                    {summaryLength !== "short" && (
+                      <div className="text-xs text-muted-foreground mt-1">{stat.desc}</div>
+                    )}
                   </div>
                 ))}
-                {isLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-secondary rounded-2xl px-4 py-3 flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      생각하는 중...
+              </div>
+
+              {/* B. AI CFO 브리핑 & 결정 카드 */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 space-y-6">
+                  <div ref={decisionCardRef} className="p-6 bg-card rounded-xl border shadow-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">AI CFO 브리핑 · {new Date().getFullYear()}년 {new Date().getMonth() + 1}월</p>
+                        <h2 className="text-xl font-bold">
+                          {tonePreference === "direct"
+                            ? "이번 주 결론"
+                            : tonePreference === "soft"
+                              ? "이번 주 참고 요약"
+                              : "이번 주 핵심 요약"}
+                        </h2>
+                      </div>
+                      <button
+                        onClick={() => setIsQuestionOpen(true)}
+                        className="text-xs px-3 py-1 rounded-full border hover:bg-muted transition-colors"
+                      >
+                        질문하기
+                      </button>
                     </div>
+
+                    {isSilent ? (
+                      <div className="mt-4 p-4 rounded-lg bg-orange-50 border border-orange-100 text-sm text-orange-700">
+                        AI CFO가 침묵 모드입니다. 필요하면 다시 호출해 주세요.
+                        <button
+                          onClick={() => setIsSilent(false)}
+                          className="ml-3 text-orange-700 underline"
+                        >
+                          다시 말해줘
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-4">
+                        <div className={`grid grid-cols-1 ${summaryLength === "short" ? "md:grid-cols-2" : "md:grid-cols-3"} gap-4 text-sm`}>
+                          <div className="p-4 bg-muted/40 rounded-lg">
+                            <p className="text-xs text-muted-foreground mb-1">핵심 리스크</p>
+                            <p className="font-semibold">
+                              {summaryLength === "short"
+                                ? (risk?.title || "리스크 분석 중").split(" ").slice(0, 4).join(" ")
+                                : (risk?.title || "리스크 분석 중")}
+                            </p>
+                          </div>
+                          <div className="p-4 bg-muted/40 rounded-lg">
+                            <p className="text-xs text-muted-foreground mb-1">지금 내려야 할 결정</p>
+                            <p className="font-semibold">
+                              {summaryLength === "short"
+                                ? decisionContext.summary.split(" ").slice(0, 6).join(" ")
+                                : decisionContext.summary}
+                            </p>
+                          </div>
+                          {summaryLength !== "short" && (
+                            <div className="p-4 bg-muted/40 rounded-lg">
+                              <p className="text-xs text-muted-foreground mb-1">무시했을 때 결과</p>
+                              <p className="font-semibold">
+                                {summaryLength === "normal"
+                                  ? decisionContext.impact.split(".")[0]
+                                  : decisionContext.impact}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                        {similarOutcomes.length > 0 && (
+                          <div className="p-4 rounded-lg border bg-white text-sm">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-xs text-muted-foreground">과거 유사 결정 결과</p>
+                              <button
+                                onClick={() => {
+                                  setMemoryFilterKey(decisionContext.actionKey);
+                                  setActiveTab("memory");
+                                }}
+                                className="text-[11px] px-2 py-1 rounded-full border hover:bg-muted"
+                              >
+                                전체 보기
+                              </button>
+                            </div>
+                            {warningTone !== "none" && (
+                              <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${warningTone === "strong" ? "bg-red-50 text-red-700 border border-red-100" : "bg-yellow-50 text-yellow-700 border border-yellow-100"}`}>
+                                {warningMessage}
+                              </div>
+                            )}
+                            {summaryLength === "short" && (
+                              <button
+                                onClick={() => setShowSimilarOutcomes((prev) => !prev)}
+                                className="text-xs px-2 py-1 rounded-full border hover:bg-muted"
+                                aria-label={showSimilarOutcomes ? "유사 결과 접기" : "유사 결과 펼치기"}
+                              >
+                                {showSimilarOutcomes ? "접기" : "펼치기"}
+                              </button>
+                            )}
+                            {(summaryLength !== "short" || showSimilarOutcomes) && (
+                              <div className="space-y-2 mt-2">
+                                {similarOutcomes.map((record) => (
+                                  <div key={record.createdAt} className="flex items-center justify-between">
+                                    <div>
+                                      <p className="text-sm font-medium">
+                                        {summaryLength === "short"
+                                          ? record.title.split(" ").slice(0, 5).join(" ")
+                                          : record.title}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {new Date(record.createdAt).toLocaleDateString()} · {summaryLength === "short"
+                                          ? record.summary.split(".")[0]
+                                          : record.summary}
+                                      </p>
+                                      <p className="text-[11px] text-muted-foreground">
+                                        {getSimilarityReason(record)}
+                                      </p>
+                                    </div>
+                                    <span className={`text-xs px-2 py-1 rounded-full ${record.outcomeStatus === "positive"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : record.outcomeStatus === "negative"
+                                        ? "bg-red-100 text-red-700"
+                                        : "bg-gray-100 text-gray-600"
+                                      }`}>
+                                      {record.outcomeStatus === "positive" ? "긍정" : record.outcomeStatus === "negative" ? "부정" : "중립"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-6 bg-card rounded-xl border shadow-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">AI CFO 공식 판단</p>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-bold">
+                            {summaryLength === "short"
+                              ? decisionContext.summary.split(" ").slice(0, 6).join(" ")
+                              : decisionContext.summary}
+                          </h3>
+                          {hasNegativeOutcome && (
+                            <button
+                              onClick={() => {
+                                if (!negativeOutcomeTarget) return;
+                                setMemoryHighlightId(negativeOutcomeTarget.id);
+                                setActiveTab("memory");
+                              }}
+                              className={`text-[11px] px-2 py-1 rounded-full transition-colors ${hasNegativeOutcome && bestSimilarId === negativeOutcomeTarget?.id
+                                ? "bg-red-200 text-red-800"
+                                : "bg-red-100 text-red-700 hover:bg-red-200"
+                                }`}
+                            >
+                              과거 부정 결과
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-xs text-muted-foreground text-right">
+                        <div>{summaryLength === "short" ? "결정 #1" : "결정 카드 #1"}</div>
+                        <div className="mt-1 inline-flex items-center gap-2 px-2 py-1 rounded-full bg-muted text-[11px] text-muted-foreground">
+                          우선순위 {decisionContext.priorityScore}/100
+                        </div>
+                      </div>
+                    </div>
+
+                    {isSilent ? (
+                      <div className="mt-4 p-4 rounded-lg bg-orange-50 border border-orange-100 text-sm text-orange-700">
+                        침묵 모드에서는 판단을 제시하지 않습니다.
+                        <button
+                          onClick={() => setIsSilent(false)}
+                          className="ml-3 text-orange-700 underline"
+                        >
+                          다시 말해줘
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                          {(summaryLength === "short" ? decisionContext.reasons.slice(0, 1) : decisionContext.reasons).map((reason) => (
+                            <p key={reason}>• {reason}</p>
+                          ))}
+                        </div>
+                        {decisionContext.drivers.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                            {decisionContext.drivers.map((driver) => (
+                              <span
+                                key={driver.label}
+                                className="px-2 py-1 rounded-full bg-muted text-muted-foreground"
+                              >
+                                {driver.label} +{driver.score}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => recordDecision("accepted")}
+                            className="px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+                            title="이 판단 따르기"
+                            aria-label="이 판단 따르기"
+                          >
+                            {summaryLength === "short"
+                              ? "▶"
+                              : tonePreference === "direct"
+                                ? "지금 실행"
+                                : tonePreference === "soft"
+                                  ? "검토 후 진행"
+                                  : "이 판단 따르기"}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRejectionInput("");
+                              setShowRejectionModal(true);
+                            }}
+                            className="px-3 py-2 rounded-lg border text-sm hover:bg-muted"
+                            title="이 판단 거부"
+                            aria-label="이 판단 거부"
+                          >
+                            {summaryLength === "short"
+                              ? "✕"
+                              : tonePreference === "direct"
+                                ? "거부"
+                                : tonePreference === "soft"
+                                  ? "다른 선택 고려"
+                                  : "이 판단 거부"}
+                          </button>
+                          <button
+                            onClick={() => setShowDecisionDetails((prev) => !prev)}
+                            className="px-3 py-2 rounded-lg border text-sm hover:bg-muted"
+                            title="근거 보기"
+                            aria-label="근거 보기"
+                          >
+                            {summaryLength === "short" ? "ⓘ" : "근거 보기"}
+                          </button>
+                          <button
+                            onClick={() => setShowDecisionSimulation((prev) => !prev)}
+                            className="px-3 py-2 rounded-lg border text-sm hover:bg-muted"
+                            title="시뮬레이션"
+                            aria-label="시뮬레이션"
+                          >
+                            {summaryLength === "short" ? "∑" : "시뮬레이션"}
+                          </button>
+                          <button
+                            onClick={() => setIsSilent(true)}
+                            className="px-3 py-2 rounded-lg border text-sm text-orange-600 border-orange-200 hover:bg-orange-50"
+                            title="그만"
+                            aria-label="그만"
+                          >
+                            {summaryLength === "short" ? "⏸" : "그만"}
+                          </button>
+                        </div>
+
+                        {showDecisionDetails && (
+                          <div className="mt-4 p-4 rounded-lg bg-muted/30 text-sm">
+                            <p className="font-semibold mb-2">근거 상세</p>
+                            <ul className="space-y-1 text-muted-foreground">
+                              {decisionContext.reasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {showDecisionSimulation && (
+                          <div className="mt-4 p-4 rounded-lg bg-muted/30 text-sm">
+                            <p className="font-semibold mb-2">시뮬레이션</p>
+                            <p className="text-muted-foreground">
+                              월 Burn 15% 증가 기준, 현재 {runwayCash.toLocaleString()}원 보유 시 Runway가 약 {(runwayCash / (runwayBurn * 1.15)).toFixed(1)}개월로 감소합니다.
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="lg:col-span-1">
+                  {risk && risk.action_items && (
+                    summaryLength === "short" ? (
+                      <div className="p-4 bg-card rounded-xl border shadow-sm">
+                        <p className="text-xs text-muted-foreground mb-1">리스크 요약</p>
+                        <p className="font-semibold">{risk.title}</p>
+                        <p className="text-sm text-muted-foreground mt-2">{risk.reason}</p>
+                        <div className="mt-3 text-xs text-muted-foreground">
+                          대응 항목 {risk.action_items.length}건 · 예상 리스크 {risk.estimated_penalty.toLocaleString()}원
+                        </div>
+                      </div>
+                    ) : (
+                      <RiskCard risk={risk} />
+                    )
+                  )}
+                </div>
+              </div>
+
+              {/* C. 상세 대시보드 (접힘/펼침) */}
+              <div className="bg-card rounded-xl border shadow-sm overflow-hidden">
+                <button
+                  onClick={() => setIsDetailOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-between px-6 py-4 text-sm font-medium hover:bg-muted/40"
+                >
+                  <span>{isDetailOpen ? "▲ 상세 재무·세무 대시보드 접기" : "▼ 상세 재무·세무 대시보드 펼치기"}</span>
+                  <ChevronRight className={`w-4 h-4 transition-transform ${isDetailOpen ? "rotate-90" : ""}`} />
+                </button>
+
+                {isDetailOpen && (
+                  <div className="p-6 border-t space-y-6 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => setDashboardTab("home")}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "home" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
+                          }`}
+                      >
+                        <LayoutDashboard className="w-4 h-4" />
+                        대시보드
+                      </button>
+                      <button
+                        onClick={() => setDashboardTab("accounting")}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "accounting" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
+                          }`}
+                      >
+                        <Calculator className="w-4 h-4" />
+                        세무/회계
+                      </button>
+                      <button
+                        onClick={() => setDashboardTab("management")}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${dashboardTab === "management" ? "bg-primary/10 text-primary border border-primary/20" : "text-muted-foreground hover:bg-muted"
+                          }`}
+                      >
+                        <Building className="w-4 h-4" />
+                        경영 지원
+                      </button>
+                    </div>
+
+                    {dashboardTab === "home" && (
+                      <div ref={dashboardRef} className={`space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ${highlightKey === "dashboard" ? "ring-2 ring-primary/40 rounded-xl" : ""}`}>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                          <div className="lg:col-span-2 p-6 bg-card rounded-xl border shadow-sm flex flex-col h-auto min-h-[400px] lg:h-full">
+                            <h3 className="font-bold flex items-center gap-2 mb-6">
+                              <Activity className="w-5 h-5 text-primary" />
+                              재무 트렌드 (2026)
+                            </h3>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={effectiveDashboardData.chart || []}>
+                                <defs>
+                                  <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.1} />
+                                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                                  </linearGradient>
+                                  <linearGradient id="colorExpense" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.1} />
+                                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                                  </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#888', fontSize: 12 }} dy={10} />
+                                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#888', fontSize: 12 }} tickFormatter={(value) => `${value / 10000}만`} />
+                                <Tooltip
+                                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                  formatter={(value: any) => `${(value || 0).toLocaleString()}원`}
+                                />
+                                <Area type="monotone" dataKey="income" stroke="hsl(var(--primary))" fillOpacity={1} fill="url(#colorIncome)" strokeWidth={2} name="수입" />
+                                <Area type="monotone" dataKey="expense" stroke="#ef4444" fillOpacity={1} fill="url(#colorExpense)" strokeWidth={2} name="지출" />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+
+                          <div className="lg:col-span-1">
+                            {risk && risk.action_items && <RiskCard risk={risk} />}
+                          </div>
+                        </div>
+
+                        {(user.type === 'hospital' || user.activeMCPs.includes('hospital')) && (
+                          <div className="p-6 bg-blue-50 rounded-xl border border-blue-100">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Stethoscope className="w-5 h-5 text-blue-600" />
+                              <h3 className="font-bold text-blue-800">병원 경영 리포트 요약</h3>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                <p className="text-xs text-gray-500">보험 청구 삭감률</p>
+                                <p className="text-lg font-bold text-red-500">2.4% <span className="text-xs font-normal text-gray-400">▼0.1%</span></p>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                <p className="text-xs text-gray-500">비급여 매출 비중</p>
+                                <p className="text-lg font-bold text-blue-600">35% <span className="text-xs font-normal text-gray-400">-</span></p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {(user.type === 'commerce' || user.activeMCPs.includes('commerce')) && (
+                          <div className="p-6 bg-indigo-50 rounded-xl border border-indigo-100">
+                            <div className="flex items-center gap-2 mb-2">
+                              <ShoppingBag className="w-5 h-5 text-indigo-600" />
+                              <h3 className="font-bold text-indigo-800">이커머스 현황 요약</h3>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                <p className="text-xs text-gray-500">이번 달 ROAS</p>
+                                <p className="text-lg font-bold text-indigo-600">340% <span className="text-xs font-normal text-gray-400">▲15%</span></p>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg shadow-sm">
+                                <p className="text-xs text-gray-500">재고 회전일</p>
+                                <p className="text-lg font-bold text-green-600">14일 <span className="text-xs font-normal text-gray-400">빠름</span></p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {dashboardTab === "accounting" && (
+                      <div ref={accountingRef} className={`grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ${highlightKey === "accounting" ? "ring-2 ring-primary/40 rounded-xl p-2" : ""}`}>
+                        <div className="col-span-1 space-y-6">
+                          <TaxSimulator businessType={user?.type || 'startup'} />
+                          <TaxCalendar alerts={calendarAlerts} />
+                        </div>
+                        <div className="col-span-1">
+                          <FinancialAnalysis revenue={user?.targetRevenue || 150000000} industry={user?.type || 'startup'} />
+                        </div>
+                      </div>
+                    )}
+
+                    {dashboardTab === "management" && (
+                      <div ref={managementRef} className={`grid grid-cols-1 xl:grid-cols-12 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ${highlightKey === "management" ? "ring-2 ring-primary/40 rounded-xl p-2" : ""}`}>
+                        <div className="xl:col-span-5 space-y-6">
+                          <BusinessLookup />
+                          <div className="p-6 bg-card rounded-xl border shadow-sm border-dashed">
+                            <h3 className="font-bold mb-2 flex items-center gap-2"><div className="w-2 h-2 bg-green-500 rounded-full" />스마트 문서 관리</h3>
+                            <p className="text-sm text-muted-foreground mb-4">홈택스 PDF를 업로드하면 자동으로 분석합니다.</p>
+                            <button
+                              onClick={() => setActiveTab('settings')}
+                              className="w-full py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80"
+                            >
+                              문서 업로드 페이지로 이동
+                            </button>
+                          </div>
+                        </div>
+                        <div className="xl:col-span-7">
+                          <div className="p-6 bg-card rounded-xl border shadow-sm h-full">
+                            <h3 className="font-semibold text-lg flex items-center gap-2 mb-4">
+                              <Rocket className="w-5 h-5 text-primary" />
+                              2026년 맞춤 지원사업 예측
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {recommendations.map((rec, i) => (
+                                <PredictionCard key={i} rec={rec} />
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Subsidies Section */}
+                          {subsidies.length > 0 && (
+                            <div className="p-6 bg-card rounded-xl border shadow-sm mt-6">
+                              <h3 className="font-semibold text-lg flex items-center gap-2 mb-4">
+                                <Coins className="w-5 h-5 text-green-600" />
+                                정부 보조금 안내
+                              </h3>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {subsidies.slice(0, 6).map((sub, i) => (
+                                  <a
+                                    key={i}
+                                    href={sub.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                                  >
+                                    <div className="font-medium text-sm mb-1">{sub.title}</div>
+                                    <div className="text-xs text-muted-foreground mb-2">{sub.org}</div>
+                                    <div className="text-xs text-primary">
+                                      {sub.start_date} ~ {sub.end_date}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 mt-2">
+                                      {sub.tags.slice(0, 3).map((tag, ti) => (
+                                        <span key={ti} className="text-xs bg-secondary px-2 py-0.5 rounded-full">
+                                          {tag}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-
-              <div className="p-4 border-t bg-background">
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSend();
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    className="flex-1 bg-muted/50 border-0 focus:ring-2 ring-primary/20 rounded-lg px-4 py-3 outline-none transition-all"
-                    placeholder="예: 법인세율이 어떻게 되나요? 2026년 예창패 언제 뜰까요?"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                  />
-                  <button
-                    type="submit"
-                    disabled={isLoading || !input.trim()}
-                    className="bg-primary text-primary-foreground px-4 rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                  >
-                    <Send className="w-5 h-5" />
-                  </button>
-                </form>
-              </div>
             </div>
           )}
-
           {/* COMPETITIONS VIEW */}
           {activeTab === "competitions" && (
             <div className="max-w-6xl mx-auto space-y-6">
@@ -1904,11 +3503,34 @@ export default function App() {
                         onChange={(e) => setVatPurchase(Number(e.target.value))}
                       />
                     </div>
-                    <div className="pt-4 border-t flex justify-between items-center">
-                      <span className="font-bold text-gray-600">납부 예상 세액</span>
-                      <span className={`text-2xl font-extrabold ${estimatedVat > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {estimatedVat.toLocaleString()}원
-                      </span>
+                    <div className="pt-4 border-t space-y-2">
+                      <div className="flex justify-between text-sm text-gray-400">
+                        <span>매출세액 (10%)</span>
+                        <span>+ {(vatRevenue * 0.1).toLocaleString()}원</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-gray-400">
+                        <span>매입세액 (10%)</span>
+                        <span>- {(vatPurchase * 0.1).toLocaleString()}원</span>
+                      </div>
+
+                      {/* Dynamic Deduction from Checklist */}
+                      {deductionChecklist.filter(i => i.checked).length > 0 && (
+                        <div className="flex justify-between text-sm text-emerald-600 animate-in fade-in slide-in-from-left-2">
+                          <span>절세 공제 적용</span>
+                          <span>- {deductionChecklist.reduce((acc, curr) =>
+                            acc + (curr.checked ? (curr.id === 3 ? 1500000 : curr.id === 4 ? 200000 : 500000) : 0), 0
+                          ).toLocaleString()}원</span>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between items-center pt-2 border-t">
+                        <span className="font-bold text-gray-600">납부 예상 세액</span>
+                        <span className={`text-2xl font-extrabold ${Math.max(0, (vatRevenue * 0.1) - (vatPurchase * 0.1) - deductionChecklist.reduce((acc, curr) => acc + (curr.checked ? (curr.id === 3 ? 1500000 : curr.id === 4 ? 200000 : 500000) : 0), 0)) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {Math.max(0, (vatRevenue * 0.1) - (vatPurchase * 0.1) - deductionChecklist.reduce((acc, curr) =>
+                            acc + (curr.checked ? (curr.id === 3 ? 1500000 : curr.id === 4 ? 200000 : 500000) : 0), 0
+                          )).toLocaleString()}원
+                        </span>
+                      </div>
                     </div>
                     <p className="text-xs text-gray-400 text-right">* 대략적인 추산액이며 실제와 다를 수 있습니다.</p>
                   </div>
@@ -1929,9 +3551,8 @@ export default function App() {
                         onClick={() => {
                           toggleDeduction(item.id);
                           if (!item.checked) {
-                            // Simple simulation of "Saving" feedback
                             const savingAmount = item.id === 3 ? "1,500,000" : item.id === 4 ? "200,000" : "500,000";
-                            alert(`${item.label} 항목이 체크되었습니다.\n예상 절세액: ${savingAmount}원 반영됨`);
+                            showToast(`${item.label} 체크! 예상 절세액: ${savingAmount}원`, "success");
                           }
                         }}
                         className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${item.checked ? 'bg-emerald-50 border-emerald-200' : 'hover:bg-gray-50'}`}
@@ -2257,6 +3878,429 @@ export default function App() {
             </div>
           )}
 
+          {/* MEMORY VIEW */}
+          {activeTab === "memory" && (
+            <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="border-b pb-4">
+                <h1 className="text-2xl font-bold">📚 결정 히스토리</h1>
+                <p className="text-muted-foreground">과거 결정과 결과를 요약합니다.</p>
+                {memoryFilterKey && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setMemoryFilterKey(null)}
+                      className="text-xs px-2 py-1 rounded-full border hover:bg-muted"
+                    >
+                      필터 해제
+                    </button>
+                    <button
+                      onClick={() => setShowSimilarOnly((prev) => !prev)}
+                      className={`text-xs px-2 py-1 rounded-full border ${showSimilarOnly ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
+                    >
+                      유사 판단만 보기
+                    </button>
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  {(["all", "positive", "neutral", "negative", "pending"] as const).map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => setOutcomeFilter(status)}
+                      className={`px-2 py-1 rounded-full border ${outcomeFilter === status ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
+                    >
+                      {status === "all"
+                        ? "전체"
+                        : status === "positive"
+                          ? "긍정"
+                          : status === "neutral"
+                            ? "중립"
+                            : status === "negative"
+                              ? "부정"
+                              : "보류"}
+                    </button>
+                  ))}
+                </div>
+                {memoryFilterKey && (
+                  <div className="mt-3 p-3 rounded-lg border bg-muted/30 space-y-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2">유사도 가중치</p>
+                      <div className="flex flex-wrap gap-3 text-xs">
+                        <label className="flex items-center gap-2">
+                          <span>우선순위</span>
+                          <input
+                            type="range"
+                            min="1"
+                            max="3"
+                            value={similarityWeights.priority}
+                            onChange={(e) => setSimilarityWeights((prev) => ({ ...prev, priority: Number(e.target.value) }))}
+                          />
+                          <span>{similarityWeights.priority}</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <span>런웨이</span>
+                          <input
+                            type="range"
+                            min="1"
+                            max="3"
+                            value={similarityWeights.runway}
+                            onChange={(e) => setSimilarityWeights((prev) => ({ ...prev, runway: Number(e.target.value) }))}
+                          />
+                          <span>{similarityWeights.runway}</span>
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <span>리스크</span>
+                          <input
+                            type="range"
+                            min="1"
+                            max="3"
+                            value={similarityWeights.risk}
+                            onChange={(e) => setSimilarityWeights((prev) => ({ ...prev, risk: Number(e.target.value) }))}
+                          />
+                          <span>{similarityWeights.risk}</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="mt-3 text-[11px] text-muted-foreground">
+                  유사도 범례: 낮음(0~2) · 중간(3~4) · 높음(5+)
+                </div>
+              </div>
+              <div className="p-6 bg-white rounded-xl border shadow-sm">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="font-bold flex items-center gap-2 text-lg">🧠 AI 사고 지도 (Thinking Map)</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      의사결정 간의 연결 관계를 시각화하여 AI가 판단 근거를 어떻게 확장하는지 보여줍니다.
+                    </p>
+                  </div>
+                  {memoryGraph && (
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs bg-muted px-2 py-1 rounded">
+                        Nodes: {memoryGraph.nodes.length} / Edges: {memoryGraph.edges.length}
+                      </div>
+                      <button
+                        onClick={saveGraphPositions}
+                        className="text-xs px-2 py-1 rounded border hover:bg-muted"
+                      >
+                        레이아웃 저장
+                      </button>
+                      {graphLayout && (
+                        <button
+                          onClick={() => setGraphPositions(graphLayout.positionMap)}
+                          className="text-xs px-2 py-1 rounded border hover:bg-muted"
+                        >
+                          레이아웃 초기화
+                        </button>
+                      )}
+                      {(selectedGraphNode || selectedEdgeKey) && (
+                        <button
+                          onClick={() => {
+                            setSelectedGraphNode(null);
+                            setSelectedEdgeKey(null);
+                          }}
+                          className="text-xs px-2 py-1 rounded border hover:bg-muted"
+                        >
+                          선택 해제
+                        </button>
+                      )}
+                      {layoutSaved && (
+                        <span className="text-xs text-emerald-600">저장됨</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {memoryGraph && memoryGraph.nodes.length > 0 ? (
+                  <div className="relative h-[300px] w-full bg-slate-50/50 rounded-lg overflow-hidden border flex items-center justify-center">
+                    <div className="absolute inset-0 flex items-center justify-center opacity-10 pointer-events-none">
+                      <Activity className="w-64 h-64 text-slate-300" />
+                    </div>
+                    <div className="absolute top-3 right-3 text-[10px] bg-white/90 border rounded px-2 py-1 space-y-1">
+                      <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /> CompanyState / AI_Judgement</div>
+                      <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500" /> Human_Decision</div>
+                      <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-red-400" /> Outcome</div>
+                    </div>
+                    {graphLayout && (
+                      <svg className="absolute inset-0" viewBox="0 0 300 300">
+                        {memoryGraph.edges.map((edge, idx) => {
+                          const source = graphPositions[edge.source] || graphLayout.positionMap[edge.source];
+                          const target = graphPositions[edge.target] || graphLayout.positionMap[edge.target];
+                          if (!source || !target) return null;
+                          const edgeKey = `${edge.source}-${edge.target}-${idx}`;
+                          const isHovered = hoveredEdgeKey === edgeKey;
+                          const isSelected = selectedEdgeKey === edgeKey;
+                          return (
+                            <line
+                              key={edgeKey}
+                              x1={source.x}
+                              y1={source.y}
+                              x2={target.x}
+                              y2={target.y}
+                              stroke={isSelected ? "rgba(16, 185, 129, 0.9)" : isHovered ? "rgba(59, 130, 246, 0.9)" : "rgba(148, 163, 184, 0.6)"}
+                              strokeWidth={isSelected ? "2.5" : isHovered ? "2" : "1"}
+                              onMouseEnter={() => setHoveredEdgeKey(edgeKey)}
+                              onMouseLeave={() => setHoveredEdgeKey(null)}
+                              onClick={() => setSelectedEdgeKey(edgeKey)}
+                              style={{ cursor: "pointer" }}
+                            />
+                          );
+                        })}
+                      </svg>
+                    )}
+                    <div className="relative z-10 w-[300px] h-[300px]">
+                      {memoryGraph.nodes.map((node, _i) => {
+                        const pos = graphPositions[node.id] || graphLayout?.positionMap[node.id];
+                        if (!pos) return null;
+                        return (
+                          <button
+                            key={node.id}
+                            onClick={() => {
+                              const baseId = node.id.split(":").slice(1).join(":") || node.id;
+                              setMemoryHighlightId(baseId);
+                              setSelectedGraphNode(node);
+                            }}
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                              event.currentTarget.setPointerCapture(event.pointerId);
+                              setDraggingNodeId(node.id);
+                            }}
+                            onPointerMove={(event) => {
+                              if (draggingNodeId !== node.id) return;
+                              const rect = (event.currentTarget.parentElement as HTMLDivElement).getBoundingClientRect();
+                              // Limit boundaries
+                              const x = Math.max(10, Math.min(290, ((event.clientX - rect.left) / rect.width) * 300));
+                              const y = Math.max(10, Math.min(290, ((event.clientY - rect.top) / rect.height) * 300));
+                              setGraphPositions((prev) => ({ ...prev, [node.id]: { x, y } }));
+                            }}
+                            onPointerUp={(event) => {
+                              setDraggingNodeId(null);
+                              event.currentTarget.releasePointerCapture(event.pointerId);
+                            }}
+                            onPointerLeave={() => { }}
+                            className={`absolute -translate-x-1/2 -translate-y-1/2 bg-white px-3 py-2 rounded-lg border shadow-sm hover:shadow-md hover:border-primary/50 transition-all text-left flex items-center gap-2 ${selectedGraphNode?.id === node.id ? "ring-2 ring-primary/40" : ""}`}
+                            style={{ left: pos.x, top: pos.y }}
+                            aria-label={`그래프 노드 ${node.type}`}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${node.type === 'Human_Decision' ? 'bg-blue-500' : node.type === 'Outcome' ? 'bg-red-400' : 'bg-emerald-500'}`} />
+                            <span className="text-[10px] font-medium max-w-[90px] truncate">
+                              {node.data.label || node.id}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-[200px] flex flex-col items-center justify-center bg-slate-50 rounded-lg border border-dashed">
+                    <p className="text-muted-foreground text-sm">아직 연결된 지식 그래프가 충분하지 않습니다.</p>
+                    <p className="text-xs text-gray-400 mt-1">결정을 기록하면 AI가 관계를 학습합니다.</p>
+                  </div>
+                )}
+                {memoryGraph && memoryGraph.edges.length > 0 && (
+                  <div className="mt-4 p-4 bg-muted/30 rounded-lg text-xs text-muted-foreground">
+                    <p className="font-medium mb-2">엣지 목록 (클릭 시 해당 기록으로 이동)</p>
+                    <div className="space-y-1">
+                      {memoryGraph.edges.slice(0, 8).map((edge, idx) => (
+                        <button
+                          key={`${edge.source}-${edge.target}-${idx}`}
+                          onClick={() => {
+                            const pickBaseId = (value: string) => value.split(":").slice(1).join(":") || value;
+                            const baseId = pickBaseId(edge.target) || pickBaseId(edge.source);
+                            setMemoryHighlightId(baseId);
+                            setSelectedEdgeKey(`${edge.source}-${edge.target}-${idx}`);
+                          }}
+                          className={`text-left hover:underline ${selectedEdgeKey === `${edge.source}-${edge.target}-${idx}` ? "text-primary" : ""}`}
+                          aria-label={`엣지 이동 ${edge.type}`}
+                        >
+                          {edge.source} → {edge.target}
+                          <span className="ml-2 inline-flex items-center rounded-full bg-white/80 px-2 py-0.5 text-[10px]">
+                            {edge.type}
+                          </span>
+                        </button>
+                      ))}
+                      {memoryGraph.edges.length > 8 && (
+                        <div>... {memoryGraph.edges.length - 8}개 더 있음</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {selectedGraphNode && (
+                  <div className="mt-4 p-4 bg-white rounded-lg border text-xs">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-medium">선택 노드 상세</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const baseId = selectedGraphNode.id.split(":").slice(1).join(":") || selectedGraphNode.id;
+                            setMemoryHighlightId(baseId);
+                            setActiveTab("memory");
+                          }}
+                          className="text-[11px] px-2 py-1 rounded-full border hover:bg-muted"
+                        >
+                          MEMORY로 이동
+                        </button>
+                        <button
+                          onClick={() => setSelectedGraphNode(null)}
+                          className="text-[11px] px-2 py-1 rounded-full border hover:bg-muted"
+                        >
+                          닫기
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-muted-foreground">Type: {selectedGraphNode.type}</div>
+                    {selectedGraphNode.type === "CompanyState" && (
+                      <div className="mt-2 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">runway_months</span>
+                          <span className="text-muted-foreground">{String(selectedGraphNode.data?.runway_months ?? "-")}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">risk_score</span>
+                          <span className="text-muted-foreground">{String(selectedGraphNode.data?.risk_score ?? "-")}</span>
+                        </div>
+                      </div>
+                    )}
+                    {selectedGraphNode.type === "Outcome" && (
+                      <div className="mt-2 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">status</span>
+                          <span className="text-muted-foreground">{String(selectedGraphNode.data?.status ?? "-")}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">memo</span>
+                          <span className="text-muted-foreground break-all">{String(selectedGraphNode.data?.memo ?? "-")}</span>
+                        </div>
+                      </div>
+                    )}
+                    {selectedGraphNode.type === "AI_Judgement" && (
+                      <div className="mt-2 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">title</span>
+                          <span className="text-muted-foreground break-all">{String(selectedGraphNode.data?.title ?? "-")}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">summary</span>
+                          <span className="text-muted-foreground break-all">{String(selectedGraphNode.data?.summary ?? "-")}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">priority_score</span>
+                          <span className="text-muted-foreground">{String(selectedGraphNode.data?.priority_score ?? "-")}</span>
+                        </div>
+                      </div>
+                    )}
+                    {selectedGraphNode.type === "Human_Decision" && (
+                      <div className="mt-2 space-y-2">
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">status</span>
+                          <span className="text-muted-foreground">{String(selectedGraphNode.data?.status ?? "-")}</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="font-medium">rejection_reason</span>
+                          <span className="text-muted-foreground break-all">{String(selectedGraphNode.data?.rejection_reason ?? "-")}</span>
+                        </div>
+                      </div>
+                    )}
+                    {!["CompanyState", "Outcome"].includes(selectedGraphNode.type) && (
+                      <div className="mt-2 space-y-1">
+                        {Object.entries(selectedGraphNode.data || {}).slice(0, 8).map(([key, value]) => (
+                          <div key={key} className="flex items-start gap-2">
+                            <span className="font-medium">{key}</span>
+                            <span className="text-muted-foreground break-all">{String(value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {decisionHistory.length === 0 ? (
+                <div className="mt-4 p-4 bg-muted/40 rounded-lg text-sm">
+                  아직 기록된 결정이 없습니다. 브리핑 카드의 결정을 수용/거부하면 히스토리가 생성됩니다.
+                </div>
+              ) : filteredMemoryWithOutcome.length === 0 ? (
+                <div className="mt-4 p-4 bg-muted/40 rounded-lg text-sm">
+                  필터 조건에 맞는 기록이 없습니다.
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {filteredMemoryWithOutcome.map((record) => (
+                    <div
+                      key={record.id}
+                      id={`memory-${record.id}`}
+                      className={`p-4 rounded-lg border bg-muted/20 flex items-start justify-between ${memoryHighlightId === record.id ? "ring-2 ring-primary/40" : ""} ${bestSimilarId === record.id ? "ring-2 ring-emerald-400" : ""}`}
+                    >
+                      <div className="flex-1">
+                        <p className="text-sm font-semibold">{record.title}</p>
+                        <p className="text-xs text-muted-foreground mt-1">{record.summary}</p>
+                        {record.reasons.length > 0 && (
+                          <ul className="mt-2 text-xs text-muted-foreground space-y-1">
+                            {record.reasons.map((reason) => (
+                              <li key={reason}>- {reason}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {record.rejectionReason && (
+                          <div className="mt-2 text-xs text-red-600">
+                            거부 사유: {record.rejectionReason}
+                          </div>
+                        )}
+                        {record.outcomeMemo && (
+                          <div
+                            className="mt-2 text-xs text-muted-foreground"
+                            title={record.outcomeMemo}
+                          >
+                            결과 메모: {record.outcomeMemo.length > 60 ? `${record.outcomeMemo.slice(0, 60)}...` : record.outcomeMemo}
+                          </div>
+                        )}
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          {new Date(record.createdAt).toLocaleString()}
+                        </p>
+                        <div className="mt-3 text-[11px] text-muted-foreground">
+                          CompanyState → AI_Judgement → Human_Decision → Outcome({record.outcomeStatus})
+                        </div>
+                        {memoryFilterKey && (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            Graph Edge: {decisionContext.actionKey}
+                          </div>
+                        )}
+                        {memoryFilterKey && (
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            유사도: {getSimilarityReason(record)} · 점수 {getSimilarityScore(record)}
+                          </div>
+                        )}
+                        <button
+                          onClick={() => {
+                            setActiveTab("home");
+                            setIsDetailOpen(false);
+                          }}
+                          className="mt-3 text-xs px-2 py-1 rounded-full border hover:bg-muted"
+                        >
+                          브리핑으로 돌아가기
+                        </button>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <span className={`text-xs font-medium px-2 py-1 rounded-full ${record.status === "accepted" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                          {record.status === "accepted" ? "수용" : "거부"}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setOutcomeTarget(record);
+                            setOutcomeStatus(record.outcomeStatus === "pending" ? "neutral" : record.outcomeStatus);
+                            setOutcomeMemo(record.outcomeMemo || "");
+                            setShowOutcomeModal(true);
+                          }}
+                          className="text-xs px-2 py-1 rounded-full border hover:bg-muted"
+                        >
+                          결과 기록
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* SETTINGS VIEW (My Page) */}
           {activeTab === "settings" && (
             <div className="max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2276,6 +4320,113 @@ export default function App() {
                   <span className="inline-block mt-2 px-3 py-1 bg-gray-100 rounded text-xs text-gray-600 font-mono">
                     Base: {user.type.toUpperCase()} Edition
                   </span>
+                </div>
+              </div>
+
+              {/* 1.5 System Status */}
+              <div className="bg-white p-6 rounded-xl border shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-bold">🛰️ System Status</h3>
+                  <button
+                    onClick={fetchApiHealth}
+                    disabled={apiHealthLoading}
+                    className="text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-60"
+                  >
+                    {apiHealthLoading ? "확인 중..." : "새로고침"}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <span
+                    className={`w-2 h-2 rounded-full ${apiHealth?.status === "ok"
+                      ? "bg-emerald-500"
+                      : apiHealthError
+                        ? "bg-red-500"
+                        : "bg-gray-300"
+                      }`}
+                  />
+                  <span>
+                    API 상태: {apiHealth?.status === "ok" ? "정상" : apiHealthError ? "오류" : "확인 중"}
+                  </span>
+                  {apiHealthCheckedAt && (
+                    <span className="text-xs text-muted-foreground">마지막 확인 {apiHealthCheckedAt}</span>
+                  )}
+                </div>
+                {apiHealthError && (
+                  <p className="text-xs text-red-600 mt-2">서버 연결에 실패했습니다.</p>
+                )}
+              </div>
+
+              {/* 1.6 Company Info */}
+              <div className="bg-white p-6 rounded-xl border shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold">회사 정보 관리</h3>
+                  <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-1 rounded">온보딩/수정</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">대표자 이름</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border rounded-lg"
+                      value={profileDraft.name}
+                      onChange={(e) => setProfileDraft((prev) => ({ ...prev, name: e.target.value }))}
+                      placeholder="예: 홍길동"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">회사명</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border rounded-lg"
+                      value={profileDraft.company}
+                      onChange={(e) => setProfileDraft((prev) => ({ ...prev, company: e.target.value }))}
+                      placeholder="예: (주)회사명"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">사업자번호</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border rounded-lg"
+                      value={profileDraft.bizNum}
+                      onChange={(e) => setProfileDraft((prev) => ({ ...prev, bizNum: e.target.value }))}
+                      placeholder="000-00-00000"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">업종 타입</label>
+                    <select
+                      className="w-full p-2 border rounded-lg bg-white"
+                      value={profileDraft.type}
+                      onChange={(e) => setProfileDraft((prev) => ({ ...prev, type: e.target.value }))}
+                    >
+                      <option value="general">General</option>
+                      <option value="startup">Startup</option>
+                      <option value="hospital">Hospital</option>
+                      <option value="commerce">Commerce</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">목표 매출</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border rounded-lg"
+                      value={profileDraft.targetRevenue}
+                      onChange={(e) => setProfileDraft((prev) => ({ ...prev, targetRevenue: e.target.value }))}
+                      placeholder="예: 500000000"
+                    />
+                  </div>
+                </div>
+                <div className="mt-4 flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="text-xs text-gray-500">* 마이페이지에서 회사 정보를 수정/저장할 수 있습니다.</span>
+                  <button
+                    onClick={handleProfileSave}
+                    disabled={isSavingProfile}
+                    className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-2"
+                  >
+                    {isSavingProfile && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isSavingProfile ? "저장 중..." : "회사 정보 저장"}
+                  </button>
                 </div>
               </div>
 
@@ -2314,11 +4465,144 @@ export default function App() {
                   <span className="text-xs text-gray-500">* 입력하신 정보는 AI 상담 및 분석 시 컨텍스트로 활용되어 더 정확한 답변을 제공합니다.</span>
                   <button
                     onClick={() => {
-                      alert('RFI 정보가 성공적으로 저장되었습니다.\nAI 분석에 즉시 반영됩니다.');
+                      setIsSavingRFI(true);
+                      setTimeout(() => {
+                        showToast('RFI 정보가 성공적으로 저장되었습니다.', 'success');
+                        setIsSavingRFI(false);
+                      }, 1000);
                     }}
-                    className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors shadow-sm"
+                    className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-2"
                   >
-                    저장하기
+                    {isSavingRFI && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isSavingRFI ? '저장 중...' : '저장하기'}
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Preset Dataset Loader */}
+              <div className="bg-white p-6 rounded-xl border shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold">프리셋 데이터셋</h3>
+                    <p className="text-sm text-muted-foreground">업종별 예시 데이터를 바로 적용하세요.</p>
+                  </div>
+                  {activeDatasetName && (
+                    <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">적용중: {activeDatasetName}</span>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  {PRESET_GROUPS.map((group) => (
+                    <div key={group.id} className="rounded-xl border bg-muted/30 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <div className="text-sm font-semibold">{group.label}</div>
+                          <div className="text-xs text-muted-foreground">{group.desc}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {group.items.map((preset) => {
+                          const isActive = activeDatasetName === preset.name;
+                          return (
+                            <div key={preset.id} className={`p-3 rounded-lg border text-left transition-colors ${isActive ? "border-primary ring-2 ring-primary/20 bg-white" : "border-muted bg-white hover:bg-muted/40"}`}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="text-sm font-semibold">{preset.persona}</div>
+                                  <div className="text-xs text-muted-foreground">{preset.summary}</div>
+                                </div>
+                                <div className="flex flex-col items-end gap-1">
+                                  {preset.badge && <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full">{preset.badge}</span>}
+                                  {isActive && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">사용중</span>}
+                                </div>
+                              </div>
+                              <div className="mt-2 text-[11px] text-muted-foreground flex flex-wrap gap-2">
+                                <span>현금 ₩{preset.meta.cash.toLocaleString()}</span>
+                                <span>매출 ₩{preset.meta.monthlyRevenue.toLocaleString()}/월</span>
+                                <span>지출 ₩{preset.meta.monthlyExpense.toLocaleString()}/월</span>
+                              </div>
+                              <div className="mt-3 flex gap-2">
+                                <button type="button" onClick={() => setPresetPreview(preset)} className="flex-1 px-3 py-1.5 text-[11px] rounded-lg border hover:bg-muted transition-colors">미리보기</button>
+                                <button type="button" onClick={() => applyPresetDataset(preset)} disabled={isActive} className={`flex-1 px-3 py-1.5 text-[11px] rounded-lg transition-colors ${isActive ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}>{isActive ? "사용중" : "바로 적용"}</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Warning Preferences */}
+              <div className="bg-white p-6 rounded-xl border shadow-sm">
+                <h3 className="text-lg font-bold mb-4">경고 톤 & 임계값</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">경고 톤</label>
+                    <select
+                      className="w-full p-2 border rounded-lg bg-white"
+                      value={tonePreference}
+                      onChange={(e) => setTonePreference(e.target.value as "direct" | "neutral" | "soft")}
+                    >
+                      <option value="direct">직설</option>
+                      <option value="neutral">중립</option>
+                      <option value="soft">완곡</option>
+                    </select>
+                    <p className="text-xs text-muted-foreground">브리핑/질문 답변의 경고 톤에 반영됩니다.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">경고 임계값</label>
+                    <input
+                      type="range"
+                      min="1"
+                      max="5"
+                      value={warningThreshold}
+                      onChange={(e) => setWarningThreshold(Number(e.target.value))}
+                      className="w-full"
+                    />
+                    <div className="text-xs text-muted-foreground">현재: {warningThreshold}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">요약 길이</label>
+                    <select
+                      className="w-full p-2 border rounded-lg bg-white"
+                      value={summaryLength}
+                      onChange={(e) => setSummaryLength(e.target.value as "short" | "normal" | "detailed")}
+                    >
+                      <option value="short">짧게</option>
+                      <option value="normal">보통</option>
+                      <option value="detailed">자세히</option>
+                    </select>
+                    <p className="text-xs text-muted-foreground">질문 패널 답변 길이에 반영됩니다.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* AI CFO Calibration */}
+              <div className="bg-white p-6 rounded-xl border shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-bold">AI CFO 초기 설정</h3>
+                  <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded">리셋 가능</span>
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  결정 히스토리가 비어 있을 때 자동으로 표시됩니다. 필요하면 언제든 다시 설정할 수 있어요.
+                </p>
+                <div className="flex flex-col md:flex-row gap-2">
+                  <button
+                    onClick={() => {
+                      setCalibrationStep(1);
+                      setShowCalibrationModal(true);
+                    }}
+                    className="flex-1 py-2 border rounded-lg text-sm font-medium hover:bg-muted"
+                  >
+                    다시 설정
+                  </button>
+                  <button
+                    onClick={saveCfoSettings}
+                    disabled={isSavingCfoSettings}
+                    className="flex-1 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    {isSavingCfoSettings && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isSavingCfoSettings ? "저장 중..." : "설정 저장"}
                   </button>
                 </div>
               </div>
@@ -2360,19 +4644,24 @@ export default function App() {
                 <button
                   onClick={async () => {
                     if (authUser?.email) {
+                      setIsSavingSettings(true);
                       try {
                         const result = await api.updateMCPs(authUser.email, user.activeMCPs || []);
                         if (result.success) {
-                          alert('MCP 설정이 저장되었습니다.');
+                          showToast('MCP 설정이 저장되었습니다.', 'success');
                         }
                       } catch (e) {
-                        alert('저장 중 오류가 발생했습니다.');
+                        showToast('저장 중 오류가 발생했습니다.', 'error');
+                      } finally {
+                        setIsSavingSettings(false);
                       }
                     }
                   }}
-                  className="mt-4 w-full py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary/90 transition-colors"
+                  disabled={isSavingSettings}
+                  className="mt-4 w-full py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
                 >
-                  MCP 설정 저장
+                  {isSavingSettings && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {isSavingSettings ? '저장 중...' : 'MCP 설정 저장'}
                 </button>
               </div>
 
@@ -2401,26 +4690,26 @@ export default function App() {
                       const confirmPw = (document.getElementById('confirmPassword') as HTMLInputElement)?.value;
 
                       if (!currentPw || !newPw || !confirmPw) {
-                        alert('모든 필드를 입력해주세요.');
+                        showToast('모든 필드를 입력해주세요.', 'error');
                         return;
                       }
                       if (newPw !== confirmPw) {
-                        alert('새 비밀번호가 일치하지 않습니다.');
+                        showToast('새 비밀번호가 일치하지 않습니다.', 'error');
                         return;
                       }
                       if (authUser?.email) {
                         try {
                           const result = await api.changePassword(authUser.email, currentPw, newPw);
                           if (result.success) {
-                            alert('비밀번호가 변경되었습니다.');
+                            showToast('비밀번호가 변경되었습니다.', 'success');
                             (document.getElementById('currentPassword') as HTMLInputElement).value = '';
                             (document.getElementById('newPassword') as HTMLInputElement).value = '';
                             (document.getElementById('confirmPassword') as HTMLInputElement).value = '';
                           } else {
-                            alert(result.message);
+                            showToast(result.message, 'error');
                           }
                         } catch (e) {
-                          alert('비밀번호 변경 중 오류가 발생했습니다.');
+                          showToast('비밀번호 변경 중 오류가 발생했습니다.', 'error');
                         }
                       }
                     }}
@@ -2456,9 +4745,9 @@ export default function App() {
                 <div className="space-y-2">
                   <button
                     onClick={() => {
-                      if (!dashboardData) return;
-                      const kpiCsv = dashboardData.kpi?.map((k: any) => `${k.label},${k.value},${k.trend},${k.status}`).join('\n') || '';
-                      const chartCsv = dashboardData.chart?.map((c: any) => `${c.name},${c.income},${c.expense}`).join('\n') || '';
+                      if (!effectiveDashboardData) return;
+                      const kpiCsv = effectiveDashboardData.kpi?.map((k: any) => `${k.label},${k.value},${k.trend},${k.status}`).join('\n') || '';
+                      const chartCsv = effectiveDashboardData.chart?.map((c: any) => `${c.name},${c.income},${c.expense}`).join('\n') || '';
                       const csv = `KPI 데이터\n라벨,값,트렌드,상태\n${kpiCsv}\n\n차트 데이터\n기간,수입,지출\n${chartCsv}`;
                       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                       const url = URL.createObjectURL(blob);
@@ -2549,13 +4838,726 @@ export default function App() {
                 </div>
                 <div id="ntsResult"></div>
                 <div className="mt-4 text-xs text-gray-400">
-                  <p>지원: 연말정산, 부가세, 원천징수, 요양급여심사, 오픈마켓정산</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <span>지원 문서 유형</span>
+                    <button
+                      onClick={fetchNtsDocTypes}
+                      disabled={ntsDocTypesLoading}
+                      className="text-[10px] px-2 py-1 rounded border hover:bg-muted disabled:opacity-60"
+                    >
+                      {ntsDocTypesLoading ? "불러오는 중..." : "새로고침"}
+                    </button>
+                  </div>
+                  {ntsDocTypes.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {ntsDocTypes.map((doc) => (
+                        <span
+                          key={doc.code}
+                          className={`text-[10px] px-2 py-1 rounded border ${doc.supported ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}
+                        >
+                          {doc.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>지원 목록을 불러오지 못했습니다.</p>
+                  )}
                 </div>
               </div>
             </div>
           )}
         </div>
       </main>
-    </div>
+
+      {
+        showRejectionModal && (
+          <div className="fixed inset-0 z-50">
+            <button
+              onClick={() => setShowRejectionModal(false)}
+              className="absolute inset-0 bg-black/30"
+              aria-label="거부 사유 입력 닫기"
+            />
+            <div className="absolute inset-x-4 top-24 mx-auto max-w-lg bg-white rounded-xl shadow-2xl border">
+              <div className="p-4 border-b flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">거부 사유 입력</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {tonePreference === "direct"
+                      ? "명확한 이유가 필요합니다."
+                      : tonePreference === "soft"
+                        ? "간단히 이유를 남겨주셔도 괜찮습니다."
+                        : "AI가 기억할 이유를 남겨 주세요."}
+                  </p>
+                </div>
+                <button onClick={() => setShowRejectionModal(false)} className="p-2 hover:bg-muted rounded-lg">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-4 space-y-3">
+                <textarea
+                  className="w-full min-h-[120px] resize-none rounded-lg border px-3 py-2 text-sm focus:ring-2 ring-primary/20 outline-none"
+                  placeholder="예: 현재 채용을 진행해야 하는 사업상 이유가 있어요."
+                  value={rejectionInput}
+                  onChange={(e) => setRejectionInput(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  {(tonePreference === "direct"
+                    ? [
+                      "채용 필요",
+                      "매출 확장이 우선",
+                      "투자 확정",
+                      "운영 인력 부족",
+                    ]
+                    : tonePreference === "soft"
+                      ? [
+                        "채용이 필요한 상황이에요",
+                        "매출 확장이 더 중요해 보여요",
+                        "투자 유치가 확정되었습니다",
+                        "운영 인력이 부족한 편입니다",
+                      ]
+                      : [
+                        "지금 매출 성장 구간이라 채용이 필요함",
+                        "리스크보다 매출 확대가 우선임",
+                        "외부 투자 유치가 확정됨",
+                        "운영 인력이 부족함",
+                      ]
+                  ).map((reason) => (
+                    <button
+                      key={reason}
+                      onClick={() => setRejectionInput(reason)}
+                      className="px-3 py-1.5 rounded-full text-xs border hover:bg-muted"
+                    >
+                      {reason}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="p-4 border-t flex justify-end gap-2">
+                <button
+                  onClick={() => setShowRejectionModal(false)}
+                  className="px-4 py-2 rounded-lg border text-sm hover:bg-muted"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={() => {
+                    recordDecision("rejected", rejectionInput.trim() || "사유 미입력");
+                    setShowRejectionModal(false);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+                >
+                  거부 사유 저장
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        showOutcomeModal && outcomeTarget && (
+          <div className="fixed inset-0 z-50">
+            <button
+              onClick={() => setShowOutcomeModal(false)}
+              className="absolute inset-0 bg-black/30"
+              aria-label="결과 입력 닫기"
+            />
+            <div className="absolute inset-x-4 top-24 mx-auto max-w-lg bg-white rounded-xl shadow-2xl border">
+              <div className="p-4 border-b flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">결과 기록</h2>
+                  <p className="text-xs text-muted-foreground">{outcomeTarget.title}</p>
+                </div>
+                <button onClick={() => setShowOutcomeModal(false)} className="p-2 hover:bg-muted rounded-lg">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="text-xs text-muted-foreground">이번 결정의 실제 결과는 어땠나요?</div>
+                <div className="flex gap-2">
+                  {[
+                    { key: "positive", label: "긍정적" },
+                    { key: "neutral", label: "중립" },
+                    { key: "negative", label: "부정적" },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setOutcomeStatus(item.key as "positive" | "neutral" | "negative")}
+                      className={`flex-1 py-2 rounded-lg text-sm border ${outcomeStatus === item.key ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted"}`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-4">
+                  <div className="text-xs text-muted-foreground mb-1">상세 메모 (선택사항)</div>
+                  <textarea
+                    className="w-full border rounded-lg p-2 text-sm h-20 resize-none focus:ring-2 focus:ring-primary/20 outline-none"
+                    placeholder="결과에 대한 간단한 코멘트를 남겨주세요..."
+                    value={outcomeMemo}
+                    onChange={(e) => setOutcomeMemo(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="p-4 border-t flex justify-end gap-2">
+                <button
+                  onClick={() => setShowOutcomeModal(false)}
+                  className="px-4 py-2 rounded-lg border text-sm hover:bg-muted"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={() => {
+                    const updated = { ...outcomeTarget, outcomeStatus, outcomeMemo };
+                    setDecisionHistory((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+                    if (user?.bizNum) {
+                      api.updateMemoryOutcome(user.bizNum, updated.id, outcomeStatus, outcomeMemo).catch((err) => {
+                        console.error("Failed to update outcome:", err);
+                      });
+                    }
+                    setShowOutcomeModal(false);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+                >
+                  결과 저장
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        isQuestionOpen && (
+          <div className="fixed inset-0 z-50">
+            <button
+              onClick={() => setIsQuestionOpen(false)}
+              className="absolute inset-0 bg-black/30"
+              aria-label="질문 패널 닫기"
+            />
+            <div className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl flex flex-col">
+              <div className="p-4 border-b flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold">질문 패널</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {tonePreference === "direct"
+                      ? "핵심만 빠르게 묻고 답합니다."
+                      : tonePreference === "soft"
+                        ? "필요한 만큼만 조심스럽게 묻겠습니다."
+                        : "결정에 필요한 질문만 빠르게."}
+                  </p>
+                </div>
+                <button onClick={() => setIsQuestionOpen(false)} className="p-2 hover:bg-muted rounded-lg">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 border-b space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {(tonePreference === "direct"
+                    ? [
+                      "이번 달 핵심 리스크만",
+                      "부가세 영향만 말해줘",
+                      "증빙 누락 위치만",
+                    ]
+                    : tonePreference === "soft"
+                      ? [
+                        "이번 달 위험한 부분이 있을까요?",
+                        "부가세 영향이 있을지 궁금해요",
+                        "증빙 누락이 있을까요?",
+                      ]
+                      : [
+                        "이번 달 가장 위험한 건?",
+                        "부가세 영향은?",
+                        "증빙 누락 어디?",
+                      ]
+                  ).map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => handleSend(q)}
+                      className="px-3 py-1.5 rounded-full text-xs bg-muted hover:bg-muted/70"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "자세히 보기",
+                    "근거 펼치기",
+                    "시뮬레이션 요청",
+                  ].map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => handleSend(q)}
+                      className="px-3 py-1.5 rounded-full text-xs border hover:bg-muted"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  현재 판단: {decisionContext.summary} (우선순위 {decisionContext.priorityScore}/100)
+                </div>
+                <button
+                  onClick={openRelatedScreen}
+                  className="w-full px-3 py-2 rounded-lg border text-xs font-medium hover:bg-muted"
+                >
+                  관련 화면 열기
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                  >
+                    <div
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 ${m.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                        }`}
+                    >
+                      {/* Markdown Rendering Support */}
+                      <div className={`text-sm leading-relaxed ${m.role === 'user' ? 'text-white' : 'text-gray-900 markdown-body'}`}>
+                        {m.role === 'user' ? (
+                          <p className="whitespace-pre-wrap">{m.content}</p>
+                        ) : (
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                            ul: ({ node, ...props }) => <ul className="list-disc pl-4 my-2" {...props} />,
+                            ol: ({ node, ...props }) => <ol className="list-decimal pl-4 my-2" {...props} />,
+                            li: ({ node, ...props }) => <li className="mb-1" {...props} />,
+                            p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                            a: ({ node, ...props }) => <a className="text-blue-600 underline hover:text-blue-800" target="_blank" rel="noopener noreferrer" {...props} />,
+                            strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
+                            table: ({ node, ...props }) => <div className="overflow-x-auto my-2"><table className="min-w-full divide-y divide-gray-200 border" {...props} /></div>,
+                            th: ({ node, ...props }) => <th className="px-3 py-2 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b" {...props} />,
+                            td: ({ node, ...props }) => <td className="px-3 py-2 whitespace-nowrap text-sm border-b" {...props} />,
+                          }}>
+                            {m.content}
+                          </ReactMarkdown>
+                        )}
+                      </div>
+                      {m.role === "assistant" && typeof m.latencyMs === "number" && (
+                        <div className="mt-2 text-[10px] text-muted-foreground">
+                          응답 시간: {(m.latencyMs / 1000).toFixed(1)}s
+                        </div>
+                      )}
+                      {m.context && m.context.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-black/10 text-xs space-y-1">
+                          <p className="font-semibold opacity-70">참고 자료 (RAG):</p>
+                          {m.context.map((ctx, idx) => (
+                            <div key={idx} className="bg-black/5 p-2 rounded">
+                              <span className="font-bold">[{ctx.source}] </span>
+                              {ctx.content.slice(0, 80)}...
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {isLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm">
+                      <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium text-blue-800">{getLoadingMessage()}</span>
+                        {loadingElapsed >= 5 && (
+                          <span className="text-xs text-blue-500">{loadingElapsed}초 경과</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 border-t bg-background">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSend();
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    className="flex-1 bg-muted/50 border-0 focus:ring-2 ring-primary/20 rounded-lg px-4 py-3 outline-none transition-all"
+                    placeholder="예: 법인세율이 어떻게 되나요?"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isLoading || !input.trim()}
+                    className="bg-primary text-primary-foreground px-4 rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {
+        showCalibrationModal && (
+          <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center animate-in fade-in duration-300 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-8 animate-in zoom-in-95 relative overflow-hidden flex flex-col h-[600px]">
+              <div className="absolute top-0 left-0 w-full h-2 bg-muted">
+                <div
+                  className="h-full bg-primary transition-all duration-500"
+                  style={{ width: `${(calibrationStep / 3) * 100}%` }}
+                />
+              </div>
+
+              <div className="mt-4 mb-8 text-center">
+                <h2 className="text-2xl font-bold mb-2">
+                  {calibrationStep === 1 ? "AI CFO 성향 설정" : calibrationStep === 2 ? "가치관 파악 시뮬레이션" : "핵심 목표 설정"}
+                </h2>
+                <p className="text-muted-foreground">
+                  {calibrationStep === 1
+                    ? "대표님과 가장 잘 맞는 소통 방식을 선택해주세요."
+                    : calibrationStep === 2
+                      ? "다음 상황에서 어떤 결정을 내리시겠습니까?"
+                      : "우리 회사가 현재 가장 중요하게 생각하는 가치는 무엇인가요?"}
+                </p>
+              </div>
+
+              <div className="min-h-[300px] flex flex-col justify-center">
+                {calibrationStep === 1 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full">
+                    <div className="space-y-4">
+                      {[
+                        { key: "direct", label: "직설적/명확함", desc: "결론부터 빠르게, 리스크는 강하게 경고", icon: "⚡️" },
+                        { key: "neutral", label: "객관적/분석", desc: "데이터 중심, 감정 없이 팩트만 전달", icon: "📊" },
+                        { key: "soft", label: "완곡/제안", desc: "부드러운 어조, 대안 중심으로 제안", icon: "🤝" }
+                      ].map((opt) => (
+                        <button
+                          key={opt.key}
+                          onClick={() => setTonePreference(opt.key as any)}
+                          className={`w-full p-4 rounded-xl border-2 text-left transition-all ${tonePreference === opt.key ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "border-muted hover:border-primary/50"}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">{opt.icon}</span>
+                            <div>
+                              <div className="font-bold text-lg">{opt.label}</div>
+                              <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setCalibrationStep(2)}
+                        className="w-full py-3 mt-4 bg-primary text-primary-foreground font-bold rounded-xl hover:bg-primary/90 transition-all"
+                      >
+                        선택 완료 및 다음
+                      </button>
+                    </div>
+
+                    <div className="bg-gray-100 rounded-xl p-4 flex flex-col border shadow-inner">
+                      <div className="text-xs text-center text-muted-foreground mb-4">💬 실시간 AI 답변 미리보기</div>
+                      <div className="flex-1 space-y-4 overflow-y-auto">
+                        <div className="flex justify-end">
+                          <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-none px-4 py-2 text-sm max-w-[80%]">
+                            지금 Burn Rate가 너무 높은 것 같아요. 어떻게 할까요?
+                          </div>
+                        </div>
+                        <div className="flex justify-start">
+                          <div className="bg-white border rounded-2xl rounded-tl-none px-4 py-3 text-sm shadow-sm max-w-[90%]">
+                            {tonePreference === "direct" && (
+                              <div>
+                                <p className="font-bold text-red-600 mb-1">⚠️ 경고: 즉시 지출 축소가 필요합니다.</p>
+                                <p>현재 Burn Rate로는  runway가 3개월 미만입니다. 마케팅 비용을 50% 삭감하고 고정비를 재조정하십시오.</p>
+                              </div>
+                            )}
+                            {tonePreference === "neutral" && (
+                              <div>
+                                <p className="font-semibold mb-1">📊 현재 Burn Rate 분석 결과</p>
+                                <p>전월 대비 15% 상승했습니다. 이 추세라면 4개월 후 자금이 소진됩니다. 예산 재배정이 권장됩니다.</p>
+                              </div>
+                            )}
+                            {tonePreference === "soft" && (
+                              <div>
+                                <p className="font-semibold mb-1 text-emerald-700">💡 예산 조정이 필요해 보입니다.</p>
+                                <p>현재 지출 속도가 조금 빠른 편이에요. 마케팅 예산을 조금만 줄여서 Runway를 확보하는 건 어떨까요?</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {calibrationStep === 2 && (
+                  <div className="space-y-6">
+                    <div className="bg-muted/30 p-6 rounded-xl border">
+                      <h4 className="font-semibold mb-2 flex items-center gap-2">
+                        <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs">Scenario #1</span>
+                        투자 유치 직후의 자금 운용
+                      </h4>
+                      <p className="text-sm leading-relaxed">
+                        최근 5억원의 시드 투자를 유치했습니다. <br />
+                        하지만 현재 개발팀 인력이 부족하여 제품 출시가 지연되고 있습니다. <br />
+                        동시에 마케팅을 시작하지 않으면 초기 유저 확보가 어려울 것으로 보입니다.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <button
+                        onClick={() => {
+                          const seedDecision: DecisionRecord = {
+                            id: `seed-growth-${Date.now()}`,
+                            title: "초기 자금 운용 전략 (Calibration)",
+                            summary: "공격적인 인재 채용 및 마케팅 집행",
+                            reasons: ["시장 선점이 최우선 과제", "투자금 기반의 빠른 스케일업 필요"],
+                            impact: "Burn Rate 급증하지만 점유율 확대 기대",
+                            priorityScore: 90,
+                            riskScore: 70,
+                            runwayMonths: 12,
+                            outcomeStatus: "positive",
+                            outcomeMemo: "초기 성장을 위해 리스크를 감수하는 성향 확인됨",
+                            status: "accepted",
+                            createdAt: new Date().toISOString(),
+                            riskLevel: "warning",
+                            drivers: [],
+                            relatedTab: "financial",
+                            actionKey: "seed-growth"
+                          };
+                          setDecisionHistory([seedDecision]);
+                          api.saveDecisionMemory(mapDecisionToMemory(seedDecision, user?.bizNum || "temp")).catch(console.error);
+                          setCalibrationStep(3);
+                        }}
+                        className="p-5 border rounded-xl hover:bg-muted text-left"
+                      >
+                        <div className="font-bold mb-1">공격적 투자 (Growth)</div>
+                        <div className="text-sm text-muted-foreground">Runway가 줄더라도 인재 채용과 마케팅에 자금을 집중하여 시장을 선점합니다.</div>
+                      </button>
+                      <button
+                        onClick={() => {
+                          const seedDecision: DecisionRecord = {
+                            id: `seed-stable-${Date.now()}`,
+                            title: "초기 자금 운용 전략 (Calibration)",
+                            summary: "최소 인력 유지 및 제품 내실화",
+                            reasons: ["재무 안정성 확보가 최우선", "PMF 검증 후 마케팅 집행"],
+                            impact: "성장 속도는 느리지만 Runway 24개월 확보",
+                            priorityScore: 60,
+                            riskScore: 30,
+                            runwayMonths: 24,
+                            outcomeStatus: "positive",
+                            outcomeMemo: "재무 안정성을 중시하고 보수적으로 접근하는 성향 확인됨",
+                            status: "accepted",
+                            createdAt: new Date().toISOString(),
+                            riskLevel: "safe",
+                            drivers: [],
+                            relatedTab: "financial",
+                            actionKey: "seed-stable"
+                          };
+                          setDecisionHistory([seedDecision]);
+                          api.saveDecisionMemory(mapDecisionToMemory(seedDecision, user?.bizNum || "temp")).catch(console.error);
+                          setCalibrationStep(3);
+                        }}
+                        className="p-5 border rounded-xl hover:bg-muted text-left"
+                      >
+                        <div className="font-bold mb-1">안정적 운용 (Profit/Stability)</div>
+                        <div className="text-sm text-muted-foreground">최소한의 핵심 인력으로 제품을 고도화하며 현금을 최대한 보존합니다.</div>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {calibrationStep === 3 && (
+                  <div className="space-y-8 max-w-2xl mx-auto w-full">
+                    <div className="space-y-6">
+                      {[
+                        {
+                          key: "priority",
+                          label: "우선순위 (Priority)",
+                          sub: "업무 처리 순서",
+                          vals: ["모든 업무 동일", "핵심 업무 위주", "긴급 건 최우선", "전략적 우선순위", "생존 직결 과제"]
+                        },
+                        {
+                          key: "runway",
+                          label: "런웨이 (Runway)",
+                          sub: "현금 흐름 관리",
+                          vals: ["공격적 투자", "성장 중심", "균형 유지", "보수적 관리", "생존 모드"]
+                        },
+                        {
+                          key: "risk",
+                          label: "리스크 (Risk)",
+                          sub: "법적/세무 위험",
+                          vals: ["리스크 감수", "유연한 대처", "일반적 관리", "엄격한 관리", "Zero Risk"]
+                        }
+                      ].map((item) => (
+                        <div key={item.key} className="bg-muted/20 p-6 rounded-xl border">
+                          <div className="flex justify-between items-end mb-4">
+                            <div>
+                              <div className="font-bold text-lg">{item.label}</div>
+                              <div className="text-xs text-muted-foreground">{item.sub}</div>
+                            </div>
+                            <div className="text-sm font-semibold text-primary">
+                              {item.vals[((similarityWeights as any)[item.key] || 1) - 1]}
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min="1"
+                            max="5"
+                            step="1"
+                            value={(similarityWeights as any)[item.key]}
+                            onChange={(e) => setSimilarityWeights(prev => ({ ...prev, [item.key]: Number(e.target.value) }))}
+                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-primary"
+                          />
+                          <div className="flex justify-between text-[10px] text-muted-foreground mt-2">
+                            <span>Low</span>
+                            <span>High</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => {
+                        setIsCalibrating(true);
+                        setTimeout(() => {
+                          setIsCalibrating(false);
+                          setShowCalibrationModal(false);
+                        }, 2000);
+                      }}
+                      disabled={isCalibrating}
+                      className="w-full py-4 bg-primary text-primary-foreground text-lg font-bold rounded-xl hover:bg-primary/90 shadow-lg transition-all hover:scale-[1.02] flex items-center justify-center gap-2"
+                    >
+                      {isCalibrating ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          AI CFO 최적화 적용 중...
+                        </>
+                      ) : (
+                        "설정 완료 및 AI CFO 시작하기"
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-8 flex justify-center gap-2">
+                {[1, 2, 3].map(step => (
+                  <div key={step} className={`w-2 h-2 rounded-full ${calibrationStep === step ? "bg-primary" : "bg-muted"}`} />
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {
+        showRejectionModal && (
+          <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center animate-in fade-in duration-200">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 animate-in zoom-in-95">
+              <h3 className="font-bold text-lg mb-2">판단 거부 사유 입력</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                거부 사유를 입력해주시면 AI CFO가 학습하여 다음 제안에 반영합니다.
+              </p>
+              <textarea
+                autoFocus
+                className="w-full h-32 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-primary/20 outline-none mb-4 text-sm"
+                placeholder="예: 지금은 채용이 급해서 리스크를 감수하겠습니다."
+                value={rejectionInput}
+                onChange={(e) => setRejectionInput(e.target.value)}
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowRejectionModal(false)}
+                  className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={() => {
+                    recordDecision("rejected", rejectionInput);
+                    setShowRejectionModal(false);
+                  }}
+                  className="px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-700 rounded-lg font-medium"
+                >
+                  거부 확정
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Preset Preview Modal */}
+      {presetPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button className="absolute inset-0 bg-black/40" onClick={() => setPresetPreview(null)} aria-label="프리셋 미리보기 닫기" />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
+            <div className="p-6 border-b flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs text-muted-foreground">{presetPreview.name}</div>
+                <h3 className="text-xl font-bold">{presetPreview.persona}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{presetPreview.summary}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {presetPreview.badge && <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">{presetPreview.badge}</span>}
+                <button onClick={() => setPresetPreview(null)} className="p-2 rounded-full hover:bg-muted"><X className="w-4 h-4" /></button>
+              </div>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-3 rounded-lg border bg-muted/30"><div className="text-xs text-muted-foreground">현금</div><div className="text-lg font-semibold">₩{presetPreview.meta.cash.toLocaleString()}</div></div>
+                <div className="p-3 rounded-lg border bg-muted/30"><div className="text-xs text-muted-foreground">월 매출</div><div className="text-lg font-semibold">₩{presetPreview.meta.monthlyRevenue.toLocaleString()}</div></div>
+                <div className="p-3 rounded-lg border bg-muted/30"><div className="text-xs text-muted-foreground">월 지출</div><div className="text-lg font-semibold">₩{presetPreview.meta.monthlyExpense.toLocaleString()}</div></div>
+                <div className="p-3 rounded-lg border bg-muted/30"><div className="text-xs text-muted-foreground">Runway</div><div className="text-lg font-semibold">{presetPreview.meta.monthlyExpense > 0 ? (presetPreview.meta.cash / presetPreview.meta.monthlyExpense).toFixed(1) : "∞"}개월</div></div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl border">
+                  <h4 className="text-sm font-semibold mb-2">연간 요약</h4>
+                  <div className="text-sm text-muted-foreground space-y-1">
+                    <div>연 매출: ₩{(presetPreview.meta.monthlyRevenue * 12).toLocaleString()}</div>
+                    <div>연 지출: ₩{(presetPreview.meta.monthlyExpense * 12).toLocaleString()}</div>
+                    <div>연 순이익: ₩{((presetPreview.meta.monthlyRevenue - presetPreview.meta.monthlyExpense) * 12).toLocaleString()}</div>
+                  </div>
+                </div>
+                <div className="p-4 rounded-xl border">
+                  <h4 className="text-sm font-semibold mb-2">현재 데이터셋 대비</h4>
+                  {activeDatasetName ? (
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <div>현금: {formatDelta(presetPreview.meta.cash - activeDatasetMetrics.cash, "원")}</div>
+                      <div>월 매출: {formatDelta(presetPreview.meta.monthlyRevenue - activeDatasetMetrics.monthlyRevenue, "원")}</div>
+                      <div>월 지출: {formatDelta(presetPreview.meta.monthlyExpense - activeDatasetMetrics.monthlyExpense, "원")}</div>
+                      <div>Runway: {formatDelta((presetPreview.meta.monthlyExpense > 0 ? presetPreview.meta.cash / presetPreview.meta.monthlyExpense : 0) - (activeDatasetMetrics.monthlyExpense > 0 ? activeDatasetMetrics.cash / activeDatasetMetrics.monthlyExpense : 0), "개월")}</div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">현재 활성 데이터셋이 없습니다.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="p-6 border-t flex items-center justify-end gap-2">
+              <button onClick={() => setPresetPreview(null)} className="px-4 py-2 rounded-lg border text-sm hover:bg-muted">닫기</button>
+              <button onClick={() => { applyPresetDataset(presetPreview); setPresetPreview(null); }} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90">바로 적용</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GLOBAL TOAST */}
+      {
+        toast && (
+          <div className="fixed bottom-6 right-6 z-[100] animate-in slide-in-from-bottom-5 fade-in duration-300">
+            <div className={`px-4 py-3 rounded-xl shadow-2xl border flex items-center gap-3 ${toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+              toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' :
+                'bg-white border-gray-200 text-gray-800'
+              }`}>
+              {toast.type === 'success' && <CheckCircle className="w-5 h-5" />}
+              {toast.type === 'error' && <AlertTriangle className="w-5 h-5" />}
+              {toast.type === 'info' && <Bell className="w-5 h-5" />}
+              <span className="font-medium text-sm">{toast.message}</span>
+            </div>
+          </div>
+        )
+      }
+    </div >
   );
 }
+
+export default App;
