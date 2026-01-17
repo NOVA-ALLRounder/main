@@ -85,8 +85,8 @@ class ARIConfig(BaseSettings):
     
     # Global settings
     project_root: Path = Field(default_factory=lambda: Path(__file__).parent.parent)
-    data_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "data")
-    output_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "output")
+    data_dir: Path = Field(default_factory=lambda: Path(__file__).parent / "data")
+    output_dir: Path = Field(default_factory=lambda: Path(__file__).parent / "output")
     log_level: str = "INFO"
     
     class Config:

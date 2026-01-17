@@ -142,16 +142,19 @@ class LaTeXGenerator:
             hypothesis_title=title  # 문맥 인식 메트릭 선택을 위해 제목 전달
         )
         
-        # 2. 합성 참고문헌 생성 (기존 참고문헌이 없는 경우)
+        # 2. 실제 논문 검색하여 참고문헌 추가 (Semantic Scholar API)
         if related_papers:
             for paper in related_papers:
                 self.bibliography.add_from_dict(paper)
         
         if self.bibliography.count() < 5:
-            self.bibliography.generate_synthetic_references(
+            # 실제 논문 검색 (API 실패시 합성 참고문헌으로 폴백)
+            self.bibliography.search_real_references(
+                hypothesis_title=title,
                 domain=domain,
                 keywords=keywords,
-                num_refs=8
+                num_refs=8,
+                fallback_to_synthetic=True
             )
         
         # 3. 테이블 및 결과 텍스트 생성 (새 API 사용)

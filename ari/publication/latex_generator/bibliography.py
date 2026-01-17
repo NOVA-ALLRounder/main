@@ -312,4 +312,65 @@ class BibliographyManager:
             entries.append(entry)
         
         return entries
+    
+    def search_real_references(
+        self,
+        hypothesis_title: str,
+        domain: str = "",
+        keywords: List[str] = None,
+        num_refs: int = 8,
+        fallback_to_synthetic: bool = True
+    ) -> List[BibEntry]:
+        """
+        실제 논문 검색하여 참고문헌 추가 (Semantic Scholar API 사용)
+        
+        Args:
+            hypothesis_title: 가설/논문 제목
+            domain: 연구 도메인
+            keywords: 관련 키워드
+            num_refs: 필요한 참고문헌 수
+            fallback_to_synthetic: API 실패시 합성 참고문헌으로 대체
+            
+        Returns:
+            추가된 BibEntry 리스트
+        """
+        try:
+            from .paper_search import RealPaperSearcher
+            
+            searcher = RealPaperSearcher()
+            papers = searcher.search_for_hypothesis(
+                hypothesis_title=hypothesis_title,
+                keywords=keywords,
+                domain=domain,
+                num_papers=num_refs
+            )
+            
+            if papers:
+                # 실제 논문을 BibEntry로 변환
+                entries = []
+                for paper in papers:
+                    entry_dict = paper.to_bibtex_dict()
+                    entry = self.add_from_dict(entry_dict)
+                    entries.append(entry)
+                
+                return entries
+            
+        except ImportError as e:
+            import logging
+            logging.warning(f"paper_search 모듈 로드 실패: {e}")
+        except Exception as e:
+            import logging
+            logging.warning(f"실제 논문 검색 실패: {e}")
+        
+        # 폴백: 합성 참고문헌 생성
+        if fallback_to_synthetic:
+            import logging
+            logging.info("실제 논문 검색 실패, 합성 참고문헌으로 대체")
+            return self.generate_synthetic_references(
+                domain=domain,
+                keywords=keywords,
+                num_refs=num_refs
+            )
+        
+        return []
 

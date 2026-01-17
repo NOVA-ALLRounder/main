@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Science Lab | 자율 과학 발견 시스템</title>
+    <meta name="description" content="AI 기반 자율 과학 발견 및 가상 실험 시스템. 가설 검증부터 보고서 생성까지 자동화.">
+    <link rel="stylesheet" href="/static/index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🔬</span>
+                <h1>Science Lab</h1>
+            </div>
+            <div class="header-actions">
+                <button id="history-btn" class="btn-text">
+                    <span class="btn-icon">📜</span> 연구 기록
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Input Section -->
+            <section id="input-section" class="section glass-card">
+                <h2 class="section-title">
+                    <span class="step-badge">1</span>
+                    연구 주제 입력
+                </h2>
+                <div class="input-group">
+                    <label for="domain-input">연구 도메인 (선택)</label>
+                    <input type="text" id="domain-input" placeholder="예: 물리학, 생물학, 컴퓨터과학...">
+                </div>
+                <div class="input-group">
+                    <label for="hypothesis-input">가설 또는 질문</label>
+                    <textarea id="hypothesis-input" rows="4" placeholder="검증하고 싶은 가설이나 확인하고 싶은 질문을 입력하세요...
+
+예시 (가설): '카페인 섭취가 집중력 향상에 영향을 미칠 것이다'
+예시 (질문): '상온 초전도체의 실용화가 가능한가?'"></textarea>
+                </div>
+                <button id="submit-btn" class="btn-primary">
+                    <span class="btn-icon">🚀</span>
+                    연구 시작
+                </button>
+            </section>
+
+            <!-- Loading Section -->
+            <section id="loading-section" class="section glass-card hidden">
+                <div class="loading-content">
+                    <div class="spinner"></div>
+                    <p id="loading-message">분석 중...</p>
+                </div>
+            </section>
+
+            <!-- Classification Result -->
+            <section id="classification-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">2</span>
+                    분류 결과
+                </h2>
+                <div class="result-cards">
+                    <div class="result-card">
+                        <span class="result-label">입력 유형</span>
+                        <span id="intent-type" class="result-value intent-badge"></span>
+                    </div>
+                    <div class="result-card">
+                        <span class="result-label">신뢰도</span>
+                        <span id="confidence-value" class="result-value"></span>
+                    </div>
+                    <div id="novelty-card" class="result-card hidden">
+                        <span class="result-label">독창성</span>
+                        <span id="novelty-value" class="result-value"></span>
+                    </div>
+                    <div id="feasibility-card" class="result-card hidden">
+                        <span class="result-label">실현 가능성</span>
+                        <span id="feasibility-value" class="result-value"></span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Literature Section -->
+            <section id="literature-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">📚</span>
+                    관련 문헌
+                </h2>
+                <div id="literature-list" class="literature-list"></div>
+            </section>
+
+            <!-- Methods Section -->
+            <section id="methods-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">3</span>
+                    실험 방법론 선택
+                </h2>
+                <p class="section-description">AI가 3가지 접근 방식을 제안합니다. 원하는 방법을 선택하세요.</p>
+                <div id="methods-list" class="methods-grid"></div>
+            </section>
+
+            <!-- Experiment Progress -->
+            <section id="experiment-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">4</span>
+                    가상 실험 진행
+                </h2>
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="experiment-status" class="progress-status">실험 준비 중...</p>
+                </div>
+                <div id="code-preview" class="code-preview hidden">
+                    <h4>생성된 코드</h4>
+                    <pre><code id="code-content"></code></pre>
+                </div>
+            </section>
+
+            <!-- Report Section -->
+            <section id="report-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">5</span>
+                    연구 보고서
+                </h2>
+                <div id="report-content" class="report-content markdown-body"></div>
+                <div class="report-actions">
+                    <button id="download-btn" class="btn-secondary">
+                        <span class="btn-icon">📥</span>
+                        보고서 다운로드
+                    </button>
+                    <button id="new-research-btn" class="btn-outline">
+                        <span class="btn-icon">🔄</span>
+                        새 연구 시작
+                    </button>
+                </div>
+            </section>
+
+            <!-- Feasibility Report (for questions) -->
+            <section id="feasibility-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">📊</span>
+                    실현 가능성 분석
+                </h2>
+                <div id="feasibility-content" class="report-content"></div>
+            </section>
+
+            <!-- History Section -->
+            <section id="history-section" class="section glass-card hidden">
+                <h2 class="section-title">
+                    <span class="step-badge">📂</span>
+                    연구 기록 데이터베이스
+                </h2>
+                <div id="history-list" class="history-list">
+                    <!-- Dynamic Content -->
+                </div>
+                <button id="close-history-btn" class="btn-outline" style="margin-top: 20px; width: 100%;">
+                    닫기
+                </button>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Powered by AI Agents | LangGraph Workflow | Virtual Lab</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

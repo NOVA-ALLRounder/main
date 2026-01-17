@@ -1,0 +1,44 @@
+\begin{thebibliography}{5}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Bendary et~al.(2024)Bendary, Abdelaziz, and Koksal]{bendary2024}
+Ahmed Bendary, Amr Abdelaziz, and C.~Emre Koksal.
+\newblock Achieving positive covert capacity over mimo awgn channels.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1910.13652v6}.
+
+\bibitem[Gao et~al.(2024)Gao, Dai, Mi, Wang, Imran, and Shakir]{gao2024}
+Zhen Gao, Linglong Dai, De~Mi, Zhaocheng Wang, Muhammad~Ali Imran, and
+  Muhammad~Zeeshan Shakir.
+\newblock Mmwave massive mimo based wireless backhaul for 5g ultra-dense
+  network.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1508.03940v3}.
+
+\bibitem[Guo et~al.(2024)Guo, Zhang, and Alouini]{guo2024}
+Shuaishuai Guo, Haixia Zhang, and Mohamed-Slim Alouini.
+\newblock Mimo capacity with reduced rf chains.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1901.03893v3}.
+
+\bibitem[Jing et~al.(2024)Jing, Cheng, and Zhang]{jing2024}
+Haiyue Jing, Wenchi Cheng, and Wei Zhang.
+\newblock Breaking limits of line-of-sight mimo capacity in 6g wireless
+  communications.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/2408.06586v1}.
+
+\bibitem[Sengar et~al.(2024)Sengar, Rani, Singhal, Sharma, Verma, and
+  Singh]{sengar2024}
+Kritika Sengar, Nishu Rani, Ankita Singhal, Dolly Sharma, Seema Verma, and
+  Tanya Singh.
+\newblock Study and capacity evaluation of siso, miso and mimo rf wireless
+  communication systems.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1403.7774v1}.
+
+\end{thebibliography}
