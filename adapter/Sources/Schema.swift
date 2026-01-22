@@ -3,7 +3,7 @@ import Foundation
 struct AgentRequest: Decodable {
     let id: String
     let action: String
-    // Payload decoding logic requires manual implementing or AnyDecodable
+    let payload: [String: AnyCodable]?
 }
 
 struct AgentResponse: Encodable {
