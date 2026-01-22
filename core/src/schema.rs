@@ -1,17 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "action", content = "payload", rename_all = "snake_case")]
+#[serde(tag = "action", content = "payload")]
 pub enum AgentAction {
     // Observe
+    #[serde(rename = "ui.snapshot")]
     UiSnapshot { scope: Option<String> },
+    #[serde(rename = "ui.find")]
     UiFind { query: String },
     
     // Act
+    #[serde(rename = "ui.click")]
     UiClick { element_id: String, double_click: bool },
+    #[serde(rename = "keyboard.type")]
     KeyboardType { text: String, submit: bool },
     
     // System
+    #[serde(rename = "system.terminate")]
     Terminate,
 }
 
