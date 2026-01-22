@@ -1,0 +1,10 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Swift
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
