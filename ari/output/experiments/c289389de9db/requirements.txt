@@ -1,0 +1,6 @@
+numpy
+json
+logging
+scipy
+sklearn
+gym

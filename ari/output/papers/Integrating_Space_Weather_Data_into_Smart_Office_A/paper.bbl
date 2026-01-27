@@ -1,0 +1,42 @@
+\begin{thebibliography}{5}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Bennett(2024)]{bennett2024}
+Casey~C. Bennett.
+\newblock Clinical productivity system - a decision support model.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1206.0021v1}.
+
+\bibitem[Hasiwar et~al.(2024)Hasiwar, Gruber, Dragschitz, and
+  Ivkić]{hasiwar2024}
+Dominik Hasiwar, Andreas Gruber, Christian Dragschitz, and Igor Ivkić.
+\newblock Towards a cloud-based smart office solution for shared workplace
+  individualization.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/2403.18883v2}.
+
+\bibitem[Mdhluli and of~Astronomy~for Development(2024)]{mdhluli2024}
+Joyful~E. Mdhluli and IAU~Office of~Astronomy~for Development.
+\newblock Astrotourism for development: An overview of resources from the iau
+  office of astronomy for development.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/2507.15827v1}.
+
+\bibitem[Murray et~al.(2024)Murray, Bingham, Sharpe, and Jackson]{murray2024}
+Sophie~A. Murray, Suzy Bingham, Michael Sharpe, and David~R. Jackson.
+\newblock Flare forecasting at the met office space weather operations centre.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1703.06754v2}.
+
+\bibitem[Sharpe and Murray(2024)]{sharpe2024}
+Michael~A. Sharpe and Sophie~A. Murray.
+\newblock Verification of space weather forecasts issued by the met office
+  space weather operations centre.
+\newblock 2024.
+\newblock URL \url{http://arxiv.org/abs/1804.02985v1}.
+
+\end{thebibliography}
