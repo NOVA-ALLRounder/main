@@ -1,0 +1,102 @@
+{
+    "name": "Daily Usage Report",
+    "nodes": [
+        {
+            "parameters": {
+                "triggerTimes": {
+                    "item": [
+                        {
+                            "mode": "everyDay",
+                            "hour": 23
+                        }
+                    ]
+                }
+            },
+            "type": "n8n-nodes-base.cron",
+            "typeVersion": 1,
+            "position": [
+                0,
+                0
+            ],
+            "name": "Schedule (11 PM)"
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "SELECT json_extract(data, '$.data.app') as app_name, count(*) as switch_count FROM events WHERE type='app_switch' AND timestamp > datetime('now', '-1 day') GROUP BY app_name ORDER BY switch_count DESC LIMIT 10"
+            },
+            "type": "n8n-nodes-base.sqlite",
+            "typeVersion": 1,
+            "position": [
+                200,
+                0
+            ],
+            "credentials": {
+                "sqlite": {
+                    "id": "steer_db_cred",
+                    "name": "Steer Database"
+                }
+            },
+            "name": "Query Steer DB"
+        },
+        {
+            "parameters": {
+                "content": "📅 *Daily Usage Report*\n\nTop Apps Used Today:\n\n{{ $json.all_apps }}"
+            },
+            "type": "n8n-nodes-base.telegram",
+            "typeVersion": 1,
+            "position": [
+                600,
+                0
+            ],
+            "name": "Send Report"
+        },
+        {
+            "parameters": {
+                "jsCode": "const apps = $input.all().map(item => `- ${item.json.app_name}: ${item.json.switch_count} switches`);\nreturn [{ json: { all_apps: apps.join('\\n') } }];"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                400,
+                0
+            ],
+            "name": "Format Text"
+        }
+    ],
+    "connections": {
+        "Schedule (11 PM)": {
+            "main": [
+                [
+                    {
+                        "node": "Query Steer DB",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Query Steer DB": {
+            "main": [
+                [
+                    {
+                        "node": "Format Text",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Format Text": {
+            "main": [
+                [
+                    {
+                        "node": "Send Report",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}
