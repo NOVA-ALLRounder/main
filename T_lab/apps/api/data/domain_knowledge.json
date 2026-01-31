@@ -1,0 +1,160 @@
+{
+    "통신": {
+        "models": [
+            {
+                "name": "Shannon 용량",
+                "formula": "C = B * log2(1 + SNR)",
+                "description": "단일 채널의 이론적 최대 용량"
+            },
+            {
+                "name": "MIMO 용량",
+                "formula": "C = log2(det(I + SNR/Nt * H @ H†))",
+                "description": "다중 안테나 시스템 용량"
+            }
+        ],
+        "code_template": "import numpy as np\n# Shannon/MIMO capacity simulation\nSNR_dB = np.linspace(0, 20, 21)\nSNR_linear = 10**(SNR_dB/10)",
+        "variables": {
+            "independent": [
+                "안테나 수",
+                "SNR (dB)"
+            ],
+            "dependent": "채널 용량 (bps/Hz)"
+        },
+        "learned_at": null
+    },
+    "화학": {
+        "models": [
+            {
+                "name": "Arrhenius 방정식",
+                "formula": "k = A * exp(-Ea/RT)",
+                "description": "온도에 따른 반응 속도"
+            },
+            {
+                "name": "반응 속도론",
+                "formula": "d[A]/dt = -k[A]^n",
+                "description": "농도 변화율"
+            }
+        ],
+        "code_template": "import numpy as np\nA = 1e13  # Pre-exponential factor\nEa = 50000  # Activation energy (J/mol)\nR = 8.314  # Gas constant",
+        "variables": {
+            "independent": [
+                "온도 (K)",
+                "농도"
+            ],
+            "dependent": "반응 속도 상수 k"
+        },
+        "learned_at": null
+    },
+    "물리": {
+        "models": [
+            {
+                "name": "운동 방정식",
+                "formula": "F = ma, x = x0 + v0*t + 0.5*a*t^2",
+                "description": "뉴턴 역학"
+            },
+            {
+                "name": "에너지 보존",
+                "formula": "E = KE + PE = constant",
+                "description": "역학적 에너지 보존"
+            }
+        ],
+        "code_template": "from scipy.integrate import odeint\nimport numpy as np\ndef equations(state, t):\n    return derivatives",
+        "variables": {
+            "independent": [
+                "시간",
+                "초기 조건"
+            ],
+            "dependent": "위치, 속도, 에너지"
+        },
+        "learned_at": null
+    },
+    "생물": {
+        "models": [
+            {
+                "name": "로지스틱 성장",
+                "formula": "dN/dt = rN(1 - N/K)",
+                "description": "개체군 성장 모델"
+            },
+            {
+                "name": "SIR 모델",
+                "formula": "dS/dt = -βSI, dI/dt = βSI - γI",
+                "description": "전염병 확산 모델"
+            }
+        ],
+        "code_template": "import numpy as np\nfrom scipy.integrate import odeint\ndef logistic(N, t, r, K):\n    return r * N * (1 - N/K)",
+        "variables": {
+            "independent": [
+                "시간",
+                "초기 개체수"
+            ],
+            "dependent": "개체수"
+        },
+        "learned_at": null
+    },
+    "경제": {
+        "models": [
+            {
+                "name": "수요-공급 모델",
+                "formula": "P = f(Q), Q = g(P)",
+                "description": "시장 균형"
+            },
+            {
+                "name": "시계열 분석",
+                "formula": "ARIMA, VAR",
+                "description": "경제 지표 예측"
+            }
+        ],
+        "code_template": "import numpy as np\nimport pandas as pd\n# Economic simulation",
+        "variables": {
+            "independent": [
+                "가격",
+                "시간"
+            ],
+            "dependent": "수요, 공급"
+        },
+        "learned_at": null
+    },
+    "심리": {
+        "models": [
+            {
+                "name": "신호탐지이론",
+                "formula": "d' = z(Hit) - z(FA)",
+                "description": "민감도 측정"
+            },
+            {
+                "name": "회귀분석",
+                "formula": "Y = β0 + β1X + ε",
+                "description": "변수 간 관계"
+            }
+        ],
+        "code_template": "import numpy as np\nfrom scipy import stats\n# Psychological experiment simulation",
+        "variables": {
+            "independent": [
+                "조건",
+                "자극"
+            ],
+            "dependent": "반응, 점수"
+        },
+        "learned_at": null
+    },
+    "건설": {
+        "models": [
+            {
+                "name": "선형 회귀 모델",
+                "formula": "강도 = β0 + β1 * AE재의 합량 + ε",
+                "description": "선형 회귀 모델은 독립 변수(AE재의 합량)와 종속 변수(콘크리트의 강도) 사이의 선형 관계를 설명하는 데 사용됩니다. β0는 절편, β1는 기울기, ε는 오차를 나타냅니다."
+            }
+        ],
+        "code_template": "import numpy as np\nimport pandas as pd\nfrom sklearn.linear_model import LinearRegression\n\n# 데이터 준비\n# X = 독립변수 데이터 (AE재의 합량)\n# y = 종속변수 데이터 (콘크리트의 강도)\nmodel = LinearRegression().fit(X, y)\n\n# 예측\n# y_pred = model.predict(X_new)",
+        "variables": {
+            "independent": [
+                "AE재의 합량"
+            ],
+            "dependent": "콘크리트의 강도"
+        },
+        "simulatable": true,
+        "simulation_reason": "선형 회귀 모델을 사용하여 AE재의 합량과 콘크리트의 강도 사이의 관계를 시뮬레이션할 수 있습니다. 데이터가 충분히 수집되면 모델을 학습시켜 예측을 수행할 수 있습니다.",
+        "learned_at": "2026-01-29T12:32:12.835835",
+        "source": "llm_generated"
+    }
+}

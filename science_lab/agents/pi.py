@@ -14,7 +14,7 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
 
 from state import ScientificState, MethodologyType
-from config import NOVELTY_THRESHOLD
+from config import NOVELTY_THRESHOLD, OPENAI_API_KEY
 
 
 PI_NOVELTY_PROMPT = """당신은 과학 연구의 독창성을 평가하는 전문가입니다.
@@ -92,7 +92,7 @@ class PIAgent:
     """연구 책임자 에이전트"""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.api_key = api_key or OPENAI_API_KEY
         self.llm = None
         if LANGCHAIN_AVAILABLE and self.api_key:
             self.llm = ChatOpenAI(
@@ -100,6 +100,8 @@ class PIAgent:
                 temperature=0.5,
                 api_key=self.api_key
             )
+        else:
+            print(f"⚠️ [PIAgent] API Key missing or LangChain not found. Running in MOCK mode.")
     
     def evaluate_novelty(self, state: ScientificState) -> ScientificState:
         """가설 독창성 평가"""

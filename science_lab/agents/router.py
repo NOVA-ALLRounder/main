@@ -14,6 +14,7 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
 
 from state import ScientificState
+from config import OPENAI_API_KEY
 
 
 ROUTER_SYSTEM_PROMPT = """당신은 과학적 입력 분류 전문가입니다.
@@ -49,7 +50,7 @@ class RouterAgent:
     """라우터 에이전트 - 의도 분류"""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.api_key = api_key or OPENAI_API_KEY
         self.llm = None
         if LANGCHAIN_AVAILABLE and self.api_key:
             self.llm = ChatOpenAI(

@@ -14,8 +14,56 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
 
 from state import ScientificState
-from config import MAX_RETRY_COUNT
+from config import MAX_RETRY_COUNT, OPENAI_API_KEY
 from tools.code_executor import execute_code
+from agents.data_collector import get_data_collector
+
+
+# 실험 결과 필수 스키마 정의
+RESULT_SCHEMA = {
+    "required_fields": ["analysis_type", "conclusion"],
+    "numeric_fields": [],  # 도메인에 따라 동적으로 추가
+    "optional_fields": ["p_value", "accuracy", "effect_size", "confidence_interval"]
+}
+
+
+def validate_experiment_results(results: dict, methodology_type: str) -> tuple:
+    """
+    실험 결과 스키마 검증 및 누락 필드 보완
+    Returns: (validated_results, warnings)
+    """
+    if not results:
+        return {"error": "결과 없음", "conclusion": "실험 결과를 생성하지 못했습니다."}, ["결과 데이터 없음"]
+    
+    warnings = []
+    validated = dict(results)
+    
+    # 필수 필드 검증
+    for field in RESULT_SCHEMA["required_fields"]:
+        if field not in validated or not validated[field]:
+            if field == "analysis_type":
+                validated[field] = methodology_type or "unknown"
+            elif field == "conclusion":
+                validated[field] = "결론을 생성하지 못했습니다. 추가 분석이 필요합니다."
+            warnings.append(f"필수 필드 '{field}'가 누락되어 기본값으로 대체됨")
+    
+    # 결론 품질 검증 (최소 길이)
+    if len(validated.get("conclusion", "")) < 20:
+        warnings.append("결론이 너무 짧음 (20자 미만)")
+    
+    # 수치 데이터 검증
+    numeric_keys = [k for k, v in validated.items() if isinstance(v, (int, float)) and k != "error"]
+    if not numeric_keys:
+        warnings.append("정량적 수치 데이터가 없음")
+    
+    # p-value 범위 검증
+    if "p_value" in validated:
+        p = validated["p_value"]
+        if not (0 <= p <= 1):
+            warnings.append(f"p-value 범위 오류: {p} (0~1 사이여야 함)")
+            validated["p_value"] = max(0, min(1, p))
+    
+    return validated, warnings
 
 
 ENGINEER_CODE_PROMPT = """당신은 과학 실험을 위한 Python 코드를 작성하는 전문가입니다.
@@ -26,12 +74,63 @@ ENGINEER_CODE_PROMPT = """당신은 과학 실험을 위한 Python 코드를 작
 도메인: {domain}
 선택된 방법론: {methodology}
 
-요구사항:
-1. 완전하고 실행 가능한 Python 코드를 작성하세요
-2. 필요한 import문을 모두 포함하세요
-3. 결과를 출력하고 가능하면 시각화하세요 (matplotlib)
-4. 결과 그래프는 'results.png'로 저장하세요
-5. 주요 결과는 'results.json'으로 저장하세요
+## 필수 요구사항
+
+### 1. 실행 가능한 코드
+- 완전하고 실행 가능한 Python 코드
+- 필요한 import문 모두 포함
+- 결과 그래프는 'results.png'로 저장
+- 주요 결과는 'results.json'으로 저장
+
+### 2. 실험 과정 상세 로그 출력 (매우 중요!)
+코드 실행 중 다음 정보를 **반드시 print()로 출력**하세요:
+
+```
+=== 1단계: 데이터 준비 ===
+- 데이터 출처: [문헌명/시뮬레이션/합성 데이터 등]
+- 데이터 크기: [샘플 수, 변수 수]
+- 변수 목록: [독립변수, 종속변수 이름]
+
+=== 2단계: 실험 조건 설정 ===
+- 독립변수 범위: [예: AE제 농도 0%, 2%, 4%, 6%, 8%]
+- 반복 횟수: [각 조건당 n회]
+- 통제변수: [고정된 조건들]
+
+=== 3단계: 데이터 수집/생성 ===
+- 수집 방법: [측정/시뮬레이션/문헌 추출]
+- 각 조건별 측정값:
+  [조건] -> [측정값] (표준편차)
+
+=== 4단계: 분석 수행 ===
+- 분석 방법: [회귀분석/t-test/ANOVA 등]
+- 분석 결과 요약:
+  [통계량, p-value, 효과크기 등]
+
+=== 5단계: 결론 도출 ===
+- 가설 지지 여부: [지지됨/기각됨/부분적 지지]
+- 핵심 발견: [주요 패턴 설명]
+```
+
+### 3. results.json 필수 필드
+```json
+{{
+    "analysis_type": "분석 유형",
+    "data_source": "데이터 출처 설명",
+    "sample_size": 샘플 수,
+    "conditions": ["조건1", "조건2", ...],
+    "measurements": {{"조건1": 값, "조건2": 값, ...}},
+    "p_value": 0.xxx,
+    "effect_size": 0.xxx,
+    "conclusion": "결론 (3문장 이상, 임계점이 있다면 반드시 언급)",
+    "hypothesis_supported": true/false/partial,
+    "optimal_range": "최적 범위 (있다면)"
+}}
+```
+
+### 4. 중요 주의사항
+- 단순히 "많을수록 좋다"가 아닌 **실제 과학적 패턴**(역U자형, 포화곡선 등) 반영
+- 임계점/최적값이 존재하면 반드시 탐지하여 보고
+- 데이터가 가설과 다르면 솔직하게 "기각"으로 결론
 
 코드만 반환하세요 (마크다운 코드 블록 없이):
 """
@@ -55,7 +154,7 @@ class EngineerAgent:
     """엔지니어 에이전트 - 코드 생성 및 실험 실행"""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.api_key = api_key or OPENAI_API_KEY
         self.llm = None
         if LANGCHAIN_AVAILABLE and self.api_key:
             self.llm = ChatOpenAI(
@@ -63,6 +162,8 @@ class EngineerAgent:
                 temperature=0.2,  # 코드는 deterministic 하게
                 api_key=self.api_key
             )
+        else:
+            print(f"⚠️ [EngineerAgent] API Key missing or LangChain not found. Running in MOCK mode.")
     
     def run_experiment(self, state: ScientificState) -> ScientificState:
         """실험 코드 생성 및 실행"""
@@ -78,6 +179,43 @@ class EngineerAgent:
         
         # 선택된 방법론
         methodology = methods[selected_idx] if selected_idx < len(methods) else methods[0]
+        
+        # === 학술 데이터 수집 ===
+        try:
+            collector = get_data_collector()
+            paper_data = collector.get_data_for_hypothesis(hypothesis, domain)
+            state['paper_data'] = paper_data
+            
+            if paper_data.get('success'):
+                primary = paper_data.get('primary_paper', {})
+                print(f"[EngineerAgent] 논문 데이터 수집 성공: {primary.get('title', 'Unknown')[:50]}...")
+                state['data_source'] = {
+                    'type': 'academic_paper',
+                    'citation': primary.get('citation', ''),
+                    'title': primary.get('title', ''),
+                    'authors': primary.get('authors', []),
+                    'year': primary.get('year', 0),
+                    'doi': primary.get('doi'),
+                    'url': primary.get('url')
+                }
+            else:
+                print(f"[EngineerAgent] 논문 데이터 수집 실패, 시뮬레이션 데이터 사용")
+                state['data_source'] = {
+                    'type': 'simulation',
+                    'citation': 'Python 시뮬레이션 기반 합성 데이터',
+                    'title': '',
+                    'authors': [],
+                    'year': 0
+                }
+        except Exception as e:
+            print(f"[EngineerAgent] DataCollector 오류: {e}")
+            state['data_source'] = {
+                'type': 'simulation',
+                'citation': 'Python 시뮬레이션 기반 합성 데이터 (API 오류로 인한 fallback)',
+                'title': '',
+                'authors': [],
+                'year': 0
+            }
         
         # 코드 생성
         code = self._generate_code(hypothesis, domain, methodology)
@@ -332,6 +470,30 @@ print("결론:", results['conclusion'])
             
             if success:
                 figures = [f for f in generated_files if f.endswith('.png')]
+                
+                # results.json 파싱하여 상태에 저장
+                for f in generated_files:
+                    if f.endswith('results.json'):
+                        try:
+                            with open(f, 'r', encoding='utf-8') as rf:
+                                raw_results = json.load(rf)
+                            
+                            # 결과 스키마 검증 및 보완
+                            methods = state.get('proposed_methods', [])
+                            selected_idx = state.get('selected_method_index', 0)
+                            method_type = methods[selected_idx].get('type', 'unknown') if methods else 'unknown'
+                            
+                            validated_results, validation_warnings = validate_experiment_results(raw_results, method_type)
+                            state['experiment_results'] = validated_results
+                            
+                            if validation_warnings:
+                                state['result_validation_warnings'] = validation_warnings
+                                print(f"[EngineerAgent] 결과 검증 경고: {validation_warnings}")
+                                
+                        except Exception as e:
+                            print(f"results.json 파싱 실패: {e}")
+                            state['experiment_results'] = {"error": str(e), "conclusion": "결과 파싱 실패"}
+                
                 return True, "\n".join(all_logs), figures
             
             # 에러 발생 시 수정 시도

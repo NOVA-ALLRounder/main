@@ -13,10 +13,12 @@ load_dotenv(dotenv_path=dotenv_path)
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 REPORTS_DIR = BASE_DIR / "reports"
+UPLOADS_DIR = BASE_DIR / "uploads"
 
 # Create directories if not exist
 DATA_DIR.mkdir(exist_ok=True)
 REPORTS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")

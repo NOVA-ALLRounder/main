@@ -11,10 +11,10 @@ import json
 import os
 from pathlib import Path
 
-from config import HOST, PORT, REPORTS_DIR
+from config import HOST, PORT, REPORTS_DIR, UPLOADS_DIR
 from state import create_initial_state
 from workflow import run_workflow_simple, continue_workflow
-from database import save_session, load_session, get_all_sessions
+from database import save_session, load_session, get_all_sessions, delete_session
 
 
 app = FastAPI(
@@ -243,9 +243,15 @@ async def get_report(session_id: str):
     if not report_path or not os.path.exists(report_path):
         raise HTTPException(status_code=404, detail="Report not found")
     
+    # 파일 확장자에 따라 media_type 결정
+    if report_path.endswith('.pdf'):
+        media_type = "application/pdf"
+    else:
+        media_type = "text/markdown"
+    
     return FileResponse(
         report_path,
-        media_type="text/markdown",
+        media_type=media_type,
         filename=os.path.basename(report_path)
     )
 
@@ -254,6 +260,56 @@ async def get_report(session_id: str):
 async def health_check():
     """헬스 체크"""
     return {"status": "healthy", "version": "1.0.0"}
+
+
+@app.delete("/api/session/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    """세션 삭제"""
+    # 메모리에서 삭제
+    if session_id in _sessions:
+        del _sessions[session_id]
+    
+    # DB에서 삭제
+    deleted = delete_session(session_id)
+    
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {"success": True, "message": "Session deleted"}
+
+
+@app.post("/api/upload")
+async def upload_file(request: Request):
+    """파일 업로드 (논문, 참고자료)"""
+    from fastapi import UploadFile, File, Form
+    import shutil
+    import uuid
+    
+    form = await request.form()
+    file = form.get("file")
+    
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    
+    # 업로드 디렉토리 생성
+    UPLOADS_DIR.mkdir(exist_ok=True)
+    
+    # 파일 저장
+    file_id = str(uuid.uuid4())[:8]
+    original_name = file.filename
+    safe_name = f"{file_id}_{original_name}"
+    file_path = UPLOADS_DIR / safe_name
+    
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+    
+    return {
+        "success": True,
+        "file_id": file_id,
+        "filename": original_name,
+        "path": str(file_path)
+    }
 
 
 # ===== 메인 실행 =====

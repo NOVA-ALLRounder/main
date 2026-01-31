@@ -16,6 +16,7 @@ except ImportError:
 from state import ScientificState
 from tools.arxiv_search import search_arxiv
 from tools.semantic_scholar import search_semantic_scholar
+from config import OPENAI_API_KEY
 
 
 LIBRARIAN_SYSTEM_PROMPT = """당신은 학술 문헌 검색 전문가입니다.
@@ -39,7 +40,7 @@ class LibrarianAgent:
     """사서 에이전트 - 학술 자료 검색"""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.api_key = api_key or OPENAI_API_KEY
         self.llm = None
         if LANGCHAIN_AVAILABLE and self.api_key:
             self.llm = ChatOpenAI(

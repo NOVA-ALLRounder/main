@@ -19,6 +19,7 @@ from agents.pi import pi_novelty_node, pi_methods_node, pi_feasibility_node
 from agents.engineer import engineer_node
 from agents.critic import critic_node
 from agents.author import author_draft_node, author_refine_node
+from agents.fact_checker import fact_checker_node
 from config import NOVELTY_THRESHOLD
 
 
@@ -88,6 +89,7 @@ def build_graph():
     graph.add_node("propose_methods", pi_methods_node)
     graph.add_node("experiment", engineer_node)
     graph.add_node("draft_report", author_draft_node)
+    graph.add_node("fact_check", fact_checker_node)
     graph.add_node("critic_review", critic_node)
     graph.add_node("finalize_report", author_refine_node)
     
@@ -128,9 +130,10 @@ def build_graph():
     # 실제로는 여기서 interrupt하고 사용자 선택을 기다림
     graph.add_edge("propose_methods", END)  # 임시 - API에서 처리
     
-    # 실험 -> 초안 -> 검토 -> 최종
+    # 실험 -> 초안 -> 팩트체크 -> 검토 -> 최종
     graph.add_edge("experiment", "draft_report")
-    graph.add_edge("draft_report", "critic_review")
+    graph.add_edge("draft_report", "fact_check")
+    graph.add_edge("fact_check", "critic_review")
     graph.add_edge("critic_review", "finalize_report")
     graph.add_edge("finalize_report", END)
     
@@ -239,23 +242,39 @@ def continue_workflow(
     from agents.engineer import EngineerAgent
     from agents.author import AuthorAgent
     from agents.critic import CriticAgent
+    from agents.fact_checker import FactCheckerAgent
     
     state["selected_method_index"] = selected_method_index
     state["status"] = "processing"
     
     # 4. 실험 실행
+    print("\n[Workflow] 🧪 가상 실험 시작 (Engineer Agent)...")
     engineer = EngineerAgent()
     state = engineer.run_experiment(state)
     
     # 5. 초안 작성
+    print("\n[Workflow] 📝 보고서 초안 작성 중 (Author Agent)...")
     author = AuthorAgent()
     state = author.write_draft(state)
     
-    # 6. 비평 검토
+    # 6. 사실 검증 (팩트체크)
+    print("\n[Workflow] 🔍 사실 검증 중 (FactChecker Agent)...")
+    fact_checker = FactCheckerAgent()
+    state = fact_checker.verify(state)
+    
+    # 팩트체크 결과 확인
+    fact_result = state.get('fact_check_result', {})
+    if fact_result.get('requires_revision'):
+        print(f"\n[Workflow] ⚠️ 사실 검증 문제 발견: {fact_result.get('summary')}")
+        state['fact_check_issues'] = fact_result.get('factual_errors', [])
+    
+    # 7. 비평 검토
+    print("\n[Workflow] 🧐 동료 심사 및 검증 중 (Critic Agent)...")
     critic = CriticAgent()
     state = critic.review(state)
     
-    # 7. 최종 보고서
+    # 8. 최종 보고서
+    print("\n[Workflow] 📑 최종 보고서 생성 중 (Author Agent)...")
     state = author.refine_report(state)
     
     return state

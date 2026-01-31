@@ -110,6 +110,7 @@ class ScientificState(TypedDict, total=False):
     # 생성된 산출물
     figures: List[str]  # 경로 목록
     data_outputs: List[str]
+    experiment_results: Dict[str, Any]  # results.json 파싱 결과
     
     # 최종 보고서
     draft_report: str
@@ -152,6 +153,7 @@ def create_initial_state(user_input: str, domain: str = "") -> ScientificState:
         retry_count=0,
         figures=[],
         data_outputs=[],
+        experiment_results={},
         draft_report="",
         critic_feedback="",
         final_report="",

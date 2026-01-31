@@ -1,0 +1,320 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/dmin/main/T_lab/apps/api']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [147826] using StatReload
+[2m2026-01-30T06:37:05.154168Z[0m [[32m[1minfo     [0m] [1mInitialized SQLite Persistent Store[0m
+INFO:     Started server process [147829]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:50706 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34806 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34818 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34826 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34842 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34856 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34872 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+[2m2026-01-30T06:37:40.497390Z[0m [[32m[1minfo     [0m] [1mLoaded 7 domains from knowledge base[0m
+INFO:     127.0.0.1:59636 - "POST /papers/synthesize HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53500 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53502 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+[2m2026-01-30T06:39:13.036147Z[0m [[32m[1minfo     [0m] [1mStarting research session     [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 소모하는 전력이 적다.'[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:39742 - "POST /research/start HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:39:13.127058Z[0m [[32m[1minfo     [0m] [1m[Router] 입력된 문장의 연구 의도를 분석하고 있습니다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:13.127531Z[0m [[32m[1minfo     [0m] [1mClassifying intent            [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 소모하는 전력이 적다.'[0m [36msource[0m=[35mrouter[0m
+[2m2026-01-30T06:39:16.607361Z[0m [[32m[1minfo     [0m] [1mRouter Result: 통신             [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:16.642380Z[0m [[32m[1minfo     [0m] [1m[PI] 제안된 가설의 독창성을 평가합니다.      [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:16.642768Z[0m [[32m[1minfo     [0m] [1mEvaluating novelty            [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:39:22.756332Z[0m [[32m[1minfo     [0m] [1m[PI] 3가지 연구 방법론을 설계합니다.       [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:22.756751Z[0m [[32m[1minfo     [0m] [1mProposing methods             [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:39:44.713412Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 1: 이론적 분석을 통한 ZIGBEE 및 WIFI 전력 소비 비교 (analytical)[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.726510Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소비 차이가 없다.[0m [36msession_id[0m=[35m5454b733-9d44-INFO:     Stopping reloader process [147244]
+39:44.736861Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력 소비가 적다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.748464Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 2: ZIGBEE 및 WIFI 전력 소비의 시뮬레이션 기반 비교 (simulation)[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.755177Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소비 차이가 없다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.761993Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력 소비가 적다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.771015Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 3: 데이터 기반의 ZIGBEE 및 WIFI 전력 소비 비교 (data_driven)[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.781794Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소비 차이가 없다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.789398Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력 소비가 적다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:39:44.799608Z[0m [[32m[1minfo     [0m] [1mInitial research graph completed[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:39746 - "GET /ws/research/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:39758 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41798 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41800 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41814 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41820 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41412 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54360 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54366 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54374 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54380 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+[2m2026-01-30T06:47:01.888494Z[0m [[32m[1minfo     [0m] [1mMethod selected, starting background task[0m [36mindex[0m=[35m0[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:50946 - "POST /research/select-method HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:47:01.942464Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━ 실험 설계 시작 ━━━━━━━━[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:01.956610Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📌 가설: ZIGBEE통신이 WIFI통신보다 소모하는 전력이 적다....[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:01.968511Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🔬 방법론: 이론적 분석을 통한 ZIGBEE 및 WIFI 전력 소비 비교[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:01.978795Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 분석 유형: analytical[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.009799Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🎯 실험 목표:           [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.021427Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ H₀ (귀무가설): ZIGBEE와 WIFI 간의 전력 소비 차이가 없다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.033114Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ H₁ (대립가설): ZIGBEE가 WIFI보다 전력 소비가 적다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.044999Z[0m [[32m[1minfo     [0m] [1m[Engineer] ⚙️ 코드 생성 중... (도메인: 통신)[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.056464Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 수학적 공식 도출    [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.068132Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 이론적 파라미터 설정  [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.079653Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 수식 계산 코드 작성  [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:02.080079Z[0m [[32m[1minfo     [0m] [1mExecuting experiment          [0m [36mmethod[0m=[35m'이론적 분석을 통한 ZIGBEE 및 WIFI 전력 소비 비교'[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:47:02.080168Z[0m [[32m[1minfo     [0m] [1mCache hit for domain: 통신      [0m
+[2m2026-01-30T06:47:02.080216Z[0m [[32m[1minfo     [0m] [1mInjected domain knowledge for: 통신[0m [36msource[0m=[35mengineer[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:50962 - "GET /ws/research/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50966 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50970 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39396 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39404 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+[2m2026-01-30T06:47:16.377981Z[0m [[32m[1minfo     [0m] [1mEngineer code produced SIMULATION_RESULTS[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:47:16.403422Z[0m [[32m[1minfo     [0m] [1m[Engineer] ✅ 코드 생성 및 실행 완료    [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.415839Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 초기 결과 미리보기:      [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.449316Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 검정 통계량: 10.5000[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.461773Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.498677Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🚀 시뮬레이션을 시작합니다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.511533Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━ 이론적 분석 시작 ━━━━━━[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.526672Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 📐 유형: 수학적 모델링 (Mathematical Modeling)[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.554602Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🔄 분석 단계:  [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.567182Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 가설의 수학적 정식화[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.581753Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 적절한 공식 도출[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.596630Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ 이론적 예측값 계산[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.597131Z[0m [[32m[1minfo     [0m] [1mRunning experiment with methodology: analytical[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:47:16.597196Z[0m [[32m[1minfo     [0m] [1mUsing Engineer's SIMULATION_RESULTS (Polymorphic)[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:47:16.645249Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 📊 분석 결과:  [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.657860Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 모델: Unknown[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.672439Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 공식: [0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.684967Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ 결론: ZIGBEE는 WIFI보다 에너지 효율성이 높음...[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.697371Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.740361Z[0m [[32m[1minfo     [0m] [1m[Author] IMRAD 형식의 보고서를 작성합니다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:16.740785Z[0m [[32m[1minfo     [0m] [1mWriting report                [0m [36msource[0m=[35mauthor[0m
+INFO:     127.0.0.1:39416 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38928 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38938 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38948 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56620 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56632 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56648 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56660 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39300 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39308 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39320 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+[2m2026-01-30T06:47:49.138850Z[0m [[32m[1minfo     [0m] [1m[Critic] 보고서의 논리적 결함과 편향을 비평합니다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:49.139281Z[0m [[32m[1minfo     [0m] [1mReviewing report              [0m [36msource[0m=[35mcritic[0m
+INFO:     127.0.0.1:35216 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35222 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35230 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+[2m2026-01-30T06:47:58.236347Z[0m [[32m[1minfo     [0m] [1m[FactChecker] 인용된 문헌의 검증을 수행합니다.[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+[2m2026-01-30T06:47:58.236530Z[0m [[32m[1minfo     [0m] [1mVerifying citations           [0m [36msource[0m=[35mfact_checker[0m
+[2m2026-01-30T06:47:58.251587Z[0m [[32m[1minfo     [0m] [1mResearch execution graph completed[0m [36msession_id[0m=[35m5454b733-9d44-4ff8-8cd5-c3a31de3a1bd[0m
+INFO:     127.0.0.1:51744 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51746 - "GET /static/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd_result.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60622 - "GET /sessions/5454b733-9d44-4ff8-8cd5-c3a31de3a1bd/download HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45988 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45990 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+[2m2026-01-30T06:51:39.330258Z[0m [[32m[1minfo     [0m] [1mStarting research session     [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다.'[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:57950 - "POST /research/start HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:51:39.371297Z[0m [[32m[1minfo     [0m] [1m[Router] 입력된 문장의 연구 의도를 분석하고 있습니다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:51:39.371724Z[0m [[32m[1minfo     [0m] [1mClassifying intent            [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다.'[0m [36msource[0m=[35mrouter[0m
+[2m2026-01-30T06:51:43.261281Z[0m [[32m[1minfo     [0m] [1mRouter Result: 통신             [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:51:43.293542Z[0m [[32m[1minfo     [0m] [1m[PI] 제안된 가설의 독창성을 평가합니다.      [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:51:43.293954Z[0m [[32m[1minfo     [0m] [1mEvaluating novelty            [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:51:50.967481Z[0m [[32m[1minfo     [0m] [1m[PI] 3가지 연구 방법론을 설계합니다.       [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:51:50.967814Z[0m [[32m[1minfo     [0m] [1mProposing methods             [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:52:05.038644Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 1: ZIGBEE와 WIFI의 전력 소모 비교에 대한 이론적 분석 (analytical)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.048026Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간 전력 소모 차이가 없다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.058729Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.070299Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 2: ZIGBEE와 WIFI의 전력 소모 비교를 위한 시뮬레이션 (simulation)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.080697Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간 전력 소모 차이가 없다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.089678Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.100305Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 3: 기존 데이터셋을 활용한 ZIGBEE와 WIFI의 전력 소모 비교 (data_driven)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.111563Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간 전력 소모 차이가 없다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.123333Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE가 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:05.138609Z[0m [[32m[1minfo     [0m] [1mInitial research graph completed[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:57964 - "GET /ws/research/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57980 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57982 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36876 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36886 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36898 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36900 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46704 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46706 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+[2m2026-01-30T06:52:25.030833Z[0m [[32m[1minfo     [0m] [1mMethod selected, starting background task[0m [36mindex[0m=[35m1[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:60592 - "POST /research/select-method HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:52:25.082121Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━ 실험 설계 시작 ━━━━━━━━[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.092164Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📌 가설: ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다....[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.100930Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🔬 방법론: ZIGBEE와 WIFI의 전력 소모 비교를 위한 시뮬레이션[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.112386Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 분석 유형: simulation[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.136033Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🎯 실험 목표:           [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.147633Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ H₀ (귀무가설): ZIGBEE와 WIFI 간 전력 소모 차이가 없다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.164607Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ H₁ (대립가설): ZIGBEE가 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.176361Z[0m [[32m[1minfo     [0m] [1m[Engineer] ⚙️ 코드 생성 중... (도메인: 통신)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.188215Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 수학적 모델 선택    [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.199711Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 시뮬레이션 파라미터 설정[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.211353Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 통계 검정 코드 작성  [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:25.211690Z[0m [[32m[1minfo     [0m] [1mExecuting experiment          [0m [36mmethod[0m=[35m'ZIGBEE와 WIFI의 전력 소모 비교를 위한 시뮬레이션'[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:52:25.211905Z[0m [[32m[1minfo     [0m] [1mCache hit for domain: 통신      [0m
+[2m2026-01-30T06:52:25.211966Z[0m [[32m[1minfo     [0m] [1mInjected domain knowledge for: 통신[0m [36msource[0m=[35mengineer[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:60602 - "GET /ws/research/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60606 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44326 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44336 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44340 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+[2m2026-01-30T06:52:40.003577Z[0m [[32m[1minfo     [0m] [1mEngineer code produced SIMULATION_RESULTS[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:52:40.037023Z[0m [[32m[1minfo     [0m] [1m[Engineer] ✅ 코드 생성 및 실행 완료    [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.047237Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 초기 결과 미리보기:      [0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.059183Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 검정 통계량: 3.5000[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.069983Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+INFO:     127.0.0.1:51184 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+[2m2026-01-30T06:52:40.111054Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🚀 시뮬레이션을 시작합니다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.123030Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━ 시뮬레이션 시작 ━━━━━━[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.134714Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🎲 시뮬레이션 유형: 몬테카를로 (Monte Carlo)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.146429Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ⚙️ 시뮬레이션 파라미터:[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.157928Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 반복 횟수: 10,000회[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.169459Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 유의수준 (α): 0.05[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.181514Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ 검정 방법: 독립표본 t-검정[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.204959Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🔄 시뮬레이션 실행 중...[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.220193Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 대조군 데이터 생성[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.234879Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 실험군 데이터 생성[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.245438Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ 통계 검정 수행[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.245829Z[0m [[32m[1minfo     [0m] [1mRunning experiment with methodology: simulation[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:52:40.245874Z[0m [[32m[1minfo     [0m] [1mUsing Engineer's SIMULATION_RESULTS (Polymorphic)[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:52:40.266648Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 📊 시뮬레이션 결과:[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.277779Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 표본 크기 (N): N/A[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.286579Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ p-value: 0.0010[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.297978Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 효과 크기 (Cohen's d): 0.85[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.308620Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ ✅ 결론: 통계적으로 유의미함 (p < 0.05)[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.320408Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.353821Z[0m [[32m[1minfo     [0m] [1m[Author] IMRAD 형식의 보고서를 작성합니다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:40.354228Z[0m [[32m[1minfo     [0m] [1mWriting report                [0m [36msource[0m=[35mauthor[0m
+INFO:     127.0.0.1:51196 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51210 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60648 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60650 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60654 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60662 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+[2m2026-01-30T06:52:59.158665Z[0m [[32m[1minfo     [0m] [1m[Critic] 보고서의 논리적 결함과 편향을 비평합니다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:52:59.159221Z[0m [[32m[1minfo     [0m] [1mReviewing report              [0m [36msource[0m=[35mcritic[0m
+INFO:     127.0.0.1:60066 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60070 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60084 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48244 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+[2m2026-01-30T06:53:11.401939Z[0m [[32m[1minfo     [0m] [1m[FactChecker] 인용된 문헌의 검증을 수행합니다.[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+[2m2026-01-30T06:53:11.402084Z[0m [[32m[1minfo     [0m] [1mVerifying citations           [0m [36msource[0m=[35mfact_checker[0m
+[2m2026-01-30T06:53:11.416755Z[0m [[32m[1minfo     [0m] [1mResearch execution graph completed[0m [36msession_id[0m=[35m7b771701-c137-4092-aa2f-e47f90100003[0m
+INFO:     127.0.0.1:48260 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48276 - "GET /static/7b771701-c137-4092-aa2f-e47f90100003_result.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48302 - "GET /sessions/7b771701-c137-4092-aa2f-e47f90100003/download HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53864 - "GET /sessions?limit=50 HTTP/1.1" 200 OK
+[2m2026-01-30T06:53:57.584287Z[0m [[32m[1minfo     [0m] [1mStarting research session     [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다.'[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:39098 - "POST /research/start HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:53:57.630554Z[0m [[32m[1minfo     [0m] [1m[Router] 입력된 문장의 연구 의도를 분석하고 있습니다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:53:57.630918Z[0m [[32m[1minfo     [0m] [1mClassifying intent            [0m [36minput[0m=[35m'ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다.'[0m [36msource[0m=[35mrouter[0m
+[2m2026-01-30T06:54:02.177918Z[0m [[32m[1minfo     [0m] [1mRouter Result: 통신             [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:02.217712Z[0m [[32m[1minfo     [0m] [1m[PI] 제안된 가설의 독창성을 평가합니다.      [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:02.218250Z[0m [[32m[1minfo     [0m] [1mEvaluating novelty            [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:54:10.189691Z[0m [[32m[1minfo     [0m] [1m[PI] 3가지 연구 방법론을 설계합니다.       [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:10.190040Z[0m [[32m[1minfo     [0m] [1mProposing methods             [0m [36msource[0m=[35mpi[0m
+[2m2026-01-30T06:54:22.916684Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 1: 전력 소모 비교에 대한 이론적 분석 (analytical)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.929148Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소모 차이가 없다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.940941Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE는 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.952000Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 2: ZIGBEE와 WIFI의 전력 소모 시뮬레이션 (simulation)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.962846Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소모 차이가 없다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.973592Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE는 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:22.989206Z[0m [[32m[1minfo     [0m] [1m[PI] 📋 방법론 3: 기존 데이터셋을 활용한 전력 소모 메타 분석 (data_driven)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:23.000415Z[0m [[32m[1minfo     [0m] [1m[PI]    ├─ H₀: ZIGBEE와 WIFI 간의 전력 소모 차이가 없다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:23.011332Z[0m [[32m[1minfo     [0m] [1m[PI]    └─ H₁: ZIGBEE는 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:54:23.023784Z[0m [[32m[1minfo     [0m] [1mInitial research graph completed[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:39100 - "GET /ws/research/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:36986 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36988 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36994 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33952 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33968 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33976 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34336 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34352 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+[2m2026-01-30T06:57:02.977539Z[0m [[32m[1minfo     [0m] [1mMethod selected, starting background task[0m [36mindex[0m=[35m2[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m [36msource[0m=[35mapi[0m
+INFO:     127.0.0.1:52782 - "POST /research/select-method HTTP/1.1" 202 Accepted
+[2m2026-01-30T06:57:03.026211Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━ 실험 설계 시작 ━━━━━━━━[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.037373Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📌 가설: ZIGBEE통신이 WIFI통신보다 전력을 적게 소모한다....[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.048890Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🔬 방법론: 기존 데이터셋을 활용한 전력 소모 메타 분석[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.060553Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 분석 유형: data_driven[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.076363Z[0m [[32m[1minfo     [0m] [1m[Engineer] 🎯 실험 목표:           [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.085421Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ H₀ (귀무가설): ZIGBEE와 WIFI 간의 전력 소모 차이가 없다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.094701Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ H₁ (대립가설): ZIGBEE는 WIFI보다 전력을 적게 소모한다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.103416Z[0m [[32m[1minfo     [0m] [1m[Engineer] ⚙️ 코드 생성 중... (도메인: 통신)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.111320Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 데이터 구조 설계    [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.119059Z[0m [[32m[1minfo     [0m] [1m[Engineer]    ├─ 회귀 모델 설정     [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.129363Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 상관/회귀 분석 코드 작성[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:03.129904Z[0m [[32m[1minfo     [0m] [1mExecuting experiment          [0m [36mmethod[0m=[35m'기존 데이터셋을 활용한 전력 소모 메타 분석'[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:57:03.130137Z[0m [[32m[1minfo     [0m] [1mCache hit for domain: 통신      [0m
+[2m2026-01-30T06:57:03.130188Z[0m [[32m[1minfo     [0m] [1mInjected domain knowledge for: 통신[0m [36msource[0m=[35mengineer[0m
+WARNING:  Unsupported upgrade request.
+WARNING:  No supported WebSocket library detected. Please use "pip install 'uvicorn[standard]'", or install 'websockets' or 'wsproto' manually.
+INFO:     127.0.0.1:52792 - "GET /ws/research/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52794 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43502 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43506 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43510 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43514 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42156 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42168 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+[2m2026-01-30T06:57:24.321017Z[0m [[32m[1minfo     [0m] [1mEngineer code produced SIMULATION_RESULTS[0m [36msource[0m=[35mengineer[0m
+[2m2026-01-30T06:57:24.353493Z[0m [[32m[1minfo     [0m] [1m[Engineer] ✅ 코드 생성 및 실행 완료    [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.363309Z[0m [[32m[1minfo     [0m] [1m[Engineer] 📊 초기 결과 미리보기:      [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.373744Z[0m [[32m[1minfo     [0m] [1m[Engineer]    └─ 검정 통계량: -21.9429[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.381533Z[0m [[32m[1minfo     [0m] [1m[Engineer] ━━━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.411941Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🚀 시뮬레이션을 시작합니다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.422453Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━ 데이터 분석 시작 ━━━━━━[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.432817Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 📈 유형: 회귀/상관 분석 (Regression Analysis)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.459178Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 🔄 분석 단계:  [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.471713Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 파라미터 기반 데이터 생성[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.484526Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 선형 회귀 모델 적합[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.496633Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ 통계적 유의성 검정[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.497018Z[0m [[32m[1minfo     [0m] [1mRunning experiment with methodology: data_driven[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:57:24.497078Z[0m [[32m[1minfo     [0m] [1mUsing Engineer's SIMULATION_RESULTS (Polymorphic)[0m [36msource[0m=[35mexperiment_runner[0m
+[2m2026-01-30T06:57:24.520454Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] 📊 분석 결과:  [0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.530869Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 회귀 계수 (Slope): 0.0000[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.539468Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    ├─ 설명력 (R²): 0.0000[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.550938Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner]    └─ p-value: 0.0000 (유의미함)[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.560243Z[0m [[32m[1minfo     [0m] [1m[Experiment Runner] ━━━━━━━━━━━━━━━━━━━━━━━━[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.596499Z[0m [[32m[1minfo     [0m] [1m[Author] IMRAD 형식의 보고서를 작성합니다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:24.596905Z[0m [[32m[1minfo     [0m] [1mWriting report                [0m [36msource[0m=[35mauthor[0m
+INFO:     127.0.0.1:42172 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49948 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49964 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49966 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53926 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53934 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53948 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53950 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+[2m2026-01-30T06:57:50.303704Z[0m [[32m[1minfo     [0m] [1m[Critic] 보고서의 논리적 결함과 편향을 비평합니다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:57:50.304083Z[0m [[32m[1minfo     [0m] [1mReviewing report              [0m [36msource[0m=[35mcritic[0m
+INFO:     127.0.0.1:48940 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48948 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48952 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38600 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+[2m2026-01-30T06:58:00.507989Z[0m [[32m[1minfo     [0m] [1m[FactChecker] 인용된 문헌의 검증을 수행합니다.[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+[2m2026-01-30T06:58:00.508162Z[0m [[32m[1minfo     [0m] [1mVerifying citations           [0m [36msource[0m=[35mfact_checker[0m
+[2m2026-01-30T06:58:00.530782Z[0m [[32m[1minfo     [0m] [1mResearch execution graph completed[0m [36msession_id[0m=[35mf12e4131-413c-4e8c-b062-7d468773fc96[0m
+INFO:     127.0.0.1:38616 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38624 - "GET /static/f12e4131-413c-4e8c-b062-7d468773fc96_result.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35110 - "GET /sessions/f12e4131-413c-4e8c-b062-7d468773fc96/download HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [147829]
+INFO:     Stopping reloader process [147826]

@@ -136,6 +136,26 @@ def get_all_sessions() -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def delete_session(session_id: str) -> bool:
+    """세션 삭제"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # 관련 테이블에서도 삭제
+        cursor.execute("DELETE FROM literature_knowledge WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM experiment_results WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM research_sessions WHERE id = ?", (session_id,))
+        
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        conn.close()
+        return deleted
+    except Exception as e:
+        conn.close()
+        return False
+
+
 # Vector DB (ChromaDB) functions
 _chroma_client = None
 
