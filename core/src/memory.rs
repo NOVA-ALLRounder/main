@@ -1,13 +1,12 @@
 use anyhow::Result;
 use crate::llm_gateway::LLMClient;
-use lancedb::{connect, Table, Connection};
+use lancedb::{connect, Connection};
 use lancedb::query::{QueryBase, ExecutableQuery};
-use futures::{StreamExt, Stream};
-use arrow::array::{FixedSizeListArray, StringArray, Float32Array, types::Float32Type, Array};
+use futures::StreamExt;
+use arrow::array::{FixedSizeListArray, StringArray, Float32Array, Array};
 use arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
-use serde_json::json;
 
 pub struct MemoryStore {
     conn: Connection,
@@ -26,6 +25,7 @@ impl MemoryStore {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn init_table(&self) -> Result<()> {
         // Define Schema: id (utf8), text (utf8), vector (fixed_size_list<float32>[384]), metadata (utf8)
         // Note: For now, we rely on dynamic schema or explicit creation if not exists.
@@ -87,7 +87,7 @@ impl MemoryStore {
         // Prepare data for potential create
         let batch_for_create = batch.clone();
         
-        let table = match self.conn.open_table(&self.table_name).execute().await {
+        let _table = match self.conn.open_table(&self.table_name).execute().await {
             Ok(t) => {
                 // Iterator for append
                 let iterator = RecordBatchIterator::new(vec![Ok(batch)], schema.clone());
@@ -104,6 +104,7 @@ impl MemoryStore {
         Ok(())
     }
     
+    #[allow(dead_code)]
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, f64)>> {
         let vector = self.llm.get_embedding(query).await?;
         

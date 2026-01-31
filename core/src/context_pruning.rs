@@ -1,6 +1,5 @@
 use crate::db::ChatMessage;
 use chrono::{DateTime, Local, TimeZone, Utc};
-use std::sync::Mutex;
 use std::env;
 
 #[derive(Debug, Clone)]

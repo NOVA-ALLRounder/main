@@ -6,16 +6,22 @@ mod pattern_detector;
 mod recommendation;
 #[path = "../schema.rs"]
 mod schema;
+#[allow(dead_code)]
 #[path = "../session.rs"]
 mod session;
+#[allow(dead_code)]
 #[path = "../quality_scorer.rs"]
 mod quality_scorer;
+#[allow(dead_code)]
 #[path = "../runtime_verification.rs"]
 mod runtime_verification;
-#[path = "../project_scanner.rs"]
-mod project_scanner;
+#[allow(dead_code)]
 #[path = "../llm_gateway.rs"]
 mod llm_gateway;
+#[allow(dead_code)]
+#[path = "../project_scanner.rs"]
+mod project_scanner;
+#[allow(dead_code)]
 #[path = "../context_pruning.rs"]
 mod context_pruning;
 

@@ -45,6 +45,7 @@ impl AutomationProposal {
 // --- Template Engine ---
 
 pub struct Template {
+    #[allow(dead_code)]
     pub id: &'static str,
     pub title: &'static str,
     pub trigger_type: crate::pattern_detector::PatternType, // Filter by pattern type

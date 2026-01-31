@@ -2,7 +2,36 @@ use crate::applescript;
 use anyhow::Result;
 use serde_json;
 
+fn ensure_chrome_ready(url: Option<&str>) -> Result<()> {
+    let set_url = url
+        .map(|u| format!("set URL of active tab of front window to {}", format!("{:?}", u)))
+        .unwrap_or_default();
+    let script = format!(
+        r#"
+        tell application "Google Chrome"
+            if (count of windows) = 0 then
+                make new window
+            end if
+            {set_url}
+            activate
+        end tell
+    "#
+    );
+    applescript::run(&script).map_err(|err| {
+        anyhow::anyhow!(
+            "Chrome automation failed. Ensure Google Chrome is installed, running, and has Accessibility permissions. Details: {}",
+            err
+        )
+    })?;
+    Ok(())
+}
+
+pub fn open_url_in_chrome(url: &str) -> Result<()> {
+    ensure_chrome_ready(Some(url))
+}
+
 pub fn fill_flight_fields(from: &str, to: &str, date_start: &str, date_end: Option<&str>) -> Result<bool> {
+    ensure_chrome_ready(None)?;
     let values = serde_json::json!({
         "from": from,
         "to": to,
@@ -89,6 +118,7 @@ pub fn fill_flight_fields(from: &str, to: &str, date_start: &str, date_end: Opti
 }
 
 pub fn fill_search_query(query: &str) -> Result<bool> {
+    ensure_chrome_ready(None)?;
     let js = format!(
         r#"(() => {{
             const query = {query:?};
@@ -115,6 +145,7 @@ pub fn fill_search_query(query: &str) -> Result<bool> {
 }
 
 pub fn click_search_button() -> Result<bool> {
+    ensure_chrome_ready(None)?;
     let js = r#"(() => {
         const input = document.querySelector('input[name="query"], input[name="searchKeyword"], input[type="search"], input[id*="search"]');
         const form = input?.closest('form');
@@ -144,6 +175,7 @@ pub fn click_search_button() -> Result<bool> {
 }
 
 pub fn autofill_form(name: Option<&str>, email: Option<&str>, phone: Option<&str>, address: Option<&str>) -> Result<bool> {
+    ensure_chrome_ready(None)?;
     let js = format!(
         r#"(() => {{
             const values = {{
@@ -222,6 +254,7 @@ pub fn autofill_form(name: Option<&str>, email: Option<&str>, phone: Option<&str
 }
 
 pub fn get_page_context() -> Result<String> {
+    ensure_chrome_ready(None)?;
     let js = r#"(() => {
         const title = document.title || '';
         const url = location.href || '';
@@ -232,6 +265,7 @@ pub fn get_page_context() -> Result<String> {
 }
 
 pub fn scroll_page(pixels: i32) -> Result<bool> {
+    ensure_chrome_ready(None)?;
     let js = format!(
         r#"(() => {{
             window.scrollBy(0, {pixels});
@@ -243,6 +277,7 @@ pub fn scroll_page(pixels: i32) -> Result<bool> {
 }
 
 pub fn extract_flight_summary() -> Result<String> {
+    ensure_chrome_ready(None)?;
     let js = r#"(() => {
         const text = document.body?.innerText || '';
         const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -283,6 +318,7 @@ pub fn extract_flight_summary() -> Result<String> {
 }
 
 pub fn extract_shopping_summary() -> Result<String> {
+    ensure_chrome_ready(None)?;
     let js = r#"(() => {
         const text = document.body?.innerText || '';
         const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -309,4 +345,144 @@ pub fn extract_shopping_summary() -> Result<String> {
         return JSON.stringify({ prices, sellers });
     })()"#;
     applescript::execute_js_in_chrome(js)
+}
+
+pub fn apply_flight_filters(
+    budget_max: Option<&str>,
+    time_window: Option<&str>,
+    direct_only: Option<&str>,
+) -> Result<bool> {
+    ensure_chrome_ready(None)?;
+    let payload = serde_json::json!({
+        "budget_max": budget_max,
+        "time_window": time_window,
+        "direct_only": direct_only,
+    });
+    let payload_json = serde_json::to_string(&payload)?;
+    let js = format!(
+        r#"(() => {{
+            const params = {payload_json};
+            const budget = params.budget_max;
+            const timeWindow = params.time_window;
+            const directOnly = params.direct_only;
+            let actions = 0;
+            const normalize = (value) => (value || '').toString().toLowerCase();
+            const candidates = Array.from(document.querySelectorAll(
+                'button, [role="button"], [role="checkbox"], input[type="checkbox"], [role="menuitem"], [role="radio"]'
+            ));
+            const clickByTokens = (tokens) => {{
+                for (const node of candidates) {{
+                    const text = normalize(node.innerText || node.getAttribute('aria-label') || node.getAttribute('title') || '');
+                    if (!text) continue;
+                    if (tokens.some(token => text.includes(token))) {{
+                        node.click();
+                        actions += 1;
+                        return true;
+                    }}
+                }}
+                return false;
+            }};
+            if (directOnly && ['true','1','yes','y'].includes(normalize(directOnly))) {{
+                clickByTokens(['nonstop', 'direct', '직항']);
+            }}
+            if (timeWindow) {{
+                const key = normalize(timeWindow);
+                const tokensByKey = {{
+                    morning: ['morning', '오전', 'am'],
+                    afternoon: ['afternoon', '오후', 'pm'],
+                    evening: ['evening', 'night', '저녁', '밤'],
+                }};
+                const tokens = tokensByKey[key] || [key];
+                clickByTokens(tokens);
+            }}
+            if (budget) {{
+                const inputs = Array.from(document.querySelectorAll('input[type="number"], input[type="text"]'));
+                const priceInput = inputs.find(input => {{
+                    const label = normalize(input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || input.id || '');
+                    return label.includes('price') || label.includes('가격') || label.includes('max') || label.includes('최대');
+                }});
+                if (priceInput) {{
+                    priceInput.focus();
+                    const setter =
+                        Object.getOwnPropertyDescriptor(priceInput, 'value')?.set ||
+                        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(priceInput), 'value')?.set;
+                    if (setter) {{
+                        setter.call(priceInput, budget);
+                    }} else {{
+                        priceInput.value = budget;
+                    }}
+                    priceInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    priceInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    actions += 1;
+                }}
+            }}
+            return String(actions);
+        }})()"#
+    );
+    let res = applescript::execute_js_in_chrome(&js)?;
+    Ok(res.trim().parse::<i32>().unwrap_or(0) > 0)
+}
+
+pub fn apply_shopping_filters(
+    brand: Option<&str>,
+    price_min: Option<&str>,
+    price_max: Option<&str>,
+) -> Result<bool> {
+    ensure_chrome_ready(None)?;
+    let payload = serde_json::json!({
+        "brand": brand,
+        "price_min": price_min,
+        "price_max": price_max,
+    });
+    let payload_json = serde_json::to_string(&payload)?;
+    let js = format!(
+        r#"(() => {{
+            const params = {payload_json};
+            const brand = params.brand;
+            const priceMin = params.price_min;
+            const priceMax = params.price_max;
+            let actions = 0;
+            const normalize = (value) => (value || '').toString().toLowerCase();
+            const setValue = (input, value) => {{
+                if (!input || value == null) return false;
+                input.focus();
+                const setter =
+                    Object.getOwnPropertyDescriptor(input, 'value')?.set ||
+                    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set;
+                if (setter) {{
+                    setter.call(input, value);
+                }} else {{
+                    input.value = value;
+                }}
+                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return true;
+            }};
+            if (brand) {{
+                const brandNodes = Array.from(document.querySelectorAll('button, [role="button"], label, a, span'));
+                for (const node of brandNodes) {{
+                    const text = normalize(node.innerText || node.getAttribute('aria-label') || '');
+                    if (text && text.includes(normalize(brand))) {{
+                        node.click();
+                        actions += 1;
+                        break;
+                    }}
+                }}
+            }}
+            const inputs = Array.from(document.querySelectorAll('input[type="number"], input[type="text"]'));
+            const minInput = inputs.find(input => {{
+                const label = normalize(input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || input.id || '');
+                return label.includes('min') || label.includes('최소');
+            }});
+            const maxInput = inputs.find(input => {{
+                const label = normalize(input.getAttribute('aria-label') || input.getAttribute('placeholder') || input.name || input.id || '');
+                return label.includes('max') || label.includes('최대');
+            }});
+            if (setValue(minInput, priceMin)) actions += 1;
+            if (setValue(maxInput, priceMax)) actions += 1;
+            return String(actions);
+        }})()"#
+    );
+    let res = applescript::execute_js_in_chrome(&js)?;
+    Ok(res.trim().parse::<i32>().unwrap_or(0) > 0)
 }

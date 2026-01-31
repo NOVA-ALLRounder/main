@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Zap, Activity, Terminal, Pin } from "lucide-react"; // Added Pin icon
-import { sendChatMessage, approveRecommendation, agentIntent, agentPlan, agentExecute, agentVerify } from "@/lib/api";
+import { sendChatMessage, approveRecommendation, agentIntent, agentPlan, agentExecute, agentVerify, agentApprove } from "@/lib/api";
 import { useRecommendations } from "@/lib/hooks";
 import { emit } from "@tauri-apps/api/event"; // Added emit
 import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window"; // Added getAllWindows
@@ -10,6 +10,20 @@ import ReactMarkdown, { type Components } from "react-markdown"; // Added ReactM
 type LauncherResult = {
     type: "response" | "error";
     content: string;
+};
+
+type WindowWithTauriMeta = Window & {
+    __TAURI_METADATA__?: unknown;
+    __TAURI__?: { metadata?: unknown };
+    __TAURI_INTERNALS__?: { metadata?: unknown };
+};
+
+type ApprovalContext = {
+    planId: string;
+    action: string;
+    message: string;
+    riskLevel: string;
+    policy: string;
 };
 
 const markdownComponents: Components = {
@@ -36,6 +50,10 @@ export default function Launcher() {
     const [approvingIds, setApprovingIds] = useState<Set<number>>(new Set());
     const [approveErrors, setApproveErrors] = useState<Record<number, string>>({});
     const [approveCooldowns, setApproveCooldowns] = useState<Record<number, number>>({});
+    const [pendingApproval, setPendingApproval] = useState<ApprovalContext | null>(null);
+    const [approvalBusy, setApprovalBusy] = useState(false);
+    const [lastPlanId, setLastPlanId] = useState<string | null>(null);
+    const [lastStatus, setLastStatus] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const { data: recs, refetch } = useRecommendations();
@@ -109,6 +127,7 @@ export default function Launcher() {
         if (!input.trim()) return;
         setLoading(true);
         setResults([]);
+        setPendingApproval(null);
 
         // [Phase 6.3] Performance Test Command
         if (input.trim() === "test_perf") {
@@ -139,28 +158,57 @@ export default function Launcher() {
             }
 
             const planRes = await agentPlan(intentRes.session_id);
+            setLastPlanId(planRes.plan_id);
+            if (planRes.missing_slots?.length) {
+                setResults([{
+                    type: 'response',
+                    content: `**추가 입력 필요**\n- Missing: ${planRes.missing_slots.join(", ")}`
+                }]);
+                setLoading(false);
+                return;
+            }
             const execRes = await agentExecute(planRes.plan_id);
+            setLastStatus(execRes.status);
             const verifyRes = await agentVerify(planRes.plan_id);
 
             const summaryLines = [
                 `**Intent**: ${intentRes.intent} (${Math.round(intentRes.confidence * 100)}%)`,
                 `**Status**: ${execRes.status}`,
                 `**Verify**: ${verifyRes.ok ? "ok" : "issues"}`,
+                execRes.resume_from != null ? `**Next Step**: ${execRes.resume_from + 1}` : "",
             ];
             const logLines = execRes.logs?.slice(0, 10).map(line => `- ${line}`) ?? [];
             const verifyLines = verifyRes.issues?.length ? verifyRes.issues.map(i => `- ${i}`) : [];
+            const manualLines = execRes.manual_steps?.length
+                ? execRes.manual_steps.map(step => `- ${step}`)
+                : [];
+
+            if (execRes.status === "approval_required" && execRes.approval?.action) {
+                setPendingApproval({
+                    planId: planRes.plan_id,
+                    action: execRes.approval.action,
+                    message: execRes.approval.message,
+                    riskLevel: execRes.approval.risk_level,
+                    policy: execRes.approval.policy,
+                });
+            }
 
             setResults([{
                 type: 'response',
                 content: [
-                    summaryLines.join("\n"),
+                    summaryLines.filter(Boolean).join("\n"),
                     logLines.length ? `\n**Logs**\n${logLines.join("\n")}` : "",
-                    verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : ""
+                    verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : "",
+                    manualLines.length ? `\n**Manual Steps**\n${manualLines.join("\n")}` : "",
+                    execRes.status === "approval_required" && execRes.approval
+                        ? `\n**Approval Required**\n- Action: ${execRes.approval.action}\n- Risk: ${execRes.approval.risk_level}\n- Policy: ${execRes.approval.policy}\n- ${execRes.approval.message}`
+                        : ""
                 ].join("\n")
             }]);
             setInput("");
             triggerSuccess();
-        } catch (e) {
+        } catch (error) {
+            console.error("Launcher send failed", error);
             try {
                 const res = await sendChatMessage(input);
                 setResults([{ type: 'response', content: res.response }]);
@@ -172,6 +220,125 @@ export default function Launcher() {
             }
         } finally {
             setLoading(false);
+        }
+    };
+
+    const extractErrorMessage = (error: unknown) => {
+        if (typeof error === "string") return error;
+        if (error && typeof error === "object") {
+            const maybe = error as {
+                message?: unknown;
+                response?: { data?: { error?: unknown } };
+            };
+            const responseError = maybe.response?.data?.error;
+            if (typeof responseError === "string") return responseError;
+            if (typeof maybe.message === "string") return maybe.message;
+        }
+        return "Approve failed";
+    };
+
+    const handleResume = async () => {
+        if (!lastPlanId) return;
+        setLoading(true);
+        try {
+            const execRes = await agentExecute(lastPlanId);
+            setLastStatus(execRes.status);
+            const verifyRes = await agentVerify(lastPlanId);
+            const summaryLines = [
+                `**Status**: ${execRes.status}`,
+                `**Verify**: ${verifyRes.ok ? "ok" : "issues"}`,
+                execRes.resume_from != null ? `**Next Step**: ${execRes.resume_from + 1}` : "",
+            ];
+            const logLines = execRes.logs?.slice(0, 10).map(line => `- ${line}`) ?? [];
+            const verifyLines = verifyRes.issues?.length ? verifyRes.issues.map(i => `- ${i}`) : [];
+            const manualLines = execRes.manual_steps?.length
+                ? execRes.manual_steps.map(step => `- ${step}`)
+                : [];
+            if (execRes.status === "approval_required" && execRes.approval?.action) {
+                setPendingApproval({
+                    planId: lastPlanId,
+                    action: execRes.approval.action,
+                    message: execRes.approval.message,
+                    riskLevel: execRes.approval.risk_level,
+                    policy: execRes.approval.policy,
+                });
+            } else {
+                setPendingApproval(null);
+            }
+            setResults([{
+                type: 'response',
+                content: [
+                    summaryLines.filter(Boolean).join("\n"),
+                    logLines.length ? `\n**Logs**\n${logLines.join("\n")}` : "",
+                    verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : "",
+                    manualLines.length ? `\n**Manual Steps**\n${manualLines.join("\n")}` : ""
+                ].join("\n")
+            }]);
+            triggerSuccess();
+        } catch (error) {
+            console.error("Resume failed", error);
+            triggerError();
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleApprovalDecision = async (decision: "allow_once" | "allow_always" | "deny") => {
+        if (!pendingApproval) return;
+        setApprovalBusy(true);
+        try {
+            const approvalRes = await agentApprove(
+                pendingApproval.planId,
+                pendingApproval.action,
+                decision
+            );
+            if (decision === "deny" || approvalRes.status === "denied") {
+                setResults([{
+                    type: 'response',
+                    content: `**Approval Denied**\n- Action: ${pendingApproval.action}\n- Policy: ${approvalRes.policy}`
+                }]);
+                setPendingApproval(null);
+                triggerSuccess();
+                return;
+            }
+            const execRes = await agentExecute(pendingApproval.planId);
+            const verifyRes = await agentVerify(pendingApproval.planId);
+            const summaryLines = [
+                `**Status**: ${execRes.status}`,
+                `**Verify**: ${verifyRes.ok ? "ok" : "issues"}`,
+                execRes.resume_from != null ? `**Next Step**: ${execRes.resume_from + 1}` : "",
+            ];
+            const logLines = execRes.logs?.slice(0, 10).map(line => `- ${line}`) ?? [];
+            const verifyLines = verifyRes.issues?.length ? verifyRes.issues.map(i => `- ${i}`) : [];
+            const manualLines = execRes.manual_steps?.length
+                ? execRes.manual_steps.map(step => `- ${step}`)
+                : [];
+            if (execRes.status === "approval_required" && execRes.approval?.action) {
+                setPendingApproval({
+                    planId: pendingApproval.planId,
+                    action: execRes.approval.action,
+                    message: execRes.approval.message,
+                    riskLevel: execRes.approval.risk_level,
+                    policy: execRes.approval.policy,
+                });
+            } else {
+                setPendingApproval(null);
+            }
+            setResults([{
+                type: 'response',
+                content: [
+                    summaryLines.filter(Boolean).join("\n"),
+                    logLines.length ? `\n**Logs**\n${logLines.join("\n")}` : "",
+                    verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : "",
+                    manualLines.length ? `\n**Manual Steps**\n${manualLines.join("\n")}` : ""
+                ].join("\n")
+            }]);
+            triggerSuccess();
+        } catch (error) {
+            console.error("Approval flow failed", error);
+            triggerError();
+        } finally {
+            setApprovalBusy(false);
         }
     };
 
@@ -194,11 +361,8 @@ export default function Launcher() {
         } catch (e) {
             console.error("Approve failed", e);
             triggerError();
-            const raw =
-                (e as any)?.response?.data?.error ||
-                (e as any)?.message ||
-                "Approve failed";
-            setApproveErrors(prev => ({ ...prev, [id]: mapApproveError(String(raw)) }));
+            const raw = extractErrorMessage(e);
+            setApproveErrors(prev => ({ ...prev, [id]: mapApproveError(raw) }));
         } finally {
             setApprovingIds(prev => {
                 const next = new Set(prev);
@@ -257,9 +421,9 @@ export default function Launcher() {
         if (e.target === e.currentTarget) {
             try {
                 const tauriMeta =
-                    (window as any).__TAURI_METADATA__ ||
-                    (window as any).__TAURI__?.metadata ||
-                    (window as any).__TAURI_INTERNALS__?.metadata;
+                    (window as WindowWithTauriMeta).__TAURI_METADATA__ ||
+                    (window as WindowWithTauriMeta).__TAURI__?.metadata ||
+                    (window as WindowWithTauriMeta).__TAURI_INTERNALS__?.metadata;
                 if (tauriMeta) {
                     await getCurrentWindow().hide();
                 }
@@ -310,6 +474,66 @@ export default function Launcher() {
                         </button>
                     )}
                 </div>
+
+                {pendingApproval && (
+                    <div className="px-4 py-3 border-b border-white/5 bg-[#1b1b1b]">
+                        <div className="text-[11px] uppercase tracking-wider text-amber-400 font-semibold">
+                            Approval Required
+                        </div>
+                        <div className="text-sm text-gray-200 mt-1">
+                            Action: <span className="font-mono">{pendingApproval.action}</span>
+                        </div>
+                        <div className="text-xs text-gray-400">
+                            Risk: {pendingApproval.riskLevel} · Policy: {pendingApproval.policy}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                            {pendingApproval.message}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                                disabled={approvalBusy}
+                                onClick={() => handleApprovalDecision("allow_once")}
+                                className="text-xs px-3 py-1.5 rounded bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-50"
+                            >
+                                Approve once
+                            </button>
+                            <button
+                                disabled={approvalBusy}
+                                onClick={() => handleApprovalDecision("allow_always")}
+                                className="text-xs px-3 py-1.5 rounded bg-blue-500/20 text-blue-200 border border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-50"
+                            >
+                                Allow always
+                            </button>
+                            <button
+                                disabled={approvalBusy}
+                                onClick={() => handleApprovalDecision("deny")}
+                                className="text-xs px-3 py-1.5 rounded bg-rose-500/20 text-rose-200 border border-rose-500/40 hover:bg-rose-500/30 disabled:opacity-50"
+                            >
+                                Deny
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {lastStatus === "manual_required" && lastPlanId && !pendingApproval && (
+                    <div className="px-4 py-3 border-b border-white/5 bg-[#171717]">
+                        <div className="text-[11px] uppercase tracking-wider text-sky-400 font-semibold">
+                            Manual Step Needed
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">
+                            브라우저에서 수동 작업을 완료한 뒤 Resume을 눌러 다음 단계로 진행하세요.
+                        </div>
+                        <div className="mt-3">
+                            <button
+                                disabled={loading}
+                                onClick={handleResume}
+                                className="text-xs px-3 py-1.5 rounded bg-sky-500/20 text-sky-200 border border-sky-500/40 hover:bg-sky-500/30 disabled:opacity-50"
+                            >
+                                Resume
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Content Area */}
                 <div ref={scrollRef} className="bg-[#191919] min-h-[300px] max-h-[500px] overflow-y-auto">

@@ -101,6 +101,81 @@ Output ONLY valid JSON.
         Ok(action_json)
     }
 
+    /// Plan the next step using Vision (Screenshots) instead of DOM tree
+    pub async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
+        let system_prompt = r#"
+        You are an Autonomous GUI Agent.
+        Your goal is to achieve the user's objective on this computer.
+        
+        Look at the screenshot and the history of actions.
+        Decide the NEXT SINGLE ACTION to take.
+        
+        Available Actions (JSON):
+        1. Click Visual (Preferred for specific buttons): { "action": "click_visual", "description": "Blue 'Sign In' button in top right" }
+        2. Type (If an input field is FOCUSED): { "action": "type", "text": "my search query" }
+        3. Key Press (Enter, Esc, etc): { "action": "key", "key": "return" }
+        4. Scroll (If target not visible): { "action": "scroll", "direction": "down" }
+        5. Wait (If loading): { "action": "wait", "seconds": 2 }
+        6. Done (If goal achieved): { "action": "done" }
+        7. Fail (If stuck): { "action": "fail", "reason": "..." }
+        
+        CRITICAL: 
+        - If you see a popup/modal, close it or deal with it.
+        - If you need to search, click the search bar first, THEN type.
+        - Be precise in your visual descriptions.
+        
+        Output JSON ONLY.
+        "#;
+        
+        let history_str = if history.is_empty() {
+            "None".to_string()
+        } else {
+            history.join("\n- ")
+        };
+        let user_msg = format!("GOAL: {}\n\nHISTORY:\n- {}", goal, history_str);
+
+        let body = json!({
+            "model": "gpt-4o", 
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": user_msg },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", image_b64),
+                                "detail": "high" // Need details for text reading
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 300,
+            "response_format": { "type": "json_object" }
+        });
+
+        let res = self.client.post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Vision Planning API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        let content = res_json["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No content in LLM response"))?;
+
+        let action_json: Value = serde_json::from_str(content)?;
+        Ok(action_json)
+    }
+
     pub async fn analyze_routine(&self, logs: &[String]) -> Result<String> {
         if logs.is_empty() {
             return Ok("No data to analyze.".to_string());
@@ -355,6 +430,70 @@ Now output the CORRECTED JSON.
         Ok(content)
     }
 
+    /// Find coordinates of a UI element using Vision API
+    pub async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>> {
+        let system_prompt = r#"
+        You are a Screen Coordinate Locator.
+        Analyze the screenshot and find the generic center coordinates (x, y) of the UI element described by the user.
+        
+        Output JSON ONLY:
+        { "found": true, "x": 123, "y": 456 }
+        or
+        { "found": false }
+        
+        DO NOT output markdown or explanations.
+        "#;
+        
+        let user_msg = format!("Find this element: {}", element_description);
+
+        let body = json!({
+            "model": "gpt-4o", 
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": user_msg },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", image_b64)
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 100,
+            "response_format": { "type": "json_object" }
+        });
+
+        let res = self.client.post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Vision API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        let content = res_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("{}");
+
+        let parsed: Value = serde_json::from_str(content)?;
+        
+        if parsed["found"].as_bool().unwrap_or(false) {
+            let x = parsed["x"].as_i64().unwrap_or(0) as i32;
+            let y = parsed["y"].as_i64().unwrap_or(0) as i32;
+            Ok(Some((x, y)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String> {
         let body = json!({
             "model": "gpt-4o",
@@ -578,6 +717,7 @@ Output format: Just the intent description in 1-2 sentences.
     }
 
     /// Parse natural language input into a structured command
+    #[allow(dead_code)]
     pub async fn parse_intent(&self, user_input: &str) -> Result<Value> {
         self.parse_intent_with_history(user_input, &[]).await
     }
@@ -751,6 +891,7 @@ Guidelines:
 
 
     /// Proactively suggest a tech stack or approach for a goal (Transformers7 feature)
+    #[allow(dead_code)]
     pub async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
         let prompt = format!(
             "Analyze the goal and recommend a technical solution stack.\n\
@@ -790,6 +931,7 @@ Guidelines:
     }
 
     /// Run inference on Local LLM (Ollama)
+    #[allow(dead_code)]
     pub async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
         let model_name = model.unwrap_or("llama3"); // Default to llama3 or user pref
         

@@ -168,12 +168,11 @@ fn normalize_place(value: &str) -> String {
     {
         cleaned = cleaned[..idx].to_string();
     }
-    let mut lowered = cleaned.to_lowercase();
+    let lowered = cleaned.to_lowercase();
     let en_tokens = ["round trip", "one way", "flight", "flights", "ticket", "search"];
     for token in en_tokens {
         if let Some(idx) = lowered.find(token) {
             cleaned = cleaned[..idx].to_string();
-            lowered = cleaned.to_lowercase();
             break;
         }
     }

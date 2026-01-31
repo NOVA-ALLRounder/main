@@ -98,7 +98,7 @@ fn compute_decision(action: &str, plan: &Plan, consume_once: bool) -> ApprovalDe
         }
     }
 
-    let requires_approval = risk_level == "high";
+    let requires_approval = requires_approval(&risk_level);
     let status = if requires_approval { "pending" } else { "approved" };
     let message = if requires_approval {
         "Approval required before continuing".to_string()
@@ -113,6 +113,20 @@ fn compute_decision(action: &str, plan: &Plan, consume_once: bool) -> ApprovalDe
         risk_level,
         policy,
     }
+}
+
+fn requires_approval(risk_level: &str) -> bool {
+    if risk_level == "high" {
+        return true;
+    }
+    if risk_level == "medium" {
+        let flag = std::env::var("STEER_APPROVAL_REQUIRE_MEDIUM")
+            .ok()
+            .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        return flag;
+    }
+    false
 }
 
 fn contains_any(text: &str, keywords: &[&str]) -> bool {

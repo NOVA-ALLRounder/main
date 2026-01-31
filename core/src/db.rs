@@ -232,7 +232,7 @@ pub fn init() -> Result<()> {
     }
     
     // [Migration] Ensure 'evidence' column exists
-    if let Some(mut conn) = get_db_lock().as_mut() {
+    if let Some(conn) = get_db_lock().as_mut() {
         let _ = conn.execute("ALTER TABLE recommendations ADD COLUMN evidence TEXT DEFAULT '[]'", []);
         // [Migration] Phase 1 Context Enrichment
         let _ = conn.execute("ALTER TABLE events_v2 ADD COLUMN window_title TEXT", []);

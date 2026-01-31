@@ -38,5 +38,9 @@ This document summarizes the optional environment variables introduced across ph
 - `CHAT_ALLOWED_CHAT_TYPES`: Allowed chat types (comma-separated).
 - `CHAT_ALLOWED_SENDERS`: Allowed senders (comma-separated).
 
+## NL Automation
+- `STEER_NL_SESSION_TTL_SECONDS`: NL session TTL in seconds (default `3600`). Set `0` to disable cleanup.
+- `STEER_APPROVAL_REQUIRE_MEDIUM`: Require approval for medium-risk actions (default `false`).
+
 ## Notifications
 - `NOTIFY_POLICY_RULES`: JSON rules for notification gating (send_policy).

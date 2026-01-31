@@ -45,7 +45,7 @@ pub fn spawn(
         while let Some(log_json) = log_rx.recv().await {
             // [Pipeline Upgrade] Parse -> Sanitize -> Store V2
             // 1. Parse Event
-            if let Ok(mut event) = serde_json::from_str::<EventEnvelope>(&log_json) {
+            if let Ok(event) = serde_json::from_str::<EventEnvelope>(&log_json) {
                 
                 // 2. Apply Privacy Guard
                 if let Some(masked_event) = guard.apply(event) {

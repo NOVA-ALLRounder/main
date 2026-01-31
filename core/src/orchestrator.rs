@@ -2,9 +2,8 @@ use crate::llm_gateway::LLMClient;
 use crate::n8n_api::N8nApi;
 use crate::visual_driver::VisualDriver;
 use crate::project_scanner::ProjectScanner;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskType {
@@ -16,6 +15,7 @@ pub enum TaskType {
 
 pub struct Orchestrator {
     llm: LLMClient,
+    #[allow(dead_code)]
     n8n: N8nApi,
     // VisualDriver is stateless per run usually, but we can keep config here
 }

@@ -1,17 +1,18 @@
 use crate::executor;
 use crate::applescript;
-use std::thread;
-use std::time::Duration;
 use anyhow::{Context, Result};
 use std::process::Command;
 use std::fs;
 use base64::{Engine as _, engine::general_purpose};
+use image::io::Reader as ImageReader;
+use std::io::Cursor;
 
 #[derive(Debug, Clone)]
 pub enum UiAction {
     OpenUrl(String),
     Wait(u64), // Seconds
     Click(String), // Element description or AppleScript target
+    ClickVisual(String), // Vision-based click: "Click the blue submit button"
     Type(String),
     Scroll(String), // "down" | "up"
     ActivateApp(String), // "frontmost" or app name
@@ -58,11 +59,12 @@ impl VisualDriver {
         Self { steps: Vec::new() }
     }
 
-    /// Capture the entire primary screen and return Base64 encoded JPEG
-    pub fn capture_screen() -> Result<String> {
+    /// Capture the entire primary screen and return Base64 encoded JPEG (Optimized) + Scale Factor
+    pub fn capture_screen() -> Result<(String, f32)> {
         let uuid = uuid::Uuid::new_v4();
         let output_path = format!("/tmp/steer_vision_{}.jpg", uuid);
         
+        // 1. Capture High-Res Screenshot
         let status = Command::new("screencapture")
             .arg("-x")
             .arg("-t")
@@ -81,9 +83,31 @@ impl VisualDriver {
             
         // Cleanup immediately
         let _ = fs::remove_file(&output_path);
+
+        // 2. Optimization: Resize if too large
+        let img = image::load_from_memory(&image_data)
+            .context("Failed to load image for resizing")?;
+
+        let (orig_w, _orig_h) = (img.width(), img.height());
+        let max_dim = 1920u32;
+        let scale_factor = if orig_w > max_dim {
+            orig_w as f32 / max_dim as f32
+        } else {
+            1.0
+        };
+
+        let resized = if scale_factor > 1.0 {
+            img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle)
+        } else {
+            img
+        };
+
+        let mut buffer = Cursor::new(Vec::new());
+        resized.write_to(&mut buffer, image::ImageOutputFormat::Jpeg(80))
+            .context("Failed to encode resized image")?;
             
-        let b64 = general_purpose::STANDARD.encode(&image_data);
-        Ok(b64)
+        let b64 = general_purpose::STANDARD.encode(buffer.get_ref());
+        Ok((b64, scale_factor))
     }
 
     pub fn add_step(&mut self, step: SmartStep) -> &mut Self {
@@ -102,7 +126,7 @@ impl VisualDriver {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Brief pause before capture
         
         match Self::capture_screen() {
-            Ok(b64) => {
+            Ok((b64, _scale)) => { // Ignore scale for verification
                 let full_prompt = format!(
                     "Screen Verification Task.\nCondition to verify: '{}'.\nReply ONLY with 'YES' or 'NO'.",
                     prompt
@@ -225,6 +249,58 @@ impl VisualDriver {
                         Ok(Ok(Err(e))) => return Err(anyhow::anyhow!("Activate Failed: {}", e)),
                         Ok(Err(_)) => return Err(anyhow::anyhow!("Task Panic")),
                         Err(_) => return Err(anyhow::anyhow!("Activate Timed Out")),
+                    }
+                }
+                UiAction::ClickVisual(desc) => {
+                    println!("      👁️ Vision Click: Finding '{}'...", desc);
+                    if let Some(brain) = llm {
+                         match Self::capture_screen() {
+                            Ok((b64, scale)) => {
+                                match brain.find_element_coordinates(desc, &b64).await {
+                                    Ok(Some((x_raw, y_raw))) => {
+                                        // Apply scaling back to original screen size
+                                        let x = (x_raw as f32 * scale) as i32;
+                                        let y = (y_raw as f32 * scale) as i32;
+                                        println!("      🎯 LLM Target: ({}, {}) [Scaled x{:.2}]", x, y, scale);
+                                        
+                                        // [Phase 4] Hybrid Grounding (macOS only)
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            // Check if we hit a real element
+                                            use crate::macos::accessibility;
+                                            
+                                            // Try to find element at pos
+                                            if let Some((_sx, _sy)) = accessibility::get_element_center_at(x, y) {
+                                                println!("      🧲 Grounded: Valid UI Element confirmed at ({}, {})", x, y);
+                                                // Ideally we swap x, y with _sx, _sy if we implemented center calculation
+                                            } else {
+                                                println!("      ⚠️  Warning: No UI Element found at coordinates via Accessibility API.");
+                                            }
+                                        }
+
+                                        let script = format!("tell application \"System Events\" to click at {{{}, {}}}", x, y);
+                                        if let Err(e) = applescript::run(&script) {
+                                             println!("      ❌ Click visual script failed: {}", e);
+                                             if step.critical { return Err(anyhow::anyhow!("Visual Click execution failed")); }
+                                        }
+                                    },
+                                    Ok(None) => {
+                                        println!("      ⚠️ Element '{}' not found on screen.", desc);
+                                        if step.critical { return Err(anyhow::anyhow!("Visual Element not found")); }
+                                    },
+                                    Err(e) => {
+                                        println!("      ⚠️ LLM Vision Error: {}", e);
+                                        if step.critical { return Err(anyhow::anyhow!("Visual Click LLM error")); }
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                println!("      ❌ Screen capture failed: {}", e);
+                                if step.critical { return Err(anyhow::anyhow!("Screen capture failed")); }
+                            }
+                         }
+                    } else {
+                        println!("      ⚠️ No LLM client provided for Visual Click.");
                     }
                 }
             }

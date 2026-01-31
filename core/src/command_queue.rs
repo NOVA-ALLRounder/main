@@ -134,12 +134,14 @@ impl CommandQueue {
         }
     }
 
+    #[allow(dead_code)]
     async fn set_lane_concurrency(&self, lane: &str, max_concurrent: usize) {
         let mut lanes = self.lanes.lock().expect("command queue lock poisoned");
         let state = lanes.entry(lane.to_string()).or_insert_with(LaneState::new);
         state.max_concurrent = std::cmp::max(1, max_concurrent);
     }
 
+    #[allow(dead_code)]
     async fn get_lane_size(&self, lane: &str) -> usize {
         let lanes = self.lanes.lock().expect("command queue lock poisoned");
         lanes.get(lane).map(|s| s.queue.len() + s.active).unwrap_or(0)
@@ -150,6 +152,7 @@ lazy_static! {
     static ref COMMAND_QUEUE: Arc<CommandQueue> = Arc::new(CommandQueue::new());
 }
 
+#[allow(dead_code)]
 pub async fn enqueue_command(task: CommandTask) -> CommandResult {
     enqueue_command_in_lane("main", task, None).await
 }
@@ -163,10 +166,12 @@ pub async fn enqueue_command_in_lane(
     COMMAND_QUEUE.enqueue_in_lane(lane, task, warn_after).await
 }
 
+#[allow(dead_code)]
 pub async fn set_lane_concurrency(lane: &str, max_concurrent: usize) {
     COMMAND_QUEUE.set_lane_concurrency(lane, max_concurrent).await
 }
 
+#[allow(dead_code)]
 pub async fn get_lane_size(lane: &str) -> usize {
     COMMAND_QUEUE.get_lane_size(lane).await
 }

@@ -1,7 +1,7 @@
 use crate::schema::{EventEnvelope, PrivacyContext};
 use regex::Regex;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -9,6 +9,7 @@ type HmacSha256 = Hmac<Sha256>;
 
 pub struct PrivacyGuard {
     mask_keys: HashSet<String>,
+    #[allow(dead_code)]
     hash_keys: HashSet<String>,
     drop_keys: HashSet<String>,
     email_regex: Regex,

@@ -1,0 +1,63 @@
+pub mod schema;
+pub mod session;
+pub mod policy;
+pub mod llm_gateway;
+pub mod analyzer;
+pub mod db;
+pub mod notifier;
+pub mod monitor;
+pub mod applescript;
+pub mod n8n_api;
+pub mod dependency_check;
+pub mod scheduler;
+pub mod executor;
+pub mod visual_driver;
+pub mod integrations;
+pub mod recommendation;
+pub mod workflow_schema;
+pub mod pattern_detector;
+pub mod feedback_collector;
+pub mod api_server;
+pub mod orchestrator;
+pub mod privacy;
+pub mod memory;
+pub mod security;
+pub mod send_policy;
+pub mod chat_sanitize;
+pub mod shell_analysis;
+pub mod shell_actions;
+pub mod replan_templates;
+pub mod command_queue;
+pub mod context_pruning;
+pub mod tool_policy;
+pub mod project_scanner;
+pub mod runtime_verification;
+pub mod replanning_config;
+pub mod quality_scorer;
+pub mod chat_gate;
+pub mod visual_verification;
+pub mod semantic_verification;
+pub mod performance_verification;
+pub mod judgment;
+pub mod release_gate;
+pub mod tool_result_guard;
+pub mod consistency_check;
+pub mod static_checks;
+pub mod singleton_lock;
+pub mod nl_automation;
+pub mod intent_router;
+pub mod slot_filler;
+pub mod plan_builder;
+pub mod execution_controller;
+pub mod verification_engine;
+pub mod approval_gate;
+pub mod nl_store;
+pub mod browser_automation;
+pub mod dynamic_controller;
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+pub fn env_flag(key: &str) -> bool {
+    std::env::var(key).unwrap_or_default() == "1"
+}

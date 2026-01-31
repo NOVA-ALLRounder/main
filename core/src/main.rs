@@ -1,67 +1,25 @@
-mod schema;
-mod session; // Added
-mod policy;
-mod llm_gateway;
-mod analyzer;
-mod db;
-mod notifier;
-mod monitor;
-mod applescript;
-mod n8n_api;
-mod dependency_check;
-mod scheduler;
-mod executor; // Added
-mod visual_driver;
-mod integrations;
-mod recommendation;
-mod workflow_schema;
-mod pattern_detector;
-mod feedback_collector;
-mod api_server;
-mod orchestrator; // Added
-mod privacy;
-mod memory; // Added for RAG
-mod security; // Added for Phase 8
-mod send_policy;
-mod chat_sanitize;
-mod shell_analysis;
-mod shell_actions;
-mod replan_templates;
-mod command_queue;
-mod context_pruning;
-mod tool_policy;
-mod project_scanner;
-mod runtime_verification;
-mod replanning_config;
-mod quality_scorer;
-mod chat_gate;
-mod visual_verification;
-mod semantic_verification;
-mod performance_verification;
-mod judgment;
-mod release_gate;
-mod tool_result_guard;
-mod consistency_check;
-mod static_checks;
-mod singleton_lock;
-mod nl_automation;
-mod intent_router;
-mod slot_filler;
-mod plan_builder;
-mod execution_controller;
-mod verification_engine;
-mod approval_gate;
-mod nl_store;
-mod browser_automation;
-#[cfg(target_os = "macos")]
-mod macos;
+use local_os_agent::{
+    schema, session, policy, llm_gateway, analyzer, db, notifier, monitor, applescript,
+    n8n_api, dependency_check, scheduler, executor, visual_driver, integrations, recommendation,
+    workflow_schema, pattern_detector, feedback_collector, api_server, orchestrator, privacy,
+    memory, security, send_policy, chat_sanitize, shell_analysis, shell_actions, replan_templates,
+    command_queue, context_pruning, tool_policy, project_scanner, runtime_verification,
+    replanning_config, quality_scorer, chat_gate, visual_verification, semantic_verification,
+    performance_verification, judgment, release_gate, tool_result_guard, consistency_check,
+    static_checks, singleton_lock, nl_automation, intent_router, slot_filler, plan_builder,
+    execution_controller, verification_engine, approval_gate, nl_store, browser_automation,
+    dynamic_controller,
+    env_flag,
+};
 
-use crate::schema::{AgentAction, EventEnvelope};
+#[cfg(target_os = "macos")]
+use local_os_agent::macos;
+
+use local_os_agent::schema::{AgentAction, EventEnvelope};
 use chrono::Utc;
 use uuid::Uuid;
 use serde_json::json;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
-// use serde_json::json;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -807,6 +765,20 @@ async fn main() -> anyhow::Result<()> {
                     _ => println!("Unknown calendar subcommand. Use: today, week, add"),
                 }
             }
+            "surf" => {
+                if parts.len() < 2 { println!("Usage: surf <goal>"); continue; }
+                let goal = parts[1..].join(" ");
+                
+                if let Some(brain) = &llm_client {
+                    let controller = dynamic_controller::DynamicController::new(brain.clone());
+                    // Run concurrently to allow Ctrl+C? For now blocking is fine as it has internal timeout/loop
+                    if let Err(e) = controller.surf(&goal).await {
+                        println!("❌ Surf failed: {}", e);
+                    }
+                } else {
+                    println!("⚠️  LLM Client not available.");
+                }
+            }
             // Super Agent Mode (Unified Orchestrator)
             _ => {
                 if let Ok(orch) = orchestrator::Orchestrator::new().await {
@@ -825,9 +797,4 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn env_flag(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-}
+
