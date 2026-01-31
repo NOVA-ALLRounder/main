@@ -1,0 +1,30 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Swift
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Secrets & Config
+core/credentials.json
+core/.env
+.env
+*.env
+
+# Logs
+*.log
+**/*.log
+behavior_test_output.txt
+
+# Database
+*.db
+core/steer.db
+
+# Dependencies
+node_modules/
+dist/
+build/
