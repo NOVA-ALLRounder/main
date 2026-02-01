@@ -26,7 +26,7 @@ pub async fn verify_screen(llm: &LLMClient, req: VisualVerifyRequest) -> Result<
         return Ok(VisualVerifyResult { ok: true, verdicts: vec![] });
     }
 
-    let b64 = VisualDriver::capture_screen()?;
+    let (b64, _scale) = VisualDriver::capture_screen()?;
     let mut verdicts = Vec::new();
 
     for prompt in req.prompts {

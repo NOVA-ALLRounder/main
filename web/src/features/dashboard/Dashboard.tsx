@@ -22,8 +22,8 @@ const cardVariants = {
 
 export default function Dashboard() {
     // Keep the data stability fixes (isError ignored, placeholderData in hooks)
-    const { data: status, isFetching } = useSystemStatus();
-    const { data: logs, isLoading: logsLoading } = useLogs();
+    const { data: status, isFetching, isError: statusError } = useSystemStatus();
+    const { data: logs, isLoading: logsLoading, isError: logsError } = useLogs();
     const { data: verificationRuns } = useVerificationRuns(20);
     const { data: routines } = useRoutines();
     const { data: recMetrics } = useRecommendationMetrics();
@@ -33,6 +33,7 @@ export default function Dashboard() {
     const [runStatusFilter, setRunStatusFilter] = useState<"all" | "ok" | "fail">("all");
 
     const activeRoutinesCount = routines?.filter(r => r.enabled).length ?? 0;
+    const isOffline = statusError || logsError;
 
     // Use stable values
     const cpuValue = status?.cpu_usage?.toFixed(1) ?? "0";
@@ -73,10 +74,10 @@ export default function Dashboard() {
                         <RefreshCw className="w-4 h-4 animate-spin text-muted-foreground" />
                     )}
                     <span className="relative flex h-3 w-3">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isOffline ? "bg-red-400" : "bg-green-400"} opacity-75`}></span>
+                        <span className={`relative inline-flex rounded-full h-3 w-3 ${isOffline ? "bg-red-500" : "bg-green-500"}`}></span>
                     </span>
-                    <span className="text-sm text-muted-foreground font-mono">Live</span>
+                    <span className="text-sm text-muted-foreground font-mono">{isOffline ? "Offline" : "Live"}</span>
                 </div>
             </motion.div>
 
@@ -86,6 +87,15 @@ export default function Dashboard() {
                 initial="hidden"
                 animate="visible"
             >
+                {isOffline && (
+                    <motion.div variants={cardVariants}>
+                        <Card className="border-amber-400/30 bg-amber-500/10">
+                            <CardContent className="p-4 text-sm text-amber-200">
+                                API unreachable. Check that the core server is running on localhost:5680.
+                            </CardContent>
+                        </Card>
+                    </motion.div>
+                )}
                 <ControlCard />
                 <NaturalLanguageAutomationCard />
                 {/* <RecommendationsCard /> */}

@@ -1,24 +1,4 @@
-#[path = "../db.rs"]
-mod db;
-#[path = "../pattern_detector.rs"]
-mod pattern_detector;
-#[path = "../recommendation.rs"]
-mod recommendation;
-#[path = "../schema.rs"]
-mod schema;
-#[path = "../session.rs"]
-mod session;
-#[path = "../quality_scorer.rs"]
-mod quality_scorer;
-#[path = "../runtime_verification.rs"]
-mod runtime_verification;
-#[path = "../project_scanner.rs"]
-mod project_scanner;
-#[path = "../llm_gateway.rs"]
-mod llm_gateway;
-#[path = "../context_pruning.rs"]
-mod context_pruning;
-
+use local_os_agent::{db, pattern_detector, recommendation, schema};
 use chrono::Utc;
 use recommendation::TemplateMatcher;
 use schema::{EventEnvelope, ResourceContext};

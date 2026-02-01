@@ -4,6 +4,7 @@ use std::collections::HashMap;
 pub struct ReplanStrategy {
     pub stop: bool,
     pub reason: &'static str,
+    #[allow(dead_code)]
     pub severity: &'static str,
     pub fix_hint: Option<&'static str>,
 }

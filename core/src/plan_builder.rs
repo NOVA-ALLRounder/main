@@ -37,7 +37,7 @@ pub fn build_plan(intent: &IntentType, slots: &SlotMap) -> Plan {
             steps.push(step(
                 StepType::Select,
                 "Apply filters",
-                json!({"budget": slots.get("budget_max"), "time_window": slots.get("time_window"), "direct_only": slots.get("direct_only"), "auto": false}),
+                json!({"budget": slots.get("budget_max"), "time_window": slots.get("time_window"), "direct_only": slots.get("direct_only"), "auto": true}),
             ));
             steps.push(step(
                 StepType::Extract,
@@ -75,7 +75,7 @@ pub fn build_plan(intent: &IntentType, slots: &SlotMap) -> Plan {
             steps.push(step(
                 StepType::Select,
                 "Apply filters",
-                json!({"brand": slots.get("brand"), "price_min": slots.get("price_min"), "price_max": slots.get("price_max"), "auto": false}),
+                json!({"brand": slots.get("brand"), "price_min": slots.get("price_min"), "price_max": slots.get("price_max"), "auto": true}),
             ));
             steps.push(step(
                 StepType::Extract,

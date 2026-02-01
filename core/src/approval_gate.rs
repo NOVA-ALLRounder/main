@@ -98,7 +98,7 @@ fn compute_decision(action: &str, plan: &Plan, consume_once: bool) -> ApprovalDe
         }
     }
 
-    let requires_approval = risk_level == "high";
+    let requires_approval = requires_approval(&risk_level);
     let status = if requires_approval { "pending" } else { "approved" };
     let message = if requires_approval {
         "Approval required before continuing".to_string()
@@ -113,6 +113,20 @@ fn compute_decision(action: &str, plan: &Plan, consume_once: bool) -> ApprovalDe
         risk_level,
         policy,
     }
+}
+
+fn requires_approval(risk_level: &str) -> bool {
+    if risk_level == "high" {
+        return true;
+    }
+    if risk_level == "medium" {
+        let flag = std::env::var("STEER_APPROVAL_REQUIRE_MEDIUM")
+            .ok()
+            .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        return flag;
+    }
+    false
 }
 
 fn contains_any(text: &str, keywords: &[&str]) -> bool {
@@ -147,3 +161,58 @@ fn risk_level(action: &str, plan: &Plan) -> String {
 fn policy_key(action: &str, plan: &Plan) -> String {
     format!("{}::{}", plan.intent.as_str(), action.to_lowercase())
 }
+
+// ============================================================================
+// [Phase 28] Quick Approval UI Helpers
+// ============================================================================
+
+/// Quick 1-click approval from UI
+pub fn quick_approve(pending_id: &str) -> Result<String, String> {
+    // Parse the pending ID format: "intent::action"
+    let parts: Vec<&str> = pending_id.split("::").collect();
+    if parts.len() != 2 {
+        return Err("Invalid pending ID format".to_string());
+    }
+    
+    // Register as allow_once
+    let key = pending_id.to_string();
+    if let Ok(mut store) = POLICY_STORE.lock() {
+        let entry = store.allow_once.entry(key.clone()).or_insert(0);
+        *entry += 1;
+    }
+    Ok(format!("Approved: {}", pending_id))
+}
+
+/// Quick deny from UI
+pub fn quick_deny(pending_id: &str) -> Result<String, String> {
+    let _ = db::upsert_approval_policy(pending_id, "deny_always");
+    Ok(format!("Denied: {}", pending_id))
+}
+
+/// Get all pending approvals for UI display
+pub fn get_pending_approvals() -> Vec<PendingApproval> {
+    let mut pending = Vec::new();
+    
+    // Check in-memory pending items (actions that are currently blocked)
+    if let Ok(store) = POLICY_STORE.lock() {
+        for (key, _count) in store.allow_once.iter() {
+            pending.push(PendingApproval {
+                id: key.clone(),
+                action: key.split("::").last().unwrap_or("").to_string(),
+                risk_level: "medium".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+    }
+    
+    pending
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PendingApproval {
+    pub id: String,
+    pub action: String,
+    pub risk_level: String,
+    pub created_at: String,
+}
+

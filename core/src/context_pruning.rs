@@ -1,6 +1,5 @@
 use crate::db::ChatMessage;
 use chrono::{DateTime, Local, TimeZone, Utc};
-use std::sync::Mutex;
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -175,6 +174,7 @@ impl SessionResetConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn prunes_to_max_messages() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CONTEXT_PRUNE_MAX_MESSAGES", "2");
         std::env::remove_var("CONTEXT_PRUNE_TTL_SECONDS");
 
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn prunes_by_ttl() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CONTEXT_PRUNE_MAX_MESSAGES", "10");
         std::env::set_var("CONTEXT_PRUNE_TTL_SECONDS", "1");
         std::env::set_var("SESSION_RESET_MODE", "off");
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn prunes_by_idle_reset() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CONTEXT_PRUNE_MAX_MESSAGES", "10");
         std::env::remove_var("CONTEXT_PRUNE_TTL_SECONDS");
         std::env::set_var("SESSION_RESET_MODE", "idle");

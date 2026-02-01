@@ -221,6 +221,17 @@ export const AgentPlanResponseSchema = z.object({
 export const AgentExecuteResponseSchema = z.object({
     status: z.string(),
     logs: z.array(z.string()),
+    approval: z
+        .object({
+            action: z.string(),
+            message: z.string(),
+            risk_level: z.string(),
+            policy: z.string(),
+        })
+        .nullable()
+        .optional(),
+    manual_steps: z.array(z.string()).optional().default([]),
+    resume_from: z.number().optional().nullable(),
 });
 
 export const AgentVerifyResponseSchema = z.object({

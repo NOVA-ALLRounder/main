@@ -50,3 +50,31 @@ pub fn verify_plan(plan: &Plan) -> VerificationResult {
         issues,
     }
 }
+
+pub fn verify_execution(plan: &Plan, logs: &[String]) -> VerificationResult {
+    let base = verify_plan(plan);
+    let mut issues = base.issues;
+    let has_summary = logs.iter().any(|line| line.starts_with("Summary: "));
+    let has_manual = logs.iter().any(|line| line.to_lowercase().contains("manual input"));
+    let has_blocked = logs.iter().any(|line| line.to_lowercase().contains("blocked"));
+
+    if matches!(
+        plan.intent,
+        crate::nl_automation::IntentType::FlightSearch
+            | crate::nl_automation::IntentType::ShoppingCompare
+    ) && !has_summary
+    {
+        issues.push("No summary extracted".to_string());
+    }
+    if has_manual {
+        issues.push("Manual input required during execution".to_string());
+    }
+    if has_blocked {
+        issues.push("Execution blocked by policy".to_string());
+    }
+
+    VerificationResult {
+        ok: issues.is_empty(),
+        issues,
+    }
+}

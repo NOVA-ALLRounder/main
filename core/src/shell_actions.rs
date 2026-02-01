@@ -235,6 +235,7 @@ fn resolve_path(workdir: &str, path: &str) -> std::path::PathBuf {
     }
 }
 
+#[allow(dead_code)]
 pub fn should_block_shell(command: &str) -> Option<&'static str> {
     let analysis = shell_analysis::analyze_shell_command(command);
     if analysis.has_substitution {

@@ -14,15 +14,21 @@ const queryClient = new QueryClient({
 })
 
 function App() {
+  type WindowWithTauriMeta = Window & {
+    __TAURI_METADATA__?: unknown
+    __TAURI__?: { metadata?: unknown }
+    __TAURI_INTERNALS__?: { metadata?: unknown }
+  }
+
   const isWidget = (() => {
     if (typeof window === 'undefined') {
       return false
     }
 
     const tauriMeta =
-      (window as any).__TAURI_METADATA__ ||
-      (window as any).__TAURI__?.metadata ||
-      (window as any).__TAURI_INTERNALS__?.metadata
+      (window as WindowWithTauriMeta).__TAURI_METADATA__ ||
+      (window as WindowWithTauriMeta).__TAURI__?.metadata ||
+      (window as WindowWithTauriMeta).__TAURI_INTERNALS__?.metadata
 
     if (!tauriMeta) {
       return false

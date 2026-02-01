@@ -82,6 +82,10 @@ pub struct AgentExecuteRequest {
 pub struct AgentExecuteResponse {
     pub status: String,
     pub logs: Vec<String>,
+    pub approval: Option<crate::nl_automation::ApprovalContext>,
+    #[serde(default)]
+    pub manual_steps: Vec<String>,
+    pub resume_from: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -269,6 +273,29 @@ pub struct QualityMetrics {
 }
 
 /// Start the HTTP API server for desktop GUI
+// Middleware for API Key Authentication
+async fn auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let api_key = std::env::var("STEER_API_KEY").unwrap_or_default();
+    
+    // If no key configured, allow all (Localhost Dev Mode)
+    if api_key.is_empty() {
+        return Ok(next.run(req).await);
+    }
+
+    // Check Header
+    let auth_header = req.headers().get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.replace("Bearer ", ""));
+        
+    match auth_header {
+        Some(key) if key == api_key => Ok(next.run(req).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
 /// Start the HTTP API server for desktop GUI
 pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> anyhow::Result<()> {
     let state = AppState {
@@ -294,10 +321,12 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/api/health", get(health_check))
-        .route("/events", post(ingest_events)) // Replaces Python Ingest
+        // Open endpoints (Status, Logs)
         .route("/api/status", get(get_system_status))
         .route("/api/logs", get(get_recent_logs))
         .route("/api/system/health", get(get_system_health))
+        // Protected Endpoints (Chat, Execute, Plan, Verify)
+        .route("/events", post(ingest_events))
         .route("/api/chat", post(handle_chat))
         .route("/api/recommendations", get(list_recommendations))
         .route("/api/recommendations/:id/approve", post(approve_recommendation))
@@ -324,7 +353,6 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
         .route("/api/quality/score", post(score_quality_handler))
         .route("/api/quality/latest", get(latest_quality_handler))
         .route("/api/patterns/analyze", post(analyze_patterns))
-        //.route("/api/patterns/analyze", post(analyze_patterns)) // Removed duplicate
         .route("/api/quality", get(get_quality_metrics))
         .route("/api/recommendations/metrics", get(get_recommendation_metrics))
         .route("/api/routines", get(list_routines).post(create_routine_handler))
@@ -348,7 +376,8 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
         .route("/api/agent/goal", post(execute_goal_handler))
         .route("/api/agent/goal/current", get(get_current_goal))
         .route("/api/agent/feedback", post(handle_feedback))
-        .route("/api/context/selection", get(get_selection_context)) // New Endpoint
+        .route("/api/context/selection", get(get_selection_context))
+        .layer(axum::middleware::from_fn(auth_middleware)) // Apply Auth Middleware
         .layer(cors)
         .with_state(state);
 
@@ -777,7 +806,7 @@ async fn handle_chat(
     if message.trim() == "/capture" || message.contains("화면 분석해줘") || message.contains("analyze screen") {
          if let Some(llm) = &state.llm_client {
              match crate::visual_driver::VisualDriver::capture_screen() {
-                 Ok(b64) => {
+                 Ok((b64, _scale)) => {
                      let prompt = "Describe what is on the user's screen briefly. Identify active applications and context.";
                      match llm.analyze_screen(prompt, &b64).await {
                          Ok(desc) => return Json(ChatResponse { response: format!("👁️ 화면 분석 결과:\n{}", desc), command: None }),
@@ -1649,8 +1678,18 @@ async fn agent_execute_handler(
             .into_response();
     };
 
-    let mut result = execution_controller::execute_plan(&plan).await;
-    let verify = verification_engine::verify_plan(&plan);
+    let mut resume_from = nl_store::get_plan_progress(&plan.plan_id).unwrap_or(0);
+    if resume_from >= plan.steps.len() {
+        nl_store::clear_plan_progress(&plan.plan_id);
+        resume_from = 0;
+    }
+    let mut result = execution_controller::execute_plan(&plan, resume_from).await;
+    if resume_from > 0 {
+        result
+            .logs
+            .insert(0, format!("Resuming from step {}", resume_from + 1));
+    }
+    let mut verify = verification_engine::verify_execution(&plan, &result.logs);
     if !verify.ok {
         result.logs.push(format!("Verification failed: {}", verify.issues.join("; ")));
     } else {
@@ -1662,12 +1701,32 @@ async fn agent_execute_handler(
         .ok()
         .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(true);
-    if auto_replan && (result.status == "error" || result.status == "manual_required" || !verify.ok) {
+    let allow_replan = !matches!(result.status.as_str(), "manual_required" | "approval_required");
+    if auto_replan && allow_replan && (result.status == "error" || !verify.ok) {
         result.logs.push("Auto-replan: retrying once after short wait".to_string());
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let retry = execution_controller::execute_plan(&plan).await;
-        result.logs.extend(retry.logs);
+        let retry = execution_controller::execute_plan(&plan, 0).await;
+        result.logs = retry.logs;
         result.status = retry.status;
+        result.approval = retry.approval;
+        result.manual_steps = retry.manual_steps;
+        result.resume_from = retry.resume_from;
+        verify = verification_engine::verify_execution(&plan, &result.logs);
+        if !verify.ok {
+            result
+                .logs
+                .push(format!("Verification failed: {}", verify.issues.join("; ")));
+        } else {
+            result.logs.push("Verification passed".to_string());
+        }
+    }
+
+    if matches!(result.status.as_str(), "manual_required" | "approval_required") {
+        if let Some(next_step) = result.resume_from {
+            nl_store::set_plan_progress(&plan.plan_id, next_step);
+        }
+    } else {
+        nl_store::clear_plan_progress(&plan.plan_id);
     }
     let session = nl_store::find_session_by_plan(&payload.plan_id);
     let summary = extract_summary(&result.logs);
@@ -1683,6 +1742,9 @@ async fn agent_execute_handler(
     let response = AgentExecuteResponse {
         status: result.status,
         logs: result.logs,
+        approval: result.approval,
+        manual_steps: result.manual_steps,
+        resume_from: result.resume_from,
     };
 
     (StatusCode::OK, Json(response)).into_response()

@@ -6,6 +6,10 @@ use std::env;
 use crate::recommendation::AutomationProposal;
 use crate::context_pruning;
 
+
+use std::time::Duration;
+use tokio::time::sleep;
+
 #[derive(Clone)]
 pub struct LLMClient {
     client: Client,
@@ -14,18 +18,60 @@ pub struct LLMClient {
 }
 
 impl LLMClient {
+
     pub fn new() -> Result<Self> {
         dotenv::dotenv().ok(); // Load .env
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set in .env"))?;
         let client = Client::builder()
             .no_proxy()
+            .timeout(Duration::from_secs(120))         // [Fix] Total request timeout
+            .connect_timeout(Duration::from_secs(10))  // [Fix] Connection timeout
             .build()?;
         
         Ok(Self {
             client,
             api_key,
-            model: "gpt-4o".to_string(), // Use a smart model for planning
+            model: "gpt-4o".to_string(),
         })
+    }
+
+    /// Internal helper for robust API calls (Retry Logic)
+    async fn post_with_retry(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+        let max_retries = 3;
+        let mut attempt = 0;
+        let mut backoff = Duration::from_secs(1);
+
+        loop {
+            attempt += 1;
+            match self.client.post(url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(body)
+                .send()
+                .await 
+            {
+                Ok(resp) => {
+                    if resp.status().is_server_error() || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        // Retry on 5xx or 429
+                        if attempt > max_retries {
+                            return Ok(resp); // Return the error response after max retries
+                        }
+                    } else {
+                        // Success or client error (4xx) - don't retry 4xx (except 429)
+                        return Ok(resp);
+                    }
+                },
+                Err(e) => {
+                    // Network error
+                    if attempt > max_retries {
+                        return Err(anyhow::anyhow!("Max retries exceeded: {}", e));
+                    }
+                    eprintln!("⚠️ LLM Network Error (Attempt {}/{}): {}. Retrying in {:?}...", attempt, max_retries, e, backoff);
+                }
+            }
+
+            sleep(backoff).await;
+            backoff *= 2; // Exponential backoff (1s, 2s, 4s)
+        }
     }
 
     #[allow(dead_code)]
@@ -82,11 +128,7 @@ Output ONLY valid JSON.
             "temperature": 0.0
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -94,10 +136,144 @@ Output ONLY valid JSON.
         }
 
         let body: Value = response.json().await?;
-        let content_str = body["choices"][0]["message"]["content"].as_str()
-            .ok_or_else(|| anyhow::anyhow!("No content in LLM response"))?;
-            
+        let content_opt = body["choices"][0]["message"]["content"].as_str();
+
+        let content_str = match content_opt {
+            Some(c) => c,
+            None => {
+                // Log the full body to debug "No content" error
+                let body_str = serde_json::to_string_pretty(&body).unwrap_or_default();
+                return Err(anyhow::anyhow!("No content in LLM response. Raw Body: {}", body_str));
+            }
+        };
         let action_json: Value = serde_json::from_str(content_str)?;
+        Ok(action_json)
+    }
+
+    /// Generic Chat Completion (for Architect/Chat features)
+    pub async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
+        let body = json!({
+            "model": self.model,
+            "messages": messages
+        });
+
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Chat Completion API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        let content = res_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        Ok(content)
+    }
+
+    /// Plan the next step using Vision (Screenshots) instead of DOM tree
+    pub async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
+
+        let system_prompt = format!(r#"
+        You are a QA Test Automation Agent verifying UI functionality on a local test environment.
+        The user is running a standard UI test suite.
+        Your job is to generate the next mouse/keyboard event to proceed with the test case.
+        
+        CURRENT TEST CASE: "{}"
+        
+        Look at the screenshot and the history of actions.
+        Decide the NEXT SINGLE ACTION to take.
+        
+        Available Actions (JSON):
+        1. Click Visual (Preferred for specific buttons): {{ "action": "click_visual", "description": "Blue 'Sign In' button in top right" }}
+        2. Type (If an input field is FOCUSED): {{ "action": "type", "text": "my search query" }}
+        3. Key Press (Enter, Esc, etc): {{ "action": "key", "key": "return" }}
+        4. Scroll (If target not visible): {{ "action": "scroll", "direction": "down" }}
+        5. Wait (If loading): {{ "action": "wait", "seconds": 2 }}
+        6. Read (OCR/Scrape): {{ "action": "read", "query": "..." }}
+        7. Save Routine (Macro): {{ "action": "save_routine", "name": "routine_name" }}
+        8. Replay Routine (Macro): {{ "action": "replay_routine", "name": "routine_name" }}
+        9. Done (If goal achieved): {{ "action": "done" }}
+        10. Fail (If stuck): {{ "action": "fail", "reason": "..." }}
+        11. Reply (ONLY for pure conversation): {{ "action": "reply", "text": "..." }}
+        12. Open App (Focus/Launch): {{ "action": "open_app", "name": "Calculator" }}
+        13. Open URL (Web): {{ "action": "open_url", "url": "https://mail.google.com" }}
+        14. Read File (Direct I/O): {{ "action": "read_file", "path": "/Users/user/Documents/report.xlsx" }}
+        
+        CRITICAL RULES:
+        1. If the user asks you to DO something (e.g., "Open Calculator", "Search for X", "Click Y"), you MUST use 'key', 'type', or 'click_visual'. Do NOT use 'reply'.
+        2. To open an app (like Calculator), use Spotlight: 
+           - Step 1: {{ "action": "key", "key": "command+space" }}
+           - Step 2: {{ "action": "type", "text": "Calculator" }}
+           - Step 3: {{ "action": "key", "key": "enter" }}
+        3. Only use 'reply' if the user says "Hello" or asks a philosophical question.
+        4. If you see a popup/modal blocking you, close it using 'key' (escape/enter).
+        5. **Start/Focus App**: To open or focus an app cleanly, use: {{ "action": "open_app", "name": "App Name" }} (preferred over Spotlight for known apps).
+        - If you need to search, click the search bar first, THEN type.
+        - Be precise in your visual descriptions.
+        "#, goal);
+        
+        let history_str = if history.is_empty() {
+            "None".to_string()
+        } else {
+            history.join("\n- ")
+        };
+        let user_msg = format!("GOAL: {}\n\nHISTORY:\n- {}", goal, history_str);
+
+        let body = json!({
+            "model": "gpt-4o", 
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": user_msg },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", image_b64),
+                                "detail": "high" // Need details for text reading
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 300,
+            "response_format": { "type": "json_object" }
+        });
+
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Vision Planning API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        
+        // Handle Refusal (Safety Filter)
+        if let Some(refusal) = res_json["choices"][0]["message"]["refusal"].as_str() {
+             return Err(anyhow::anyhow!("LLM Refused (Safety): {}", refusal));
+        }
+
+        let content_opt = res_json["choices"][0]["message"]["content"].as_str();
+        let content = match content_opt {
+            Some(c) => c,
+            None => {
+                let body_str = serde_json::to_string_pretty(&res_json).unwrap_or_default();
+                return Err(anyhow::anyhow!("No content in Vision LLM response. Raw Body: {}", body_str));
+            }
+        };
+
+        // Sanitize content (sometimes it adds markdown code blocks)
+        let clean_content = content.trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```");
+
+        let action_json: Value = serde_json::from_str(clean_content)?;
         Ok(action_json)
     }
 
@@ -131,11 +307,7 @@ Output ONLY valid JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -187,11 +359,7 @@ Output ONLY valid JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -251,11 +419,7 @@ You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflo
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -298,11 +462,7 @@ Now output the CORRECTED JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -335,11 +495,7 @@ Now output the CORRECTED JSON.
             "max_tokens": 500
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         
@@ -355,6 +511,66 @@ Now output the CORRECTED JSON.
         Ok(content)
     }
 
+    /// Find coordinates of a UI element using Vision API
+    pub async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>> {
+        let system_prompt = r#"
+        You are a Screen Coordinate Locator.
+        Analyze the screenshot and find the generic center coordinates (x, y) of the UI element described by the user.
+        
+        Output JSON ONLY:
+        { "found": true, "x": 123, "y": 456 }
+        or
+        { "found": false }
+        
+        DO NOT output markdown or explanations.
+        "#;
+        
+        let user_msg = format!("Find this element: {}", element_description);
+
+        let body = json!({
+            "model": "gpt-4o", 
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": user_msg },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:image/jpeg;base64,{}", image_b64)
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 100,
+            "response_format": { "type": "json_object" }
+        });
+
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Vision API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        let content = res_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("{}");
+
+        let parsed: Value = serde_json::from_str(content)?;
+        
+        if parsed["found"].as_bool().unwrap_or(false) {
+            let x = parsed["x"].as_i64().unwrap_or(0) as i32;
+            let y = parsed["y"].as_i64().unwrap_or(0) as i32;
+            Ok(Some((x, y)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String> {
         let body = json!({
             "model": "gpt-4o",
@@ -366,11 +582,7 @@ Now output the CORRECTED JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -510,11 +722,7 @@ Your goal is to detect Repetitive Manual Work (Toil) from user logs and propose 
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -559,11 +767,7 @@ Output format: Just the intent description in 1-2 sentences.
             "temperature": 0.3
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -578,6 +782,7 @@ Output format: Just the intent description in 1-2 sentences.
     }
 
     /// Parse natural language input into a structured command
+    #[allow(dead_code)]
     pub async fn parse_intent(&self, user_input: &str) -> Result<Value> {
         self.parse_intent_with_history(user_input, &[]).await
     }
@@ -632,11 +837,7 @@ Return JSON only:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -659,11 +860,7 @@ Return JSON only:
             //"dimensions": 1536 // Default
         });
 
-        let response = self.client.post("https://api.openai.com/v1/embeddings")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/embeddings", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -718,11 +915,7 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -751,6 +944,7 @@ Guidelines:
 
 
     /// Proactively suggest a tech stack or approach for a goal (Transformers7 feature)
+    #[allow(dead_code)]
     pub async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
         let prompt = format!(
             "Analyze the goal and recommend a technical solution stack.\n\
@@ -774,11 +968,7 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -790,6 +980,7 @@ Guidelines:
     }
 
     /// Run inference on Local LLM (Ollama)
+    #[allow(dead_code)]
     pub async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
         let model_name = model.unwrap_or("llama3"); // Default to llama3 or user pref
         
@@ -898,4 +1089,63 @@ Guidelines:
 pub struct FeedbackAnalysis {
     pub action: String,
     pub new_goal: Option<String>,
+}
+
+/// [Phase 28] Streaming Chat Completion
+/// Returns chunks via callback for real-time UI updates
+impl LLMClient {
+    pub async fn chat_completion_stream<F>(
+        &self,
+        messages: Vec<Value>,
+        mut on_chunk: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        use futures::StreamExt;
+        
+        let body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": true
+        });
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Stream API Error: {}", error_text));
+        }
+
+        let mut full_content = String::new();
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            
+            // Parse SSE lines
+            for line in chunk_str.lines() {
+                if line.starts_with("data: ") {
+                    let data = &line[6..];
+                    if data == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<Value>(data) {
+                        if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
+                            full_content.push_str(delta);
+                            on_chunk(delta);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(full_content)
+    }
 }

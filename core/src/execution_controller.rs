@@ -1,27 +1,38 @@
-use crate::nl_automation::{ExecutionResult, Plan, StepType};
+use crate::nl_automation::{ApprovalContext, ExecutionResult, Plan, StepType};
 use crate::approval_gate;
 use crate::executor;
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 use crate::browser_automation;
 use serde_json::Value;
 
-pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
+pub async fn execute_plan(plan: &Plan, start_index: usize) -> ExecutionResult {
     let mut logs = Vec::new();
     let mut manual_required = false;
+    let mut manual_steps: Vec<String> = Vec::new();
     let mut approval_required = false;
     let mut blocked = false;
+    let mut approval_context: Option<ApprovalContext> = None;
+    let mut resume_from: Option<usize> = None;
 
     logs.push(format!("Start plan {} ({})", plan.plan_id, plan.intent.as_str()));
     logs.push(summary_for_plan(plan));
 
-    for (idx, step) in plan.steps.iter().enumerate() {
+    for (idx, step) in plan.steps.iter().enumerate().skip(start_index) {
         logs.push(format!("Step {}: {} ({:?})", idx + 1, step.description, step.step_type));
         match step.step_type {
             StepType::Navigate => {
                 if let Some(url) = step.data.get("url").and_then(|v| v.as_str()) {
-                    if let Err(err) = executor::open_url(url) {
+                    if let Err(err) = browser_automation::open_url_in_chrome(url)
+                        .or_else(|_| executor::open_url(url))
+                    {
                         logs.push(format!("Failed to open url {}: {}", url, err));
-                        return ExecutionResult { status: "error".to_string(), logs };
+                        return ExecutionResult {
+                            status: "error".to_string(),
+                            logs,
+                            approval: approval_context,
+                            manual_steps,
+                            resume_from,
+                        };
                     }
                 } else {
                     logs.push("Navigate step missing url".to_string());
@@ -31,7 +42,52 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                 let seconds = step.data.get("seconds").and_then(|v| v.as_u64()).unwrap_or(1);
                 tokio::time::sleep(tokio::time::Duration::from_secs(seconds)).await;
             }
-            StepType::Fill | StepType::Select | StepType::Click => {
+            StepType::Select => {
+                if is_auto_step(&step.data) {
+                    let applied = match plan.intent {
+                        crate::nl_automation::IntentType::FlightSearch => {
+                            let budget = step.data.get("budget").and_then(|v| v.as_str());
+                            let time_window = step.data.get("time_window").and_then(|v| v.as_str());
+                            let direct_only = step.data.get("direct_only").and_then(|v| v.as_str());
+                            if budget.is_none() && time_window.is_none() && direct_only.is_none() {
+                                logs.push("No flight filters to apply".to_string());
+                                continue;
+                            }
+                            browser_automation::apply_flight_filters(budget, time_window, direct_only)
+                        }
+                        crate::nl_automation::IntentType::ShoppingCompare => {
+                            let brand = step.data.get("brand").and_then(|v| v.as_str());
+                            let price_min = step.data.get("price_min").and_then(|v| v.as_str());
+                            let price_max = step.data.get("price_max").and_then(|v| v.as_str());
+                            if brand.is_none() && price_min.is_none() && price_max.is_none() {
+                                logs.push("No shopping filters to apply".to_string());
+                                continue;
+                            }
+                            browser_automation::apply_shopping_filters(brand, price_min, price_max)
+                        }
+                        _ => Ok(false),
+                    };
+
+                    match applied {
+                        Ok(true) => logs.push("Filters applied".to_string()),
+                        Ok(false) => {
+                            manual_required = true;
+                            manual_steps.push(step.description.clone());
+                            logs.push(format!("Manual filters required for step '{}'", step.description));
+                        }
+                        Err(err) => {
+                            manual_required = true;
+                            manual_steps.push(step.description.clone());
+                            logs.push(format!("Filter apply failed: {}", err));
+                        }
+                    }
+                } else {
+                    manual_required = true;
+                    manual_steps.push(step.description.clone());
+                    logs.push(format!("Manual filters required for step '{}'", step.description));
+                }
+            }
+            StepType::Fill | StepType::Click => {
                 if is_auto_step(&step.data) {
                     if let Some(action) = step.data.get("action").and_then(|v| v.as_str()) {
                         if action == "submit_search" {
@@ -59,12 +115,13 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                                     }
                                 }
                             }
-                            if !clicked {
-                                if let Ok(ctx) = browser_automation::get_page_context() {
-                                    logs.push(format!("Page context: {}", ctx));
-                                }
-                                manual_required = true;
+                        if !clicked {
+                            if let Ok(ctx) = browser_automation::get_page_context() {
+                                logs.push(format!("Page context: {}", ctx));
                             }
+                            manual_required = true;
+                            manual_steps.push(step.description.clone());
+                        }
                             continue;
                         }
                     }
@@ -98,6 +155,7 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                                 logs.push(format!("Page context: {}", ctx));
                             }
                             manual_required = true;
+                            manual_steps.push(step.description.clone());
                         }
                         continue;
                     }
@@ -107,6 +165,7 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                         if let Err(err) = driver.execute(None).await {
                             logs.push(format!("Auto input failed: {}", err));
                             manual_required = true;
+                            manual_steps.push(step.description.clone());
                         } else {
                             logs.push("Auto input attempted".to_string());
                         }
@@ -116,15 +175,18 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                         if let Err(err) = driver.execute(None).await {
                             logs.push(format!("Auto input failed: {}", err));
                             manual_required = true;
+                            manual_steps.push(step.description.clone());
                         } else {
                             logs.push("Auto input attempted".to_string());
                         }
                     } else {
                         manual_required = true;
+                        manual_steps.push(step.description.clone());
                         logs.push(format!("Manual input required for step '{}'", step.description));
                     }
                 } else {
                     manual_required = true;
+                    manual_steps.push(step.description.clone());
                     logs.push(format!("Manual input required for step '{}'", step.description));
                 }
             }
@@ -139,6 +201,14 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
                     "Approval check: {} (risk {}, policy {})",
                     decision.status, decision.risk_level, decision.policy
                 ));
+                if decision.requires_approval || decision.status == "denied" {
+                    approval_context = Some(ApprovalContext {
+                        action: action.to_string(),
+                        message: decision.message.clone(),
+                        risk_level: decision.risk_level.clone(),
+                        policy: decision.policy.clone(),
+                    });
+                }
                 if decision.status == "denied" {
                     logs.push("Execution blocked by policy".to_string());
                     blocked = true;
@@ -160,24 +230,50 @@ pub async fn execute_plan(plan: &Plan) -> ExecutionResult {
             }
             StepType::Screenshot => {}
         }
+
+        if manual_required || approval_required || blocked {
+            resume_from = Some(idx + 1);
+            break;
+        }
     }
 
     if blocked {
         logs.push("Execution stopped due to approval policy".to_string());
-        return ExecutionResult { status: "blocked".to_string(), logs };
+        return ExecutionResult {
+            status: "blocked".to_string(),
+            logs,
+            approval: approval_context,
+            manual_steps,
+            resume_from,
+        };
     }
     if approval_required {
         logs.push("Execution paused awaiting approval".to_string());
-        return ExecutionResult { status: "approval_required".to_string(), logs };
+        return ExecutionResult {
+            status: "approval_required".to_string(),
+            logs,
+            approval: approval_context,
+            manual_steps,
+            resume_from,
+        };
     }
     if manual_required {
         logs.push("Execution paused for manual input".to_string());
-        return ExecutionResult { status: "manual_required".to_string(), logs };
+        return ExecutionResult {
+            status: "manual_required".to_string(),
+            logs,
+            approval: approval_context,
+            manual_steps,
+            resume_from,
+        };
     }
 
     ExecutionResult {
         status: "completed".to_string(),
         logs,
+        approval: approval_context,
+        manual_steps,
+        resume_from,
     }
 }
 

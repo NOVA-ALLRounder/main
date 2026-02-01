@@ -1,449 +1,266 @@
-import './style.css'
+import { invoke } from '@tauri-apps/api/core';
+import { attachConsole } from '@tauri-apps/plugin-log';
+import './style.css';
 
-// Agent API URL
-const API_BASE = 'http://localhost:5679/api';
+// --- Element References ---
+const logContainer = document.getElementById('log-container');
+const goalInput = document.getElementById('goal-input');
+const runBtn = document.getElementById('run-btn');
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+const refreshDashBtn = document.getElementById('refresh-dash');
+const recList = document.getElementById('rec-list');
+const statSessions = document.getElementById('stat-sessions');
+const statTime = document.getElementById('stat-time');
+const statPending = document.getElementById('stat-pending');
 
-document.querySelector('#app').innerHTML = `
-  <header class="header">
-    <div class="logo">
-      <div class="logo-icon">🤖</div>
-      <span class="logo-text">Steer Agent</span>
-    </div>
-    <div class="status-badge" id="statusBadge">
-      <span class="status-dot"></span>
-      <span id="statusText">Connecting...</span>
-    </div>
-  </header>
+// Minimal UI Toggle
+const toggleDetailsBtn = document.getElementById('toggle-details');
+const detailsPanel = document.getElementById('details-panel');
 
-  <main class="main-content">
-    <section class="chat-section">
-      <div class="chat-messages" id="messages">
-        <div class="message agent">
-          <span class="emoji">👋</span> 안녕하세요! 무엇을 도와드릴까요?
-          <br><br>
-          자연어로 말씀해주세요:
-          <br>• "이메일 보여줘"
-          <br>• "오늘 일정 뭐야?"
-          <br>• "시스템 상태 알려줘"
-        </div>
-      </div>
-      <div class="input-section">
-        <div class="input-wrapper">
-          <input 
-            type="text" 
-            class="chat-input" 
-            id="userInput"
-            placeholder="자연어로 명령을 입력하세요..."
-            autocomplete="off"
-          />
-        </div>
-        <button class="send-btn" id="sendBtn">전송</button>
-      </div>
-    </section>
+// Routines
+const refreshRoutinesBtn = document.getElementById('refresh-routines');
+const routineList = document.getElementById('routine-list');
 
-    <aside class="sidebar">
-      <div class="card">
-        <div class="card-title">빠른 실행</div>
-        <div class="quick-actions">
-          <button class="action-btn" data-cmd="이메일 보여줘">
-            <span class="icon">📧</span> 이메일 확인
-          </button>
-          <button class="action-btn" data-cmd="오늘 일정 뭐야?">
-            <span class="icon">📅</span> 오늘 일정
-          </button>
-          <button class="action-btn" data-cmd="시스템 상태 알려줘">
-            <span class="icon">📊</span> 시스템 상태
-          </button>
-          <button class="action-btn" data-cmd="analyze_patterns">
-            <span class="icon">🔍</span> 패턴 분석
-          </button>
-        </div>
-      </div>
+// Settings
+const settingsBtn = document.getElementById('settings-btn');
+const settingsModal = document.getElementById('settings-modal');
+const closeSettingsBtn = document.getElementById('close-settings');
+const saveSettingsBtn = document.getElementById('save-settings');
+const cfgTelegramToken = document.getElementById('cfg-telegram-token');
+const cfgTelegramUser = document.getElementById('cfg-telegram-user');
+const cfgMistralKey = document.getElementById('cfg-mistral-key');
 
-      <div class="card">
-        <div class="card-title">시스템</div>
-        <div class="system-stats">
-          <div>
-            <div class="stat-row">
-              <span class="stat-label">CPU</span>
-              <span class="stat-value" id="cpuValue">--</span>
-            </div>
-            <div class="stat-bar">
-              <div class="stat-bar-fill" id="cpuBar" style="width: 0%"></div>
-            </div>
-          </div>
-          <div>
-            <div class="stat-row">
-              <span class="stat-label">RAM</span>
-              <span class="stat-value" id="ramValue">--</span>
-            </div>
-            <div class="stat-bar">
-              <div class="stat-bar-fill" id="ramBar" style="width: 0%"></div>
-            </div>
-          </div>
-        </div>
-      </div>
+// --- Logging System ---
+async function setupLogging() {
+  await attachConsole();
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const originalError = console.error;
 
-      <div class="card">
-        <div class="card-title">추천 워크플로우</div>
-        <div class="recommendations" id="recsContainer">
-          <div class="loading">로딩 중...</div>
-        </div>
-      </div>
+  function appendLog(level, message) {
+    if (!logContainer) return;
+    const div = document.createElement('div');
+    div.className = `log-entry ${level}`;
 
-      <div class="card">
-        <div class="card-title">연동 서비스</div>
-        <div class="integrations">
-          <div class="integration-badge">
-            <span class="integration-dot"></span> Gmail
-          </div>
-          <div class="integration-badge">
-            <span class="integration-dot"></span> Calendar
-          </div>
-          <div class="integration-badge">
-            <span class="integration-dot"></span> Telegram
-          </div>
-          <div class="integration-badge">
-            <span class="integration-dot"></span> Notion
-          </div>
-          <div class="integration-badge">
-            <span class="integration-dot"></span> n8n
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Dev Tools</div>
-        <div class="dev-toggle">
-          <span>Debug Log</span>
-          <label class="switch">
-            <input type="checkbox" id="debugToggle" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="dev-log hidden" id="devLog"></div>
-      </div>
-    </aside>
-  </main>
-`;
+    if (message.includes('❌')) div.classList.add('error');
+    if (message.includes('✅')) div.classList.add('success');
+    if (message.includes('🌊')) div.style.color = '#60a5fa'; // Blue
+    if (message.includes('🧠')) div.style.color = '#c084fc'; // Purple
+    if (message.includes('💡')) div.style.color = '#fbbf24'; // Yellow
 
-// Elements
-const messagesEl = document.getElementById('messages');
-const inputEl = document.getElementById('userInput');
-const sendBtn = document.getElementById('sendBtn');
-const statusBadge = document.getElementById('statusBadge');
-const statusText = document.getElementById('statusText');
-const recsContainer = document.getElementById('recsContainer');
-const debugToggle = document.getElementById('debugToggle');
-const devLog = document.getElementById('devLog');
+    div.textContent = message;
+    logContainer.appendChild(div);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
 
-const debugStorageKey = 'steerDebugEnabled';
-let debugEnabled = false;
-
-// Add message to chat
-function addMessage(text, type = 'agent') {
-  const msg = document.createElement('div');
-  msg.className = `message ${type}`;
-  msg.innerHTML = text;
-  messagesEl.appendChild(msg);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  console.info = (...args) => { originalInfo(...args); appendLog('info', args.join(' ')); };
+  console.warn = (...args) => { originalWarn(...args); appendLog('warn', args.join(' ')); };
+  console.error = (...args) => { originalError(...args); appendLog('error', args.join(' ')); };
 }
 
-function setDebugEnabled(enabled) {
-  debugEnabled = enabled;
-  if (debugToggle) {
-    debugToggle.checked = enabled;
-  }
-  if (devLog) {
-    devLog.classList.toggle('hidden', !enabled);
-    if (!enabled) {
-      devLog.innerHTML = '';
-    }
-  }
+function appendLog(level, msg) {
+  if (!logContainer) return;
+  const div = document.createElement('div');
+  div.className = `log-entry ${level}`;
+  div.textContent = msg;
+  logContainer.appendChild(div);
+  logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+// --- Agent Logic ---
+async function runAgent() {
+  const goal = goalInput.value.trim();
+  if (!goal) return;
+
+  logContainer.innerHTML = '';
+  goalInput.disabled = true;
+  runBtn.disabled = true;
+
   try {
-    localStorage.setItem(debugStorageKey, enabled ? 'true' : 'false');
-  } catch (_) {
-    // Ignore storage failures in dev mode.
+    appendLog('info', `🚀 Launching: "${goal}"`);
+    const response = await invoke('run_agent_task', { goal });
+
+    if (response === "Task Completed.") {
+      appendLog('success', '✅ Task Completed.');
+    } else {
+      appendLog('success', `🧠 ${response}`);
+    }
+  } catch (error) {
+    appendLog('error', `🔥 System Error: ${error}`);
+  } finally {
+    goalInput.disabled = false;
+    runBtn.disabled = false;
+    goalInput.focus();
   }
 }
 
-function debugLog(label, detail) {
-  if (!debugEnabled || !devLog) {
+if (runBtn) runBtn.addEventListener('click', runAgent);
+if (goalInput) goalInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runAgent();
+});
+
+// Toggle Details Panel
+if (toggleDetailsBtn && detailsPanel) {
+  toggleDetailsBtn.addEventListener("click", () => {
+    const isVisible = detailsPanel.classList.toggle("visible");
+    toggleDetailsBtn.innerHTML = isVisible ? "▼" : "☰";
+    // Resize window if needed (optional advanced feature)
+  });
+}
+
+
+// --- Dashboard & Tabs ---
+
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    // Remove active
+    tabBtns.forEach(b => b.classList.remove('active'));
+    tabContents.forEach(c => c.classList.remove('active'));
+
+    // Add active
+    btn.classList.add('active');
+    const tabId = btn.getAttribute('data-tab');
+    const content = document.getElementById(`content-${tabId}`);
+    if (content) content.classList.add('active');
+
+    // Logic
+    if (tabId === 'dashboard') refreshDashboard();
+    if (tabId === 'routines') refreshRoutines();
+  });
+});
+
+if (refreshDashBtn) refreshDashBtn.addEventListener('click', refreshDashboard);
+if (refreshRoutinesBtn) refreshRoutinesBtn.addEventListener('click', refreshRoutines);
+
+// --- Settings Logic ---
+if (settingsBtn) settingsBtn.addEventListener('click', openSettings);
+if (closeSettingsBtn) closeSettingsBtn.addEventListener('click', closeSettings);
+if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
+
+async function openSettings() {
+  settingsModal.classList.remove('hidden');
+  settingsModal.classList.add('visible');
+
+  // Load config
+  try {
+    const cfg = await invoke('get_config');
+    if (cfgTelegramToken) cfgTelegramToken.value = cfg['TELEGRAM_BOT_TOKEN'] || '';
+    if (cfgTelegramUser) cfgTelegramUser.value = cfg['TELEGRAM_USER_ID'] || '';
+    if (cfgMistralKey) cfgMistralKey.value = cfg['MISTRAL_API_KEY'] || '';
+  } catch (e) {
+    console.error("Config Load Failed", e);
+  }
+}
+
+function closeSettings() {
+  settingsModal.classList.remove('visible');
+  settingsModal.classList.add('hidden');
+}
+
+async function saveSettings() {
+  try {
+    if (cfgTelegramToken.value) await invoke('set_config', { key: 'TELEGRAM_BOT_TOKEN', value: cfgTelegramToken.value });
+    if (cfgTelegramUser.value) await invoke('set_config', { key: 'TELEGRAM_USER_ID', value: cfgTelegramUser.value });
+    if (cfgMistralKey.value) await invoke('set_config', { key: 'MISTRAL_API_KEY', value: cfgMistralKey.value });
+
+    alert('Settings Saved! Restart app to apply changes.');
+    closeSettings();
+  } catch (e) {
+    alert('Failed to save: ' + e);
+  }
+}
+
+
+// --- Data Fetching ---
+
+async function refreshDashboard() {
+  try {
+    const stats = await invoke('get_dashboard_data');
+    if (statSessions) statSessions.textContent = stats.total_sessions;
+    if (statTime) statTime.textContent = `${stats.total_time_mins}m`;
+    if (statPending) statPending.textContent = stats.rec_pending;
+
+    const recs = await invoke('get_recommendations');
+    renderRecommendations(recs);
+  } catch (e) { console.error(e); }
+}
+
+async function refreshRoutines() {
+  try {
+    const routines = await invoke('list_routines');
+    if (!routineList) return;
+    routineList.innerHTML = '';
+
+    if (routines.length === 0) {
+      routineList.innerHTML = '<div class="empty-state">No routines created yet. Use the Architect!</div>';
+      return;
+    }
+
+    routines.forEach(r => {
+      const card = document.createElement('div');
+      card.className = 'rec-card';
+      card.innerHTML = `
+                <div class="rec-content">
+                    <h4>${r.name}</h4>
+                    <p>Created: ${new Date(r.created_at).toLocaleString()}</p>
+                </div>
+                <div class="rec-actions">
+                    <button class="btn-sm" style="background:var(--error)" onclick="window.deleteRoutine(${r.id})">Delete</button>
+                    <button class="btn-sm btn-outline">Run</button>
+                </div>
+            `;
+      routineList.appendChild(card);
+    });
+  } catch (e) { console.error(e); }
+}
+
+function renderRecommendations(recs) {
+  if (!recList) return;
+  recList.innerHTML = '';
+  if (recs.length === 0) {
+    recList.innerHTML = '<div class="empty-state">No suggestions yet.</div>';
     return;
   }
-
-  const line = document.createElement('div');
-  line.className = 'dev-log-line';
-
-  const timeEl = document.createElement('span');
-  timeEl.className = 'dev-time';
-  timeEl.textContent = new Date().toLocaleTimeString();
-
-  const labelEl = document.createElement('span');
-  labelEl.className = 'dev-label';
-  labelEl.textContent = label;
-
-  const detailEl = document.createElement('span');
-  detailEl.className = 'dev-detail';
-  detailEl.textContent = detail;
-
-  line.append(timeEl, labelEl, detailEl);
-  devLog.appendChild(line);
-  devLog.scrollTop = devLog.scrollHeight;
-}
-
-function nowMs() {
-  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-    return performance.now();
-  }
-  return Date.now();
-}
-
-// Check API health
-async function checkHealth() {
-  try {
-    debugLog('health:check', 'ping');
-    const resp = await fetch(`${API_BASE}/health`);
-    if (resp.ok) {
-      statusBadge.classList.add('connected');
-      statusText.textContent = 'Running';
-      debugLog('health:ok', 'connected');
-      return true;
-    }
-  } catch (e) {
-    statusBadge.classList.remove('connected');
-    statusText.textContent = 'Disconnected';
-    debugLog('health:error', String(e));
-  }
-  debugLog('health:fail', 'disconnected');
-  return false;
-}
-
-// Fetch system status
-async function fetchStatus() {
-  const startedAt = nowMs();
-  debugLog('status:fetch', 'request');
-  try {
-    const resp = await fetch(`${API_BASE}/status`);
-    if (resp.ok) {
-      const data = await resp.json();
-      document.getElementById('cpuValue').textContent = data.cpu.toFixed(1) + '%';
-      document.getElementById('ramValue').textContent = data.ram.toFixed(1) + '%';
-      document.getElementById('cpuBar').style.width = Math.min(data.cpu, 100) + '%';
-      document.getElementById('ramBar').style.width = Math.min(data.ram, 100) + '%';
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('status:ok', `cpu=${data.cpu.toFixed(1)} ram=${data.ram.toFixed(1)} ${elapsed}ms`);
-    } else {
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('status:fail', `status=${resp.status} ${elapsed}ms`);
-    }
-  } catch (e) {
-    const elapsed = Math.round(nowMs() - startedAt);
-    debugLog('status:error', `${e} ${elapsed}ms`);
-    console.error('Failed to fetch status:', e);
-  }
-}
-
-// Fetch recommendations
-async function fetchRecommendations() {
-  const startedAt = nowMs();
-  debugLog('recs:fetch', 'request');
-  try {
-    const resp = await fetch(`${API_BASE}/recommendations`);
-    if (resp.ok) {
-      const recs = await resp.json();
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:ok', `count=${recs.length} ${elapsed}ms`);
-      if (recs.length === 0) {
-        recsContainer.innerHTML = '<div class="empty">추천 없음</div>';
-      } else {
-        recsContainer.innerHTML = recs.map(rec => `
-          <div class="rec-item">
-            <div class="rec-title">${rec.title}</div>
-            <div class="rec-confidence">${(rec.confidence * 100).toFixed(0)}%</div>
-            <div class="rec-actions">
-              <button onclick="approveRec(${rec.id})" class="rec-btn approve">✓</button>
-              <button onclick="rejectRec(${rec.id})" class="rec-btn reject">✗</button>
+  recs.forEach(rec => {
+    const card = document.createElement('div');
+    card.className = 'rec-card';
+    card.innerHTML = `
+            <div class="rec-content">
+                <h4>${rec.title}</h4>
+                <p>${rec.summary}</p>
+                <div class="rec-meta">
+                    <span>⚡️ ${rec.trigger}</span>
+                    <span>🧠 ${(rec.confidence * 100).toFixed(0)}%</span>
+                </div>
             </div>
-          </div>
-        `).join('');
-      }
-    } else {
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:fail', `status=${resp.status} ${elapsed}ms`);
-    }
-  } catch (e) {
-    const elapsed = Math.round(nowMs() - startedAt);
-    debugLog('recs:error', `${e} ${elapsed}ms`);
-    recsContainer.innerHTML = '<div class="error">연결 실패</div>';
-  }
+            <div class="rec-actions">
+                <button class="btn-sm" style="background:var(--success)" onclick="window.startArchitect(${rec.id})">Build</button>
+            </div>
+        `;
+    recList.appendChild(card);
+  });
 }
 
-// Approve/reject recommendations
-window.approveRec = async (id) => {
-  const startedAt = nowMs();
-  debugLog('recs:approve', `id=${id}`);
+// Global Actions
+window.startArchitect = async function (recId) {
   try {
-    const resp = await fetch(`${API_BASE}/recommendations/${id}/approve`, { method: 'POST' });
-    if (resp.ok) {
-      addMessage(`✅ 추천 #${id} 승인됨! n8n 워크플로우 생성 중...`, 'agent');
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:approve:ok', `id=${id} ${elapsed}ms`);
-    } else {
-      addMessage('❌ 승인 처리에 실패했습니다.', 'agent');
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:approve:fail', `id=${id} status=${resp.status}`);
-    }
+    document.querySelector('[data-tab="chat"]').click();
+    appendLog('info', '🏗️ Initializing Architect Mode...');
+    const intro = await invoke('start_architect_mode', { rec_id: recId });
+    appendLog('info', `🧠 Architect: ${intro}`);
   } catch (e) {
-    addMessage(`❌ 네트워크 오류 발생: ${e}`, 'agent');
-    const elapsed = Math.round(nowMs() - startedAt);
-    debugLog('recs:approve:error', `id=${id} ${e}`);
+    appendLog('error', `Failed to start Architect: ${e}`);
   }
-  fetchRecommendations();
 };
 
-window.rejectRec = async (id) => {
-  const startedAt = nowMs();
-  debugLog('recs:reject', `id=${id}`);
+window.deleteRoutine = async function (id) {
+  if (!confirm('Are you sure you want to delete this routine?')) return;
   try {
-    const resp = await fetch(`${API_BASE}/recommendations/${id}/reject`, { method: 'POST' });
-    if (resp.ok) {
-      addMessage(`🗑️ 추천 #${id} 거절됨`, 'agent');
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:reject:ok', `id=${id} ${elapsed}ms`);
-    } else {
-      addMessage('❌ 거절 처리에 실패했습니다.', 'agent');
-      const elapsed = Math.round(nowMs() - startedAt);
-      debugLog('recs:reject:fail', `id=${id} status=${resp.status}`);
-    }
-  } catch (e) {
-    addMessage(`❌ 네트워크 오류 발생: ${e}`, 'agent');
-    const elapsed = Math.round(nowMs() - startedAt);
-    debugLog('recs:reject:error', `id=${id} ${e}`);
-  }
-  fetchRecommendations();
+    await invoke('delete_routine', { id });
+    refreshRoutines();
+  } catch (e) { alert(e); }
 };
 
-// Send chat message
-async function sendCommand(message) {
-  const startedAt = nowMs();
-  addMessage(message, 'user');
-  debugLog('chat:send', message);
-
-  try {
-    const resp = await fetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
-    });
-
-    if (resp.ok) {
-      const data = await resp.json();
-      addMessage(data.response, 'agent');
-      debugLog('chat:ok', `command=${data.command || 'none'}`);
-      debugLog('chat:latency', `${Math.round(nowMs() - startedAt)}ms`);
-
-      // Update status after certain commands
-      if (data.command === 'system_status') {
-        fetchStatus();
-      }
-    } else {
-      debugLog('chat:fail', `status=${resp.status}`);
-      debugLog('chat:latency', `${Math.round(nowMs() - startedAt)}ms`);
-      addMessage('❌ 서버 오류가 발생했습니다.', 'agent');
-    }
-  } catch (e) {
-    debugLog('chat:error', String(e));
-    debugLog('chat:latency', `${Math.round(nowMs() - startedAt)}ms`);
-    addMessage('❌ 서버에 연결할 수 없습니다. 에이전트가 실행 중인지 확인하세요.', 'agent');
-  }
-}
-
-async function runPatternAnalysis() {
-  const startedAt = nowMs();
-  addMessage('🔍 패턴 분석을 시작합니다... (잠시만 기다려주세요)', 'agent');
-  debugLog('patterns:run', 'request');
-
-  try {
-    const resp = await fetch(`${API_BASE}/patterns/analyze`, { method: 'POST' });
-    if (!resp.ok) {
-      debugLog('patterns:fail', `status=${resp.status}`);
-      debugLog('patterns:latency', `${Math.round(nowMs() - startedAt)}ms`);
-      addMessage('❌ 패턴 분석에 실패했습니다. 잠시 후 다시 시도해주세요.', 'agent');
-      return;
-    }
-
-    const data = await resp.json();
-    debugLog('patterns:ok', `count=${Array.isArray(data) ? data.length : 0}`);
-    debugLog('patterns:latency', `${Math.round(nowMs() - startedAt)}ms`);
-
-    if (Array.isArray(data) && data.length > 0) {
-      const lines = data.map(item => `• ${item}`).join('<br>');
-      addMessage(`✅ 패턴 분석 완료:<br>${lines}`, 'agent');
-    } else {
-      addMessage('✅ 패턴 분석 완료. 새로 감지된 패턴은 없습니다.', 'agent');
-    }
-  } catch (e) {
-    debugLog('patterns:error', String(e));
-    debugLog('patterns:latency', `${Math.round(nowMs() - startedAt)}ms`);
-    addMessage(`❌ 네트워크 오류로 패턴 분석에 실패했습니다: ${e}`, 'agent');
-  }
-
-  fetchRecommendations();
-}
-
-// Event Listeners
-sendBtn.addEventListener('click', () => {
-  const text = inputEl.value.trim();
-  if (text) {
-    sendCommand(text);
-    inputEl.value = '';
-  }
-});
-
-inputEl.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') {
-    const text = inputEl.value.trim();
-    if (text) {
-      sendCommand(text);
-      inputEl.value = '';
-    }
-  }
-});
-
-// Quick action buttons
-document.querySelectorAll('.action-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const cmd = btn.dataset.cmd;
-    if (cmd === 'analyze_patterns') {
-      runPatternAnalysis();
-      return;
-    }
-    sendCommand(cmd);
-  });
-});
-
-if (debugToggle) {
-  const stored = (() => {
-    try {
-      return localStorage.getItem(debugStorageKey);
-    } catch (_) {
-      return null;
-    }
-  })();
-  setDebugEnabled(stored === 'true');
-  debugToggle.addEventListener('change', () => {
-    setDebugEnabled(debugToggle.checked);
-  });
-} else {
-  setDebugEnabled(false);
-}
-
-// Initial load
-checkHealth();
-fetchStatus();
-fetchRecommendations();
-
-// Periodic updates
-setInterval(fetchStatus, 5000);
-setInterval(fetchRecommendations, 10000);
-setInterval(checkHealth, 30000);
+// Init
+setupLogging();

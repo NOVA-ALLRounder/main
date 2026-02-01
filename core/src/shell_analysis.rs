@@ -2,7 +2,9 @@
 pub struct ShellCommandAnalysis {
     pub segments: Vec<String>,
     pub has_composites: bool,
+    #[allow(dead_code)]
     pub has_pipe: bool,
+    #[allow(dead_code)]
     pub has_redirection: bool,
     pub has_substitution: bool,
 }
