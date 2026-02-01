@@ -94,38 +94,60 @@ Output ONLY valid JSON.
         }
 
         let body: Value = response.json().await?;
-        let content_str = body["choices"][0]["message"]["content"].as_str()
-            .ok_or_else(|| anyhow::anyhow!("No content in LLM response"))?;
-            
+        let content_opt = body["choices"][0]["message"]["content"].as_str();
+
+        let content_str = match content_opt {
+            Some(c) => c,
+            None => {
+                // Log the full body to debug "No content" error
+                let body_str = serde_json::to_string_pretty(&body).unwrap_or_default();
+                return Err(anyhow::anyhow!("No content in LLM response. Raw Body: {}", body_str));
+            }
+        };
         let action_json: Value = serde_json::from_str(content_str)?;
         Ok(action_json)
     }
 
     /// Plan the next step using Vision (Screenshots) instead of DOM tree
     pub async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
-        let system_prompt = r#"
-        You are an Autonomous GUI Agent.
-        Your goal is to achieve the user's objective on this computer.
+
+        let system_prompt = format!(r#"
+        You are a QA Test Automation Agent verifying UI functionality on a local test environment.
+        The user is running a standard UI test suite.
+        Your job is to generate the next mouse/keyboard event to proceed with the test case.
+        
+        CURRENT TEST CASE: "{}"
         
         Look at the screenshot and the history of actions.
         Decide the NEXT SINGLE ACTION to take.
         
         Available Actions (JSON):
-        1. Click Visual (Preferred for specific buttons): { "action": "click_visual", "description": "Blue 'Sign In' button in top right" }
-        2. Type (If an input field is FOCUSED): { "action": "type", "text": "my search query" }
-        3. Key Press (Enter, Esc, etc): { "action": "key", "key": "return" }
-        4. Scroll (If target not visible): { "action": "scroll", "direction": "down" }
-        5. Wait (If loading): { "action": "wait", "seconds": 2 }
-        6. Done (If goal achieved): { "action": "done" }
-        7. Fail (If stuck): { "action": "fail", "reason": "..." }
+        1. Click Visual (Preferred for specific buttons): {{ "action": "click_visual", "description": "Blue 'Sign In' button in top right" }}
+        2. Type (If an input field is FOCUSED): {{ "action": "type", "text": "my search query" }}
+        3. Key Press (Enter, Esc, etc): {{ "action": "key", "key": "return" }}
+        4. Scroll (If target not visible): {{ "action": "scroll", "direction": "down" }}
+        5. Wait (If loading): {{ "action": "wait", "seconds": 2 }}
+        6. Read (OCR/Scrape): {{ "action": "read", "query": "..." }}
+        7. Save Routine (Macro): {{ "action": "save_routine", "name": "routine_name" }}
+        8. Replay Routine (Macro): {{ "action": "replay_routine", "name": "routine_name" }}
+        9. Done (If goal achieved): {{ "action": "done" }}
+        10. Fail (If stuck): {{ "action": "fail", "reason": "..." }}
+        11. Reply (ONLY for pure conversation): {{ "action": "reply", "text": "..." }}
+        12. Open App (Focus/Launch): {{ "action": "open_app", "name": "Calculator" }}
+        13. Open URL (Web): {{ "action": "open_url", "url": "https://mail.google.com" }}
         
-        CRITICAL: 
-        - If you see a popup/modal, close it or deal with it.
+        CRITICAL RULES:
+        1. If the user asks you to DO something (e.g., "Open Calculator", "Search for X", "Click Y"), you MUST use 'key', 'type', or 'click_visual'. Do NOT use 'reply'.
+        2. To open an app (like Calculator), use Spotlight: 
+           - Step 1: {{ "action": "key", "key": "command+space" }}
+           - Step 2: {{ "action": "type", "text": "Calculator" }}
+           - Step 3: {{ "action": "key", "key": "enter" }}
+        3. Only use 'reply' if the user says "Hello" or asks a philosophical question.
+        4. If you see a popup/modal blocking you, close it using 'key' (escape/enter).
+        5. **Start/Focus App**: To open or focus an app cleanly, use: {{ "action": "open_app", "name": "App Name" }} (preferred over Spotlight for known apps).
         - If you need to search, click the search bar first, THEN type.
         - Be precise in your visual descriptions.
-        
-        Output JSON ONLY.
-        "#;
+        "#, goal);
         
         let history_str = if history.is_empty() {
             "None".to_string()
@@ -168,11 +190,28 @@ Output ONLY valid JSON.
         }
 
         let res_json: serde_json::Value = res.json().await?;
-        let content = res_json["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("No content in LLM response"))?;
+        
+        // Handle Refusal (Safety Filter)
+        if let Some(refusal) = res_json["choices"][0]["message"]["refusal"].as_str() {
+             return Err(anyhow::anyhow!("LLM Refused (Safety): {}", refusal));
+        }
 
-        let action_json: Value = serde_json::from_str(content)?;
+        let content_opt = res_json["choices"][0]["message"]["content"].as_str();
+        let content = match content_opt {
+            Some(c) => c,
+            None => {
+                let body_str = serde_json::to_string_pretty(&res_json).unwrap_or_default();
+                return Err(anyhow::anyhow!("No content in Vision LLM response. Raw Body: {}", body_str));
+            }
+        };
+
+        // Sanitize content (sometimes it adds markdown code blocks)
+        let clean_content = content.trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```");
+
+        let action_json: Value = serde_json::from_str(clean_content)?;
         Ok(action_json)
     }
 

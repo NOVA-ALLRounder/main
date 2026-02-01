@@ -33,6 +33,7 @@ lancedb = "0.4"
 futures = "0.3"
 # fastembed removed due to ort-sys build issues. Using OpenAI for now.
 arrow = { version = "51", features = ["prettyprint"] }
+log = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

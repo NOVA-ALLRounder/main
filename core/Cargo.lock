@@ -2897,6 +2897,7 @@ dependencies = [
  "image",
  "lancedb",
  "lazy_static",
+ "log",
  "notify",
  "regex",
  "reqwest",

@@ -137,6 +137,16 @@ pub fn init() -> Result<()> {
         )",
         [],
     )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS learned_routines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            steps_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+        [],
+    )?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS quality_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2004,6 +2014,54 @@ pub fn get_recent_chat_history(limit: i64) -> Result<Vec<ChatMessage>> {
         Ok(history)
     } else {
         Ok(Vec::new())
+    }
+}
+
+// --- Learned Routines (Macro Recorder) ---
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LearnedRoutine {
+    pub id: i64,
+    pub name: String,
+    pub steps_json: String,
+    pub created_at: String,
+}
+
+pub fn save_learned_routine(name: &str, steps_json: &str) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT OR REPLACE INTO learned_routines (name, steps_json, created_at) VALUES (?1, ?2, ?3)",
+            params![name, steps_json, created_at],
+        )?;
+        Ok(())
+    } else {
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some("DB not initialized".to_string()),
+        ))
+    }
+}
+
+pub fn get_learned_routine(name: &str) -> Result<Option<LearnedRoutine>> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let mut stmt = conn.prepare("SELECT id, name, steps_json, created_at FROM learned_routines WHERE name = ?1")?;
+        let mut rows = stmt.query(params![name])?;
+        
+        if let Some(row) = rows.next()? {
+            Ok(Some(LearnedRoutine {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                steps_json: row.get(2)?,
+                created_at: row.get(3)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
     }
 }
 
