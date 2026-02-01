@@ -27,13 +27,23 @@ pub fn spawn(
         let max_buffer_age = Duration::from_secs(60); // Process at least every minute
         
         // [Privacy] Initialize Guard with Salt (Env or Default)
-        let salt = std::env::var("PRIVACY_SALT").unwrap_or_else(|_| "default_salt".to_string());
+        let salt = std::env::var("PRIVACY_SALT").unwrap_or_else(|_| {
+            eprintln!("⚠️ [Privacy] PRIVACY_SALT not set, using default. Set PRIVACY_SALT env var for production.");
+            "default_salt".to_string()
+        });
         let guard = crate::privacy::PrivacyGuard::new(salt);
 
-        // [Memory] Initialize Vector DB (Non-blocking fail)
-        let memory = match MemoryStore::new("steer_mem", llm_client.clone()).await {
+        // [Memory] Initialize Vector DB (Absolute Path)
+        let mem_path = if let Some(mut path) = dirs::data_local_dir() {
+            path.push("steer");
+            path.push("steer_mem");
+            path.to_string_lossy().to_string()
+        } else {
+            "steer_mem".to_string() // Fallback
+        };
+        let memory = match MemoryStore::new(&mem_path, llm_client.clone()).await {
             Ok(m) => {
-                println!("🧠 [Memory] Visual Cortex Online");
+                println!("🧠 [Memory] Visual Cortex Online at: {}", mem_path);
                 Some(m)
             },
             Err(e) => {
@@ -139,11 +149,8 @@ async fn process_buffer(
     }
 
     // B. Detect Patterns
-    let logs: Vec<String> = buffer.iter()
-        .map(|e| serde_json::to_string(e).unwrap_or_default())
-        .collect();
-
-    let patterns = detector.analyze_with_events(&logs);
+    // Use async analysis (includes vector fuzzy matching)
+    let patterns = detector.analyze_async().await;
     
     if !patterns.is_empty() {
         println!("🧠 [Analyzer] Detected {} patterns in recent activity.", patterns.len());

@@ -53,20 +53,26 @@ impl Default for PatternConfig {
     }
 }
 
+use crate::llm_gateway::LLMClient;
+
 /// Pattern detector engine
 pub struct PatternDetector {
     config: PatternConfig,
+    llm_client: Option<LLMClient>,
 }
 
 impl PatternDetector {
     pub fn new() -> Self {
+        let llm_client = LLMClient::new().ok();
         Self {
             config: PatternConfig::default(),
+            llm_client,
         }
     }
 
     pub fn with_config(config: PatternConfig) -> Self {
-        Self { config }
+        let llm_client = LLMClient::new().ok();
+        Self { config, llm_client }
     }
 
     /// Analyze logs and detect patterns (uses DB)
@@ -354,6 +360,79 @@ impl PatternDetector {
     }
 
     /// Check if a pattern should generate a recommendation
+    pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
+        if v1.len() != v2.len() { return 0.0; }
+        let dot_product: f32 = v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum();
+        let norm_a: f32 = v1.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm_b: f32 = v2.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+        dot_product / (norm_a * norm_b)
+    }
+
+    /// Asynchronous analysis with Vector Memory (Fuzzy Matching)
+    pub async fn analyze_async(&self) -> Vec<DetectedPattern> {
+        let hours = self.config.lookback_days * 24;
+        let events = match db::get_recent_events(hours) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        
+        // 1. First get standard string-based patterns
+        let patterns = self.analyze_with_events(&events);
+        
+        // 2. Enhance with semantic clustering if LLM is available
+        if self.llm_client.is_some() {
+             return self.merge_similar_patterns(patterns).await;
+        }
+        
+        patterns
+    }
+
+    /// Merge patterns that are semantically similar (e.g. "Open Chrome" vs "Launch Chrome")
+    pub async fn merge_similar_patterns(&self, patterns: Vec<DetectedPattern>) -> Vec<DetectedPattern> {
+        if self.llm_client.is_none() { return patterns; }
+        let client = self.llm_client.as_ref().unwrap();
+        
+        let mut final_patterns = Vec::new();
+        let mut handled_indices = std::collections::HashSet::new();
+
+        // Pre-compute embeddings for all patterns descriptions
+        let mut embeddings = Vec::new();
+        for p in &patterns {
+            if let Ok(emb) = client.get_embedding(&p.description).await {
+                embeddings.push(Some(emb));
+            } else {
+                embeddings.push(None);
+            }
+        }
+
+        for i in 0..patterns.len() {
+            if handled_indices.contains(&i) { continue; }
+            let mut current_group = patterns[i].clone();
+            handled_indices.insert(i);
+            
+            if let Some(emb_i) = &embeddings[i] {
+                for j in (i + 1)..patterns.len() {
+                    if handled_indices.contains(&j) { continue; }
+                    
+                    if let Some(emb_j) = &embeddings[j] {
+                        let sim = Self::cosine_similarity(emb_i, emb_j);
+                        if sim > 0.92 { // High similarity threshold
+                            // Merge j into i
+                            current_group.occurrences += patterns[j].occurrences;
+                            current_group.sample_events.extend(patterns[j].sample_events.clone());
+                            // Keep description of the most frequent one
+                            handled_indices.insert(j);
+                        }
+                    }
+                }
+            }
+            final_patterns.push(current_group);
+        }
+
+        final_patterns
+    }
+    
     pub fn should_recommend(&self, pattern: &DetectedPattern) -> bool {
         pattern.occurrences >= self.config.min_occurrences
             && pattern.similarity_score >= self.config.min_similarity

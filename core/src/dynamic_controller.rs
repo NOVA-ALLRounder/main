@@ -1,25 +1,41 @@
 use crate::llm_gateway::LLMClient;
 use crate::visual_driver::{VisualDriver, UiAction, SmartStep};
+use crate::policy::PolicyEngine;
+use crate::schema::AgentAction;
 use anyhow::Result;
 use serde_json::Value; 
 use crate::db; 
 use log::{info, warn, error};
+use tokio::sync::mpsc;
+use crate::schema::EventEnvelope;
+use chrono::Utc;
+use uuid::Uuid;
+use crate::screen_recorder::ScreenRecorder;
 
 pub struct DynamicController {
     llm: LLMClient,
     max_steps: usize,
+    tx: Option<mpsc::Sender<String>>,
 }
 
 impl DynamicController {
-    pub fn new(llm: LLMClient) -> Self {
+    pub fn new(llm: LLMClient, tx: Option<mpsc::Sender<String>>) -> Self {
         Self {
             llm,
             max_steps: 15,
+            tx,
         }
     }
 
+
     pub async fn surf(&self, goal: &str) -> Result<()> {
         info!("🌊 Starting Dynamic Surf: '{}'", goal);
+        
+        // [Blackbox] Start Recording
+        let recorder = ScreenRecorder::new();
+        recorder.cleanup_old_recordings(); // Auto-clean
+        let _ = recorder.start(); // Start recording
+
         let mut history: Vec<String> = Vec::new();
         let mut session_steps: Vec<SmartStep> = Vec::new(); // Track for macro recording
         let mut consecutive_failures = 0;
@@ -41,6 +57,7 @@ impl DynamicController {
             let mut driver = VisualDriver::new();
             let mut description = format!("Step {}", i);
             let mut step_to_record: Option<SmartStep> = None; // Step to save (if Action)
+            let mut event_type = "action";
 
             match action_type {
                 "click_visual" => {
@@ -129,7 +146,8 @@ impl DynamicController {
                                         description = format!("Replayed Routine '{}'", name);
                                     }
                                 },
-                                Err(e) => {
+
+                                Err(e) => { // JSON parse error
                                      error!("      ❌ Corrupt routine data: {}", e);
                                      description = format!("Corrupt routine data: {}", e);
                                 }
@@ -154,16 +172,19 @@ impl DynamicController {
                 },
                 "done" => {
                     info!("✅ Goal Achieved!");
+                    let _ = recorder.stop(); // Stop recording
                     return Ok(());
                 },
                 "reply" => {
                     let text = plan["text"].as_str().unwrap_or("...");
                     info!("🤖 Agent: {}", text);
+                    let _ = recorder.stop(); // Stop recording
                     return Ok(()); // Chat is a single-turn action
                 },
                 "fail" => {
                     let reason = plan["reason"].as_str().unwrap_or("Unknown");
                     error!("❌ Agent gave up: {}", reason);
+                    let _ = recorder.stop(); // Stop recording
                     return Err(anyhow::anyhow!("Agent failed: {}", reason));
                 },
                 "open_app" => {
@@ -200,6 +221,25 @@ impl DynamicController {
                         }
                     }
                 },
+                "read_file" => {
+                    let path = plan["path"].as_str().unwrap_or("");
+                    info!("      📄 Reading File: '{}'", path);
+                    match crate::content_extractor::ContentExtractor::extract(path) {
+                        Ok(content) => {
+                            let preview = if content.len() > 500 {
+                                format!("{}...", &content[..500])
+                            } else {
+                                content.clone()
+                            };
+                            info!("      📝 Extracted: {}", preview);
+                            description = format!("Read File '{}':\n{}", path, content);
+                        },
+                        Err(e) => {
+                             error!("      ❌ Read failed: {}", e);
+                             description = format!("Failed to read file '{}': {}", path, e);
+                        }
+                    }
+                },
                 _ => {
                     warn!("⚠️ Unknown action: {}", action_type);
                 }
@@ -209,13 +249,21 @@ impl DynamicController {
             // Replay handles its own execution. Read/Save are instant.
             // Only Execute if we added steps to `driver` (Action steps)
             if !driver.steps.is_empty() {
-                if let Err(e) = driver.execute(Some(&self.llm)).await {
+                // [Phase 28] PolicyEngine Check - Enforce security policies on UI actions
+                let policy = PolicyEngine::new();
+                let action_for_policy = AgentAction::UiClick { element_id: description.clone(), double_click: false };
+                
+                if policy.check(&action_for_policy).is_err() {
+                    warn!("   🛡️ Action blocked by PolicyEngine: {}", description);
+                    history.push(format!("BLOCKED_BY_POLICY: {}", description));
+                    consecutive_failures += 1;
+                } else if let Err(e) = driver.execute(Some(&self.llm)).await {
                     warn!("   ⚠️ Action failed: {}", e);
                     history.push(format!("FAILED: {}", description));
                     consecutive_failures += 1;
                     // Don't record failed steps
                 } else {
-                    history.push(description);
+                    history.push(description.clone());
                     // Record success step
                     if let Some(s) = step_to_record {
                         session_steps.push(s);
@@ -224,8 +272,39 @@ impl DynamicController {
                 }
             } else {
                 // For non-driver actions, just push history
-                 history.push(description);
+                 history.push(description.clone());
                  consecutive_failures = 0; // Reset
+            }
+            
+            // SEND EVENT TO ANALYZER
+            if let Some(tx) = &self.tx {
+                let event = EventEnvelope {
+                    schema_version: "1.0".to_string(),
+                    event_id: Uuid::new_v4().to_string(),
+                    ts: Utc::now().to_rfc3339(),
+                    source: "dynamic_agent".to_string(),
+                    app: "Agent".to_string(),
+                    event_type: event_type.to_string(),
+                    priority: "P1".to_string(),
+                    resource: None,
+                    payload: serde_json::json!({
+                        "goal": goal,
+                        "step": i,
+                        "action": action_type,
+                        "description": description,
+                        "plan": plan
+                    }),
+                    privacy: None,
+                    pid: None,
+                    window_id: None,
+                    window_title: None,
+                    browser_url: None,
+                    raw: None, 
+                };
+                
+                if let Ok(json) = serde_json::to_string(&event) {
+                    let _ = tx.try_send(json); 
+                }
             }
             
             // COMBAT MODE CHECK
@@ -262,6 +341,7 @@ impl DynamicController {
         }
 
         println!("🛑 Max steps reached.");
+        let _ = recorder.stop(); // Stop recording
         Ok(())
     }
 }

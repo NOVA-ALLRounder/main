@@ -6,6 +6,10 @@ use std::env;
 use crate::recommendation::AutomationProposal;
 use crate::context_pruning;
 
+
+use std::time::Duration;
+use tokio::time::sleep;
+
 #[derive(Clone)]
 pub struct LLMClient {
     client: Client,
@@ -14,18 +18,60 @@ pub struct LLMClient {
 }
 
 impl LLMClient {
+
     pub fn new() -> Result<Self> {
         dotenv::dotenv().ok(); // Load .env
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set in .env"))?;
         let client = Client::builder()
             .no_proxy()
+            .timeout(Duration::from_secs(120))         // [Fix] Total request timeout
+            .connect_timeout(Duration::from_secs(10))  // [Fix] Connection timeout
             .build()?;
         
         Ok(Self {
             client,
             api_key,
-            model: "gpt-4o".to_string(), // Use a smart model for planning
+            model: "gpt-4o".to_string(),
         })
+    }
+
+    /// Internal helper for robust API calls (Retry Logic)
+    async fn post_with_retry(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+        let max_retries = 3;
+        let mut attempt = 0;
+        let mut backoff = Duration::from_secs(1);
+
+        loop {
+            attempt += 1;
+            match self.client.post(url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(body)
+                .send()
+                .await 
+            {
+                Ok(resp) => {
+                    if resp.status().is_server_error() || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        // Retry on 5xx or 429
+                        if attempt > max_retries {
+                            return Ok(resp); // Return the error response after max retries
+                        }
+                    } else {
+                        // Success or client error (4xx) - don't retry 4xx (except 429)
+                        return Ok(resp);
+                    }
+                },
+                Err(e) => {
+                    // Network error
+                    if attempt > max_retries {
+                        return Err(anyhow::anyhow!("Max retries exceeded: {}", e));
+                    }
+                    eprintln!("⚠️ LLM Network Error (Attempt {}/{}): {}. Retrying in {:?}...", attempt, max_retries, e, backoff);
+                }
+            }
+
+            sleep(backoff).await;
+            backoff *= 2; // Exponential backoff (1s, 2s, 4s)
+        }
     }
 
     #[allow(dead_code)]
@@ -82,11 +128,7 @@ Output ONLY valid JSON.
             "temperature": 0.0
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -106,6 +148,29 @@ Output ONLY valid JSON.
         };
         let action_json: Value = serde_json::from_str(content_str)?;
         Ok(action_json)
+    }
+
+    /// Generic Chat Completion (for Architect/Chat features)
+    pub async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
+        let body = json!({
+            "model": self.model,
+            "messages": messages
+        });
+
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            return Err(anyhow::anyhow!("Chat Completion API Error: {}", error_text));
+        }
+
+        let res_json: serde_json::Value = res.json().await?;
+        let content = res_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        Ok(content)
     }
 
     /// Plan the next step using Vision (Screenshots) instead of DOM tree
@@ -135,6 +200,7 @@ Output ONLY valid JSON.
         11. Reply (ONLY for pure conversation): {{ "action": "reply", "text": "..." }}
         12. Open App (Focus/Launch): {{ "action": "open_app", "name": "Calculator" }}
         13. Open URL (Web): {{ "action": "open_url", "url": "https://mail.google.com" }}
+        14. Read File (Direct I/O): {{ "action": "read_file", "path": "/Users/user/Documents/report.xlsx" }}
         
         CRITICAL RULES:
         1. If the user asks you to DO something (e.g., "Open Calculator", "Search for X", "Click Y"), you MUST use 'key', 'type', or 'click_visual'. Do NOT use 'reply'.
@@ -178,11 +244,7 @@ Output ONLY valid JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -245,11 +307,7 @@ Output ONLY valid JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -301,11 +359,7 @@ Output ONLY valid JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -365,11 +419,7 @@ You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflo
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -412,11 +462,7 @@ Now output the CORRECTED JSON.
             ]
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -449,11 +495,7 @@ Now output the CORRECTED JSON.
             "max_tokens": 500
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         
@@ -506,11 +548,7 @@ Now output the CORRECTED JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -544,11 +582,7 @@ Now output the CORRECTED JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -688,11 +722,7 @@ Your goal is to detect Repetitive Manual Work (Toil) from user logs and propose 
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -737,11 +767,7 @@ Output format: Just the intent description in 1-2 sentences.
             "temperature": 0.3
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -811,11 +837,7 @@ Return JSON only:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -838,11 +860,7 @@ Return JSON only:
             //"dimensions": 1536 // Default
         });
 
-        let response = self.client.post("https://api.openai.com/v1/embeddings")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/embeddings", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -897,11 +915,7 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -954,11 +968,7 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.client.post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -1079,4 +1089,63 @@ Guidelines:
 pub struct FeedbackAnalysis {
     pub action: String,
     pub new_goal: Option<String>,
+}
+
+/// [Phase 28] Streaming Chat Completion
+/// Returns chunks via callback for real-time UI updates
+impl LLMClient {
+    pub async fn chat_completion_stream<F>(
+        &self,
+        messages: Vec<Value>,
+        mut on_chunk: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str) + Send,
+    {
+        use futures::StreamExt;
+        
+        let body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": true
+        });
+
+        let response = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Stream API Error: {}", error_text));
+        }
+
+        let mut full_content = String::new();
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            
+            // Parse SSE lines
+            for line in chunk_str.lines() {
+                if line.starts_with("data: ") {
+                    let data = &line[6..];
+                    if data == "[DONE]" {
+                        break;
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<Value>(data) {
+                        if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
+                            full_content.push_str(delta);
+                            on_chunk(delta);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(full_content)
+    }
 }

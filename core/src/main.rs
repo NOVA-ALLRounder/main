@@ -770,7 +770,7 @@ async fn main() -> anyhow::Result<()> {
                 let goal = parts[1..].join(" ");
                 
                 if let Some(brain) = &llm_client {
-                    let controller = dynamic_controller::DynamicController::new(brain.clone());
+                    let controller = dynamic_controller::DynamicController::new(brain.clone(), None);
                     // Run concurrently to allow Ctrl+C? For now blocking is fine as it has internal timeout/loop
                     if let Err(e) = controller.surf(&goal).await {
                         println!("❌ Surf failed: {}", e);

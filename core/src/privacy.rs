@@ -129,4 +129,22 @@ impl PrivacyGuard {
             url_str
         }
     }
+    /// Public helper for masking arbitrary text (e.g. window titles)
+    pub fn mask_sensitive_text(&self, text: &str) -> String {
+        let mut masked = text.to_string();
+        
+        // 1. Mask Emails
+        if self.email_regex.is_match(&masked) {
+             masked = self.email_regex.replace_all(&masked, "[EMAIL REDACTED]").to_string();
+        }
+        
+        // 2. Simple Credit Card (Luhn check too expensive, just regex)
+        // Matches 13-16 digits often separated by space or dash
+        let cc_regex = Regex::new(r"\b(?:\d[ -]*?){13,16}\b").unwrap();
+        if cc_regex.is_match(&masked) {
+             masked = cc_regex.replace_all(&masked, "[CC REDACTED]").to_string();
+        }
+        
+        masked
+    }
 }

@@ -284,11 +284,33 @@ pub async fn run_shell(cmd: &str) -> Result<String> {
     let result = command_queue::enqueue_command_in_lane(
         "shell",
         Box::new(move || {
-            let output = std::process::Command::new("sh")
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(30);
+            
+            let mut child = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(&cmd_clone)
-                .output()
-                .with_context(|| format!("Failed to run command: {}", cmd_clone))?;
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .with_context(|| format!("Failed to start command: {}", cmd_clone))?;
+
+            // Polling loop for timeout
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_status)) => break, // Finished
+                    Ok(None) => {
+                        if start.elapsed() >= timeout {
+                            let _ = child.kill();
+                            return Err(anyhow::anyhow!("Command timed out after 30s: {}", cmd_clone));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100)); // Non-async sleep (we are in blocking thread)
+                    },
+                    Err(e) => return Err(anyhow::anyhow!("Error waiting for process: {}", e)),
+                }
+            }
+
+            let output = child.wait_with_output()?;
 
             if output.status.success() {
                 let result = String::from_utf8_lossy(&output.stdout).to_string();

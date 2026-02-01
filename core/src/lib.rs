@@ -54,6 +54,11 @@ pub mod approval_gate;
 pub mod nl_store;
 pub mod browser_automation;
 pub mod dynamic_controller;
+pub mod content_extractor;
+pub mod telegram;
+pub mod architect;
+pub mod config_manager;
+pub mod screen_recorder;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

@@ -175,3 +175,16 @@ pub async fn set_lane_concurrency(lane: &str, max_concurrent: usize) {
 pub async fn get_lane_size(lane: &str) -> usize {
     COMMAND_QUEUE.get_lane_size(lane).await
 }
+
+/// [Phase 25] Cancel all pending tasks in a lane
+#[allow(dead_code)]
+pub async fn cancel_lane(lane: &str) {
+    let mut lanes = COMMAND_QUEUE.lanes.lock().expect("command queue lock poisoned");
+    if let Some(state) = lanes.get_mut(lane) {
+        let count = state.queue.len();
+        state.queue.clear();
+        if count > 0 {
+            eprintln!("⚠️ Cancelled {} pending tasks in lane '{}'", count, lane);
+        }
+    }
+}

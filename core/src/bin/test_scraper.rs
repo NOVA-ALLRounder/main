@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // 1. Initialize
     let llm = LLMClient::new()?;
-    let controller = DynamicController::new(llm);
+    let controller = DynamicController::new(llm, None);
 
     // 2. Goal: Read the screen
     // We expect the agent to capture, plan "read", and output text.

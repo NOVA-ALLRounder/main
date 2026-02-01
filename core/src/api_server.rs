@@ -273,6 +273,29 @@ pub struct QualityMetrics {
 }
 
 /// Start the HTTP API server for desktop GUI
+// Middleware for API Key Authentication
+async fn auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let api_key = std::env::var("STEER_API_KEY").unwrap_or_default();
+    
+    // If no key configured, allow all (Localhost Dev Mode)
+    if api_key.is_empty() {
+        return Ok(next.run(req).await);
+    }
+
+    // Check Header
+    let auth_header = req.headers().get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.replace("Bearer ", ""));
+        
+    match auth_header {
+        Some(key) if key == api_key => Ok(next.run(req).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
 /// Start the HTTP API server for desktop GUI
 pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> anyhow::Result<()> {
     let state = AppState {
@@ -298,10 +321,12 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
     let app = Router::new()
         .route("/", get(root_handler))
         .route("/api/health", get(health_check))
-        .route("/events", post(ingest_events)) // Replaces Python Ingest
+        // Open endpoints (Status, Logs)
         .route("/api/status", get(get_system_status))
         .route("/api/logs", get(get_recent_logs))
         .route("/api/system/health", get(get_system_health))
+        // Protected Endpoints (Chat, Execute, Plan, Verify)
+        .route("/events", post(ingest_events))
         .route("/api/chat", post(handle_chat))
         .route("/api/recommendations", get(list_recommendations))
         .route("/api/recommendations/:id/approve", post(approve_recommendation))
@@ -328,7 +353,6 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
         .route("/api/quality/score", post(score_quality_handler))
         .route("/api/quality/latest", get(latest_quality_handler))
         .route("/api/patterns/analyze", post(analyze_patterns))
-        //.route("/api/patterns/analyze", post(analyze_patterns)) // Removed duplicate
         .route("/api/quality", get(get_quality_metrics))
         .route("/api/recommendations/metrics", get(get_recommendation_metrics))
         .route("/api/routines", get(list_routines).post(create_routine_handler))
@@ -352,7 +376,8 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
         .route("/api/agent/goal", post(execute_goal_handler))
         .route("/api/agent/goal/current", get(get_current_goal))
         .route("/api/agent/feedback", post(handle_feedback))
-        .route("/api/context/selection", get(get_selection_context)) // New Endpoint
+        .route("/api/context/selection", get(get_selection_context))
+        .layer(axum::middleware::from_fn(auth_middleware)) // Apply Auth Middleware
         .layer(cors)
         .with_state(state);
 

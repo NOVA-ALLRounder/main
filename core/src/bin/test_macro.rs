@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 1. Initialize
     local_os_agent::db::init()?; // Initialize DB
     let llm = LLMClient::new()?;
-    let controller = DynamicController::new(llm);
+    let controller = DynamicController::new(llm, None);
 
     // 2. Goal: Record
     println!("🎥 Phase 1: Recording 'test_routine'");
