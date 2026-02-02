@@ -24,7 +24,7 @@ impl NotionClient {
     }
 
     pub fn from_env() -> Result<Self> {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let token = std::env::var("NOTION_API_KEY")
             .map_err(|_| anyhow::anyhow!("NOTION_API_KEY not set"))?;
         Ok(Self::new(&token))

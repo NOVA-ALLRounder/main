@@ -20,7 +20,7 @@ pub struct LLMClient {
 impl LLMClient {
 
     pub fn new() -> Result<Self> {
-        dotenv::dotenv().ok(); // Load .env
+        dotenvy::dotenv().ok(); // Load .env
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set in .env"))?;
         let client = Client::builder()
             .no_proxy()

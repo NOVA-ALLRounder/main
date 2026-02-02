@@ -271,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_functionality() {
         if std::env::var("OPENAI_API_KEY").is_err() {
-            dotenv::dotenv().ok();
+            dotenvy::dotenv().ok();
         }
         
         if std::env::var("OPENAI_API_KEY").is_err() {

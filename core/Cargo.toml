@@ -10,9 +10,13 @@ tokio = { version = "1.0", features = ["full"] }
 anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 reqwest = { version = "0.11", features = ["json"] }
-dotenv = "0.15"
-chrono = { version = "=0.4.38", features = ["serde"] }
+dotenvy = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 lazy_static = "1.4"
 sysinfo = "0.30"
 notify = "6.1"

@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
     
     let client = LLMClient::new()?;
     println!("🤖 Testing LLM with input '야'...");

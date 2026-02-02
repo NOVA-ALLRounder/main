@@ -192,4 +192,38 @@ mod tests {
         // Should be Critical
         assert!(policy.check(&action).is_err());
     }
+
+    #[test]
+    fn test_safe_actions_always_allowed() {
+        let policy = PolicyEngine::new(); // Locked by default
+
+        // Snapshot should always be allowed
+        let snapshot = AgentAction::UiSnapshot { scope: None };
+        assert!(policy.check(&snapshot).is_ok(), "Snapshot should be allowed even when locked");
+
+        // Find should always be allowed
+        let find = AgentAction::UiFind { query: "button".to_string() };
+        assert!(policy.check(&find).is_ok(), "Find should be allowed even when locked");
+    }
+
+    #[test]
+    fn test_lock_unlock_toggle() {
+        let mut policy = PolicyEngine::new();
+        assert!(policy.write_lock, "Should start locked");
+
+        policy.unlock();
+        assert!(!policy.write_lock, "Should be unlocked");
+
+        policy.lock();
+        assert!(policy.write_lock, "Should be locked again");
+    }
+
+    #[test]
+    fn test_terminate_always_blocked() {
+        let mut policy = PolicyEngine::new();
+        policy.unlock();
+
+        let terminate = AgentAction::Terminate;
+        assert!(policy.check(&terminate).is_err(), "Terminate should be blocked even when unlocked");
+    }
 }

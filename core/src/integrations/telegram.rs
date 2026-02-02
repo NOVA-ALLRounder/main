@@ -17,7 +17,7 @@ impl TelegramBot {
     }
 
     pub fn from_env() -> Result<Self> {
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
         let token = std::env::var("TELEGRAM_BOT_TOKEN")
             .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN not set"))?;
         let chat_id = std::env::var("TELEGRAM_CHAT_ID")

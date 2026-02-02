@@ -20,9 +20,24 @@ use chrono::Utc;
 use uuid::Uuid;
 use serde_json::json;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
+use tracing::{info, warn, error, debug};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize structured logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "steer=info,warn".to_string())
+        )
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+
+    info!("🚀 Steer OS Agent initializing...");
+
     // [Self-Healing] Panic Hook
     if !env_flag("STEER_PANIC_STD") {
         std::panic::set_hook(Box::new(|info| {
@@ -55,50 +70,56 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             
-            eprintln!("❌ FATAL ERROR: {}", msg);
-            eprintln!("📄 Crash report saved to ~/.steer/logs/crash.log");
+            error!("❌ FATAL ERROR: {}", msg);
+            error!("📄 Crash report saved to ~/.steer/logs/crash.log");
         }));
     } else {
-        eprintln!("⚠️  Panic hook disabled (STEER_PANIC_STD=1).");
+        warn!("⚠️  Panic hook disabled (STEER_PANIC_STD=1)");
     }
 
     let _lock = match singleton_lock::acquire_lock() {
         Ok(guard) => guard,
         Err(err) => {
-            eprintln!("⛔️ {}", err);
+            error!("⛔️ {}", err);
             return Ok(());
         }
     };
 
-    println!("🤖 Local OS Agent (Rust Native Mode) Started!");
-    println!("--------------------------------------------------");
-    
+    info!("🤖 Local OS Agent (Rust Native Mode) Started!");
+    info!("--------------------------------------------------");
+
     // 0. System Health Check
+    debug!("Running system health check...");
     let health = dependency_check::SystemHealth::check_all();
     health.print_report();
 
-    println!("Type 'help' for commands. (Needs Accessibility Permissions)");
-    println!("--------------------------------------------------");
+    info!("Type 'help' for commands. (Needs Accessibility Permissions)");
+    info!("--------------------------------------------------");
 
     // 0. Init Check
     if let Err(e) = db::init() {
-        eprintln!("Failed to init DB: {}", e);
+        error!("Failed to init DB: {}", e);
+    } else {
+        info!("Database initialized successfully");
     }
-    
+
     // 1. Init LLM
     let llm_client = match llm_gateway::LLMClient::new() {
-        Ok(c) => Some(c),
+        Ok(c) => {
+            info!("LLM Gateway initialized successfully");
+            Some(c)
+        },
         Err(e) => {
-            eprintln!("⚠️ Failed to init LLM Gateway: {}", e);
+            warn!("⚠️ Failed to init LLM Gateway: {}", e);
             None
         }
     };
-    
+
     // 2. Start Scheduler (Brain)
     if let Some(llm) = &llm_client {
         let scheduler = scheduler::Scheduler::new(llm.clone());
         scheduler.start();
-        println!("🧠 Brain Routine Scheduler Active.");
+        info!("🧠 Brain Routine Scheduler Active");
     }
 
     // 1. Start Native Event Tap (replaces IPC Adapter)
@@ -108,9 +129,11 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
         if env_flag("STEER_DISABLE_EVENT_TAP") {
-            println!("⚠️  Event Tap disabled via STEER_DISABLE_EVENT_TAP.");
+            warn!("⚠️  Event Tap disabled via STEER_DISABLE_EVENT_TAP");
         } else if let Err(e) = macos::events::start_event_tap(log_tx.clone()) {
-            eprintln!("❌ Failed to start Event Tap: {}", e);
+            error!("❌ Failed to start Event Tap: {}", e);
+        } else {
+            info!("Event Tap started successfully");
         }
     }
 
@@ -119,25 +142,26 @@ async fn main() -> anyhow::Result<()> {
     if let Some(c) = llm_client.clone() {
         let llm_client_ref = std::sync::Arc::new(c);
         analyzer::spawn(log_rx, llm_client_ref);
+        info!("Shadow Analyzer started with LLM");
     } else {
         // Fallback: Just save events to DB without LLM analysis
         tokio::spawn(async move {
             while let Some(log_json) = log_rx.recv().await {
                 if let Err(e) = db::insert_event(&log_json) {
-                    eprintln!("DB insert error: {}", e);
+                    error!("DB insert error: {}", e);
                 }
             }
         });
-        println!("⚠️  Running in lite mode (no LLM, events still saved)");
+        warn!("⚠️  Running in lite mode (no LLM, events still saved)");
     }
 
     // 4. Start HTTP API Server for Desktop GUI
-    println!("🌐 Starting Desktop API Server...");
+    info!("🌐 Starting Desktop API Server...");
     let llm_for_api = llm_client.clone();
     tokio::spawn(async move {
         if let Err(e) = api_server::start_api_server(llm_for_api).await {
-            eprintln!("❌ FATAL: Desktop API Server failed to start: {}", e);
-            eprintln!("   (The application cannot function without the API server. Exiting...)");
+            error!("❌ FATAL: Desktop API Server failed to start: {}", e);
+            error!("   (The application cannot function without the API server. Exiting...)");
             std::process::exit(1);
         }
     });
