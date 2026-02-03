@@ -10,8 +10,8 @@ target/
 .DS_Store
 
 # Secrets & Config
-core/credentials.json
-core/.env
+apps/core/credentials.json
+apps/core/.env
 .env
 *.env
 
@@ -19,10 +19,24 @@ core/.env
 *.log
 **/*.log
 behavior_test_output.txt
+collector/**/logs/
+collector/**/archive/
 
 # Database
 *.db
-core/steer.db
+apps/core/steer.db
+collector/**/collector*.db
+collector/**/collector_summary*.db
+collector/**/summary*.db
+collector/**/database.sqlite
+collector/**/archive/**/*.jsonl.gz
+collector/**/archive/**/manifest.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
 
 # Dependencies
 node_modules/

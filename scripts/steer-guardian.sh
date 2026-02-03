@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-STEER_BIN="../core/target/release/steer-core"
+STEER_BIN="../apps/core/target/release/steer-core"
 LOG_DIR="$HOME/.steer/logs"
 GUARDIAN_LOG="$LOG_DIR/guardian.log"
 CRASH_LOG="$LOG_DIR/crash.log"

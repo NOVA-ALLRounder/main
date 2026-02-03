@@ -1,4 +1,4 @@
-# Security Policy
+﻿# Security Policy
 
 ## 1. Zero Trust Principle
 * LLM이 생성한 명령은 기본적으로 "위험하다"고 간주한다.
@@ -17,4 +17,5 @@
 | **Critical** | `file.delete`, `cmd.exec`, `submit.payment` | **건별 사용자 승인 (2FA/Confirm)** |
 
 ## 4. Fail-Safe
-* `Esc` 키 연타 또는 특정 핫키 입력 시 Swift Adapter 프로세스 즉시 종료 (Kill Switch).
+* `Esc` 키 연타 또는 **Ctrl+Shift+Esc**(작업 관리자 호출)로 즉시 중단 가능.
+* AutoHotkey 사용 시 별도의 글로벌 핫키로 에이전트 종료를 매핑할 수 있음.

@@ -3,7 +3,7 @@
 # Configuration
 AGENT_NAME="com.antigravity.agent"
 PLIST_PATH="$HOME/Library/LaunchAgents/$AGENT_NAME.plist"
-CORE_DIR="$(cd "$(dirname "$0")/../core" && pwd)"
+CORE_DIR="$(cd "$(dirname "$0")/../apps/core" && pwd)"
 BINARY_PATH="$CORE_DIR/target/release/core"
 LOG_DIR="$HOME/.antigravity/logs"
 

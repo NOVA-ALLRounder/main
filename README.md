@@ -1,97 +1,71 @@
-# Local OS Agent (Rust Native)
+﻿# Local OS Agent (Rust Native)
 
-**사용자 행동 기반 자동화 에이전트** - 컴퓨터 사용 패턴을 분석하여 자동화를 추천하고 실행합니다.
+**사용자 행동 기반 자동화 에이전트** — 로컬 OS 작업을 관찰/분석하고 자동화를 추천·실행합니다.
 
-[![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust)](https://www.rust-lang.org/)
-[![macOS](https://img.shields.io/badge/macOS-000000?style=flat&logo=apple)](https://www.apple.com/macos/)
+## Architecture
+```mermaid
+graph TD
+  DCP[Data-Collection-Projection] -->|/events| CORE[Steer Core API]
+  CORE --> DB[SQLite/State]
+  CORE --> PAT[Patterns/Recommendations]
+  CORE --> UI[Web/Desktop UI]
+```
+- **Collector**: `collector/Data-Collection-Projection` (Python, /events 수집)
+- **Core**: `apps/core` (Rust, 정책/분석/API)
+- **UI**: `apps/web`, `apps/desktop`
 
-## ✨ 주요 기능
+## 실행방법 (Windows)
 
-| 기능 | 명령어 | 설명 |
-|:---|:---|:---|
-| Shadow | (자동) | 백그라운드 행동 데이터 수집 |
-| Routine | `routine` | 일일 루틴 분석 |
-| Recommend | `recommend` | 자동화 스크립트 제안 |
-| Control | `control <app> <cmd>` | 앱 내부 제어 |
-| Workflow | `build_workflow <prompt>` | n8n 자동화 생성 |
-| Exec | `exec <cmd>` | 셸 명령 실행 |
-| Status | `status` | 시스템 리소스 확인 |
-
-## 🚀 설치
-
-```bash
-# 1. Clone
-git clone <repo_url>
-cd local-os-agent/core
-
-# 2. 환경변수 설정
-cp .env.example .env
-# .env 파일에 OPENAI_API_KEY 입력
-
-# 3. 빌드
-cargo build --release
-
-# 4. 실행 (Accessibility 권한 필요)
-./target/release/core
+### 1) 데이터 수집기(DCP) 실행
+```powershell
+conda activate DATA_C
+.\scripts\run_dcp.ps1
 ```
 
-## 📦 Release
+### 2) Core 실행 (DCP 연동)
+```powershell
+$env:STEER_COLLECTOR_MODE="dcp"
+$env:STEER_DCP_ENDPOINT="http://127.0.0.1:8080/events"
 
-To build a production-ready application (binary/bundle):
-
-```bash
-./scripts/build_release.sh
+cd apps\core
+cargo run --release --bin local_os_agent
 ```
 
-This script automates:
-1.  **Frontend Build**: Compiles React/Vite assets.
-2.  **Core Build**: Compiles Rust sidecar (steer-core).
-3.  **Bundle**: Generates `.app` (macOS) or `.exe` in `desktop/src-tauri/target/release/bundle`.
-
-## 🛡️ Self-Healing
-The agent includes a supervisor script to ensure high availability:
-
-```bash
-./scripts/steer-guardian.sh
-```
-This restarts the core process automatically if a crash occurs.
-
-## 📋 필수 요구사항
-
-- **macOS 12+** (Monterey 이상)
-- **Accessibility 권한**: 시스템 환경설정 → 개인정보 보호 → 손쉬운 사용 → 터미널 체크
-- **Rust 1.70+**
-- **OpenAI API Key** (LLM 분석용)
-
-## 🛡️ 보안
-
-- `exec` 명령어는 위험한 키워드(`rm`, `sudo` 등)가 포함되면 차단됩니다.
-- 기본적으로 **Write Lock**이 활성화되어 있습니다. `unlock` 명령어로 해제하세요.
-
-## 📂 프로젝트 구조
-
-```
-core/src/
-├── main.rs          # CLI 및 메인 루프
-├── analyzer.rs      # 행동 패턴 분석기
-├── db.rs            # SQLite 저장소
-├── policy.rs        # 보안 정책 엔진
-├── executor.rs      # 셸 명령 실행
-├── llm_gateway.rs   # OpenAI 연동
-├── notifier.rs      # macOS 알림
-├── monitor.rs       # 시스템 모니터링
-├── applescript.rs   # 앱 제어
-├── n8n_api.rs       # n8n 워크플로우 API
-├── visual_driver.rs # UI 자동화 폴백
-└── macos/           # 네이티브 macOS 바인딩
+### 3) (선택) UI 빌드
+```powershell
+.\scripts\build_release.ps1
 ```
 
-## 🧪 테스트
-
-```bash
-cargo test
+## 파일구조
 ```
-
-## 📜 라이선스
-
-MIT License
+.
+├─ apps/
+│  ├─ core/
+│  │  ├─ Cargo.toml
+│  │  ├─ src/
+│  │  │  ├─ main.rs             # 엔트리
+│  │  │  ├─ api_server.rs       # /events, API
+│  │  │  ├─ analyzer.rs         # 패턴 분석
+│  │  │  └─ collector_bridge.rs # DCP 연동
+│  │  └─ README.md
+│  ├─ web/
+│  │  ├─ package.json
+│  │  └─ src/
+│  └─ desktop/
+│     ├─ package.json
+│     └─ src-tauri/
+├─ collector/
+│  └─ Data-Collection-Projection/
+│     ├─ src/                    # 수집 파이프라인
+│     ├─ configs/                # config.yaml 등
+│     ├─ scripts/                # init_db/run_core
+│     └─ README.md
+├─ docs/
+│  └─ project/        # 프로젝트 문서
+├─ scripts/
+│  ├─ run_dcp.ps1
+│  ├─ build_release.ps1
+│  └─ steer-guardian.ps1
+├─ tests/             # 테스트
+└─ README.md
+```
