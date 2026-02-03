@@ -343,8 +343,19 @@ impl N8nApi {
     }
 
     /// HACK: Directly modify n8n SQLite DB to assign project ownership to imported workflows (n8n v1+)
+    /// SECURITY: Requires N8N_ALLOW_DB_MODIFY=true to execute
     fn fix_workflow_ownership(&self) -> Result<()> {
         use rusqlite::Connection;
+        
+        // Security: Require explicit opt-in for direct DB modifications
+        let allow_db_modify = std::env::var("N8N_ALLOW_DB_MODIFY")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        
+        if !allow_db_modify {
+            println!("⚠️ [n8n] Direct DB modification skipped. Set N8N_ALLOW_DB_MODIFY=true to enable.");
+            return Ok(());
+        }
         
         let home = std::env::var("HOME").unwrap_or("/".to_string());
         let db_path = format!("{}/.n8n/database.sqlite", home);

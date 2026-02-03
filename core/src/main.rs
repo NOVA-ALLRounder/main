@@ -9,6 +9,7 @@ use local_os_agent::{
     static_checks, singleton_lock, nl_automation, intent_router, slot_filler, plan_builder,
     execution_controller, verification_engine, approval_gate, nl_store, browser_automation,
     dynamic_controller,
+    mcp_client,
     env_flag,
 };
 
@@ -71,6 +72,28 @@ async fn main() -> anyhow::Result<()> {
     };
 
     println!("🤖 Local OS Agent (Rust Native Mode) Started!");
+    // [Phase 4] Self-Diagnosis: Check Accessibility Permissions
+    println!("🔍 Checking Accessibility Permissions...");
+    let ax_check = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to return name of first application process")
+        .output();
+
+    match ax_check {
+        Ok(output) if output.status.success() => {
+             println!("✅ Accessibility Permissions: GRANTED.");
+        },
+        _ => {
+             println!("\n\n################################################################");
+             println!("❌ WARNING: ACCESSIBILITY PERMISSIONS MISSING OR REVOKED!");
+             println!("   The agent can launch apps but CANNOT click or type.");
+             println!("   FIX: Go to System Settings -> Privacy -> Accessibility");
+             println!("   ACTION: Remove (-) and Re-add (+) your Terminal / Agent.");
+             println!("################################################################\n\n");
+             // We continue, but warn heavily.
+        }
+    }
+
     println!("--------------------------------------------------");
     
     // 0. System Health Check
@@ -99,6 +122,13 @@ async fn main() -> anyhow::Result<()> {
         let scheduler = scheduler::Scheduler::new(llm.clone());
         scheduler.start();
         println!("🧠 Brain Routine Scheduler Active.");
+    }
+
+    // 2.5 Init MCP
+    if let Err(e) = mcp_client::init_mcp() {
+        eprintln!("⚠️ Failed to init MCP: {}", e);
+    } else {
+        println!("🔌 MCP System Initialized.");
     }
 
     // 1. Start Native Event Tap (replaces IPC Adapter)
@@ -160,6 +190,25 @@ async fn main() -> anyhow::Result<()> {
 
     let mut policy = policy::PolicyEngine::new(); // Starts LOCKED
     let mut res_mon = monitor::ResourceMonitor::new();
+
+    // [NEW] CLI Argument Handler for Direct Surf Execution
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 3 && args[1] == "surf" {
+        let goal = args[2..].join(" ");
+        println!("🎯 [CLI] Direct surf mode: {}", goal);
+        
+        if let Some(llm) = llm_client.clone() {
+            policy.unlock(); // Allow agent to act
+            let controller = dynamic_controller::DynamicController::new(llm, None);
+            match controller.surf(&goal).await {
+                Ok(_) => println!("✅ Surf completed successfully!"),
+                Err(e) => println!("❌ Surf failed: {}", e),
+            }
+        } else {
+            println!("❌ LLM not available for surf mode");
+        }
+        return Ok(());
+    }
 
     // 5. User Input Loop (REPL)
     let stdin = io::stdin();

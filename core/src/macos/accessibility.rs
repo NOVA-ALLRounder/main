@@ -289,3 +289,76 @@ pub fn get_element_center_at(x: i32, y: i32) -> Option<(i32, i32)> {
         }
     }
 }
+
+// =====================================================
+// Phase 29: OCR/Text Search via Accessibility API
+// =====================================================
+
+/// Search for text on screen using Accessibility API
+/// Returns true if text was found in any UI element
+/// This serves as a CLI fallback when vision-based click fails
+pub fn find_text_on_screen(query: &str) -> Option<String> {
+    let query_lower = query.to_lowercase();
+    
+    unsafe {
+        let system_wide = AXUIElementCreateSystemWide();
+        if system_wide.is_null() {
+            return None;
+        }
+        let _system = AxElement(system_wide);
+        
+        // Get focused application
+        let focused_app_ref = get_attribute(system_wide, "AXFocusedApplication");
+        if focused_app_ref.is_none() {
+            return None;
+        }
+        let focused_app = focused_app_ref.unwrap() as AXUIElementRef;
+        let _focused_app_guard = AxElement(focused_app);
+        
+        // Search through UI hierarchy
+        fn search_element(element: AXUIElementRef, query: &str, depth: usize) -> Option<String> {
+            if depth > 8 { return None; } // Limit recursion for performance
+            
+            unsafe {
+                // Check this element's text attributes
+                let title = get_string_attribute(element, "AXTitle").unwrap_or_default();
+                let value = get_string_attribute(element, "AXValue").unwrap_or_default();
+                let description = get_string_attribute(element, "AXDescription").unwrap_or_default();
+                
+                // Check if any text matches (case-insensitive)
+                if title.to_lowercase().contains(query) {
+                    return Some(format!("title:{}", title));
+                }
+                if value.to_lowercase().contains(query) {
+                    return Some(format!("value:{}", value));
+                }
+                if description.to_lowercase().contains(query) {
+                    return Some(format!("description:{}", description));
+                }
+                
+                // Search children
+                if let Some(children_ref) = get_attribute(element, "AXChildren") {
+                    let children_array = CFArray::<CFTypeRef>::wrap_under_get_rule(
+                        children_ref as core_foundation::array::CFArrayRef
+                    );
+                    
+                    for i in 0..children_array.len() {
+                        if let Some(child_ptr) = children_array.get(i) {
+                            let child = *child_ptr as AXUIElementRef;
+                            if let Some(result) = search_element(child, query, depth + 1) {
+                                core_foundation::base::CFRelease(children_ref);
+                                return Some(result);
+                            }
+                        }
+                    }
+                    core_foundation::base::CFRelease(children_ref);
+                }
+                
+                None
+            }
+        }
+        
+        search_element(focused_app, &query_lower, 0)
+    }
+}
+

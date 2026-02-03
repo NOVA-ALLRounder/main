@@ -200,21 +200,19 @@ async fn process_buffer(
         
         // 2. Hybrid Intelligence (Router)
         // Rule: Use AI if budget exists and pattern is strong.
-        // We use the new LLMClient::route_task to decide Local vs Cloud.
+        // [TEMP FIX] Always use Cloud LLM until Ollama integration is complete.
+        // Original routing: let (use_local, preferred_model) = llm.route_task(&pattern.description, has_pii);
         
-        // Simulate PII check (assume false for now as we sanitized inputs)
         let has_pii = false; 
-        let (use_local, preferred_model) = llm.route_task(&pattern.description, has_pii);
+        let (_use_local, preferred_model) = llm.route_task(&pattern.description, has_pii);
+        let use_local = false; // [TEMP] Force Cloud LLM
         
         println!("🤖 [Analyzer] Hybrid Intelligence: Routing to {} (Model: {})", 
             if use_local { "Local (Ollama)" } else { "Cloud (OpenAI)" }, 
             preferred_model);
 
         let proposal_result = if use_local {
-            // Local Inference (Ollama)
-            // We need to implement parsing for Local LLM output as it might be raw text not strictly generic JSON.
-            // For now, we will skip implementation to keep this PR focused on "Router Logic" and "Connection".
-            // Implementation Plan Phase 4.2 Step 2 will cover the actual Prompt Engineering for Local LLM.
+            // Local Inference (Ollama) - Not yet implemented
             println!("   -> Skipping generation (Local LLM implementation pending in next step)");
             continue;
         } else {

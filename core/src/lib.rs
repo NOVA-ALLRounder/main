@@ -1,8 +1,18 @@
 pub mod schema;
 pub mod session;
 pub mod policy;
+pub mod permission_manager;
 pub mod llm_gateway;
 pub mod analyzer;
+pub mod external_apis;
+pub mod browser_automation;
+pub mod approval_gate;
+pub mod subagent;
+pub mod session_store;
+pub mod retry_logic;
+pub mod bash_executor;
+pub mod tool_chaining;
+pub mod mcp_client;
 pub mod db;
 pub mod notifier;
 pub mod monitor;
@@ -50,15 +60,15 @@ pub mod slot_filler;
 pub mod plan_builder;
 pub mod execution_controller;
 pub mod verification_engine;
-pub mod approval_gate;
 pub mod nl_store;
-pub mod browser_automation;
 pub mod dynamic_controller;
 pub mod content_extractor;
 pub mod telegram;
 pub mod architect;
 pub mod config_manager;
 pub mod screen_recorder;
+pub mod cli_llm;
+pub mod reality_check;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

@@ -9,6 +9,26 @@ use std::io::Cursor;
 
 use serde::{Serialize, Deserialize};
 
+// =====================================================
+// Clawdbot-inspired helper functions
+// =====================================================
+
+/// Convert error to AI-friendly format (clawdbot pattern: toAIFriendlyError)
+/// Provides actionable context for the LLM to retry with a different approach
+pub fn to_ai_friendly_error(err: anyhow::Error, context: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Failed to {}: {} (Try a different approach - the element may have moved or be unavailable)",
+        context,
+        err
+    )
+}
+
+/// Normalize timeout values to safe bounds (clawdbot pattern: normalizeTimeoutMs)
+pub fn normalize_timeout_ms(value: Option<u64>, default: u64, max: u64) -> u64 {
+    value.map(|v| v.max(500).min(max)).unwrap_or(default)
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UiAction {
     OpenUrl(String),
@@ -18,6 +38,7 @@ pub enum UiAction {
     Type(String),
     Scroll(String), // "down" | "up"
     ActivateApp(String), // "frontmost" or app name
+    KeyboardShortcut(String, Vec<String>), // key, modifiers (e.g. "n", ["command"])
     // Verify(String), // Removed: Legacy standalone verify unused
 }
 
@@ -331,6 +352,154 @@ impl VisualDriver {
                         Err(_) => return Err(anyhow::anyhow!("Activate Timed Out")),
                     }
                 }
+                UiAction::KeyboardShortcut(key, modifiers) => {
+                    // [FIX] Wait a moment to ensure the app is fully activated
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                    
+                    // Helper function to get current app name
+                    fn get_frontmost_app() -> Result<String, anyhow::Error> {
+                        let script = r#"
+                            tell application "System Events"
+                                name of first application process whose frontmost is true
+                            end tell
+                        "#;
+                        applescript::run(script)
+                    }
+                    
+                    // Helper function to execute menu click
+                    async fn execute_menu_click(app: &str, menu_items: &str, description: &str) -> Result<(), anyhow::Error> {
+                        println!("      🔧 [WORKAROUND] Using menu click for {}", description);
+                        let script = format!(r#"
+                            tell application "System Events"
+                                tell process "{}"
+                                    {}
+                                end tell
+                            end tell
+                        "#, app, menu_items);
+                        
+                        let task = tokio::task::spawn_blocking(move || {
+                            applescript::run(&script)
+                        });
+                        
+                        match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
+                            Ok(Ok(Ok(_))) => Ok(()),
+                            Ok(Ok(Err(e))) => Err(anyhow::anyhow!("Menu click failed: {}", e)),
+                            Ok(Err(_)) => Err(anyhow::anyhow!("Task Panic")),
+                            Err(_) => Err(anyhow::anyhow!("Menu click timed out")),
+                        }
+                    }
+                    
+                    // Check if we need menu click workaround
+                    if let Ok(app_name) = get_frontmost_app() {
+                        let app = app_name.trim();
+                        let is_notes = app.eq_ignore_ascii_case("Notes") || app == "메모";
+                        let is_textedit = app.eq_ignore_ascii_case("TextEdit") || app == "텍스트 편집기";
+                        let is_calculator = app.eq_ignore_ascii_case("Calculator") || app == "계산기";
+                        
+                        // WORKAROUND: Cmd+A (Select All)
+                        if key == "a" && modifiers.contains(&"command".to_string()) {
+                            if is_notes {
+                                let result = execute_menu_click(
+                                    app,
+                                    r#"click menu item "모두 선택" of menu "편집" of menu bar 1"#,
+                                    "Notes Cmd+A"
+                                ).await;
+                                if result.is_ok() { return Ok(()); }
+                            } else if is_textedit {
+                                let result = execute_menu_click(
+                                    app,
+                                    r#"click menu item "모두 선택" of menu "편집" of menu bar 1"#,
+                                    "TextEdit Cmd+A"
+                                ).await;
+                                if result.is_ok() { return Ok(()); }
+                            }
+                        }
+                        
+                        // WORKAROUND: Cmd+C (Copy)
+                        if key == "c" && modifiers.contains(&"command".to_string()) {
+                            if is_notes {
+                                let result = execute_menu_click(
+                                    app,
+                                    r#"click menu item "복사" of menu "편집" of menu bar 1"#,
+                                    "Notes Cmd+C"
+                                ).await;
+                                if result.is_ok() { return Ok(()); }
+                            } else if is_textedit {
+                                let result = execute_menu_click(
+                                    app,
+                                    r#"click menu item "복사" of menu "편집" of menu bar 1"#,
+                                    "TextEdit Cmd+C"
+                                ).await;
+                                if result.is_ok() { return Ok(()); }
+                            }
+                            } else if is_calculator {
+                                let result = execute_menu_click(
+                                    app,
+                                    r#"click menu item "Copy" of menu "Edit" of menu bar 1"#,
+                                    "Calculator Cmd+C"
+                                ).await;
+                                if result.is_ok() { return Ok(()); }
+
+                        }
+                        
+                        // WORKAROUND: Cmd+N (New Note/Document)
+                        if key == "n" && modifiers.contains(&"command".to_string()) && is_notes {
+                        // Get current app name
+                        let app_check_script = r#"
+                            tell application "System Events"
+                                name of first application process whose frontmost is true
+                            end tell
+                        "#;
+                        
+                            let result = execute_menu_click(
+                                app,
+                                r#"click menu item "새로운 메모" of menu "파일" of menu bar 1"#,
+                                "Notes Cmd+N"
+                            ).await;
+                            if result.is_ok() { return Ok(()); }
+                        }
+                        
+                        // WORKAROUND: Cmd+V (Paste) - Notes only
+                        if key == "v" && modifiers.contains(&"command".to_string()) && is_notes {
+                            let result = execute_menu_click(
+                                app,
+                                r#"click menu item "붙여넣기" of menu "편집" of menu bar 1"#,
+                                "Notes Cmd+V"
+                            ).await;
+                            if result.is_ok() { return Ok(()); }
+                        }
+                    }
+
+                    
+                    let key_str = key.clone();
+                    let mods_str = modifiers.iter()
+                        .map(|m| format!("{} down", m))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    
+                    // Construct AppleScript: keystroke "n" using {command down}
+                    let script = if key_str.eq_ignore_ascii_case("escape") || key_str.eq_ignore_ascii_case("esc") {
+                        "tell application \"System Events\" to key code 53".to_string()
+                    } else if modifiers.is_empty() {
+                        format!("tell application \"System Events\" to keystroke \"{}\"", key_str)
+                    } else {
+                        // CORRECT SYNTAX: using {command down} WITH BRACES!
+                        format!("tell application \"System Events\" to keystroke \"{}\" using {{{}}}", key_str, mods_str)
+                    };
+                    
+                    
+                    println!("      ⌨️ Shortcut: {} + {:?}", key_str, modifiers);
+                    println!("      🔍 [DEBUG] AppleScript Command: {}", script);
+                    let task = tokio::task::spawn_blocking(move || {
+                        applescript::run(&script)
+                    });
+                     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
+                        Ok(Ok(Ok(_))) => {},
+                        Ok(Ok(Err(e))) => return Err(anyhow::anyhow!("Shortcut Failed: {}", e)),
+                        Ok(Err(_)) => return Err(anyhow::anyhow!("Task Panic")),
+                        Err(_) => return Err(anyhow::anyhow!("Shortcut Timed Out")),
+                    }
+                }
                 UiAction::ClickVisual(desc) => {
                     println!("      👁️ Vision Click: Finding '{}'...", desc);
                     if let Some(brain) = llm {
@@ -341,8 +510,10 @@ impl VisualDriver {
                                  tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                              }
 
+                             println!("      📸 Capturing screen for Vision Click...");
                              match Self::capture_screen() {
                                 Ok((b64, scale)) => {
+                                    println!("      🔍 Calling find_element_coordinates (image size: {} bytes)...", b64.len());
                                     match brain.find_element_coordinates(desc, &b64).await {
                                         Ok(Some((x_raw, y_raw))) => {
                                             // Apply scaling back to original screen size
@@ -364,9 +535,12 @@ impl VisualDriver {
                                             }
 
                                             let script = format!("tell application \"System Events\" to click at {{{}, {}}}", x, y);
+                                            println!("      🖱️ Executing AppleScript: {}", script);
                                             if let Err(e) = applescript::run(&script) {
                                                  println!("      ❌ Click visual script failed: {}", e);
                                                  if step.critical { return Err(anyhow::anyhow!("Visual Click execution failed")); }
+                                            } else {
+                                                 println!("      ✅ Click executed successfully!");
                                             }
                                             break; // Success!
                                         },

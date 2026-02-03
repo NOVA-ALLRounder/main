@@ -40,7 +40,15 @@ pub fn control_app(app: &str, command: &str) -> Result<String> {
 }
 
 pub fn activate_app(app: &str) -> Result<String> {
-    let script = format!("tell application {:?} to activate", app);
+    let script = format!(r#"
+    tell application "{}"
+        activate
+        repeat until frontmost
+            delay 0.1
+        end repeat
+        delay 0.5
+    end tell
+    "#, app);
     run(&script)
 }
 
@@ -138,4 +146,33 @@ fn run_lines_with_args(lines: &[&str], args: &[String]) -> Result<String> {
     {
         Ok("AppleScript functionality is only available on macOS.".to_string())
     }
+}
+
+pub fn open_url(url: &str) -> Result<String> {
+    // Smart Open: Detects if Safari or Chrome is frontmost and force-opens there.
+    // Otherwise falls back to system default.
+    let script = format!(r#"
+        tell application "System Events"
+            set frontApp to name of first application process whose frontmost is true
+        end tell
+        
+        if frontApp is "Safari" then
+            tell application "Safari"
+                activate
+                open location "{}"
+            end tell
+            return "Opened in Safari"
+        else if frontApp is "Google Chrome" then
+            tell application "Google Chrome"
+                activate
+                open location "{}"
+            end tell
+            return "Opened in Chrome"
+        else
+            open location "{}"
+            return "Opened in Default Browser"
+        end if
+    "#, url, url, url);
+    
+    run(&script)
 }
