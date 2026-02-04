@@ -74,6 +74,11 @@ pub fn activate_frontmost_app() -> Result<String> {
     run(script)
 }
 
+pub fn check_accessibility() -> Result<()> {
+    let script = r#"tell application "System Events" to get name of first application process whose frontmost is true"#;
+    run(script).map(|_| ())
+}
+
 pub fn get_active_window_context() -> Result<(String, String)> {
     // Returns (Window Title, Browser URL)
     let script = r#"

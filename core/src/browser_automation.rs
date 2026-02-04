@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
+use crate::peekaboo_cli;
+use crate::tool_chaining::CrossAppBridge;
 
 // =====================================================
 // Element Reference System (clawdbot pattern)
@@ -33,12 +35,24 @@ impl Bounds {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SnapshotSource {
+    AppleScript,
+    Peekaboo,
+}
+
 /// Browser automation context
 pub struct BrowserAutomation {
     /// Cache of element references from last snapshot
     element_refs: HashMap<String, ElementRef>,
     /// Counter for generating unique element IDs
     ref_counter: u32,
+    /// Ordered refs from last snapshot
+    last_snapshot_refs: Vec<ElementRef>,
+    /// Snapshot source for last capture
+    last_snapshot_source: SnapshotSource,
+    /// Snapshot id when using Peekaboo
+    last_snapshot_id: Option<String>,
 }
 
 impl BrowserAutomation {
@@ -46,6 +60,9 @@ impl BrowserAutomation {
         Self {
             element_refs: HashMap::new(),
             ref_counter: 0,
+            last_snapshot_refs: Vec::new(),
+            last_snapshot_source: SnapshotSource::AppleScript,
+            last_snapshot_id: None,
         }
     }
 
@@ -58,6 +75,9 @@ impl BrowserAutomation {
         let mut refs = Vec::new();
         self.element_refs.clear();
         self.ref_counter = 0;
+        self.last_snapshot_refs.clear();
+        self.last_snapshot_source = SnapshotSource::AppleScript;
+        self.last_snapshot_id = None;
         
         // Use AppleScript to get accessibility tree
         let script = r#"
@@ -91,34 +111,73 @@ impl BrowserAutomation {
             .arg(script)
             .output()
             .context("Failed to execute AppleScript for snapshot")?;
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() >= 6 {
-                self.ref_counter += 1;
-                let ref_id = format!("E{}", self.ref_counter);
-                
-                let elem_ref = ElementRef {
-                    id: ref_id.clone(),
-                    role: parts[0].to_string(),
-                    name: parts[1].to_string(),
-                    bounds: Some(Bounds {
-                        x: parts[2].parse().unwrap_or(0),
-                        y: parts[3].parse().unwrap_or(0),
-                        width: parts[4].parse().unwrap_or(0),
-                        height: parts[5].parse().unwrap_or(0),
-                    }),
-                };
-                
-                self.element_refs.insert(ref_id.clone(), elem_ref.clone());
-                refs.push(elem_ref);
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split('|').collect();
+                if parts.len() >= 6 {
+                    self.ref_counter += 1;
+                    let ref_id = format!("E{}", self.ref_counter);
+
+                    let elem_ref = ElementRef {
+                        id: ref_id.clone(),
+                        role: parts[0].to_string(),
+                        name: parts[1].to_string(),
+                        bounds: Some(Bounds {
+                            x: parts[2].parse().unwrap_or(0),
+                            y: parts[3].parse().unwrap_or(0),
+                            width: parts[4].parse().unwrap_or(0),
+                            height: parts[5].parse().unwrap_or(0),
+                        }),
+                    };
+
+                    self.element_refs.insert(ref_id.clone(), elem_ref.clone());
+                    refs.push(elem_ref);
+                }
             }
         }
-        
+
+        if refs.is_empty() {
+            if peekaboo_cli::is_available() {
+                let front_app = CrossAppBridge::get_frontmost_app().ok();
+                if let Ok(snapshot) = peekaboo_cli::take_snapshot(front_app.as_deref()) {
+                    self.element_refs.clear();
+                    self.ref_counter = 0;
+                    self.last_snapshot_refs.clear();
+                    self.last_snapshot_source = SnapshotSource::Peekaboo;
+                    self.last_snapshot_id = snapshot.snapshot_id.clone();
+
+                    for elem in snapshot.elements {
+                        let bounds = elem.bounds.map(|(x, y, w, h)| Bounds { x, y, width: w, height: h });
+                        let elem_ref = ElementRef {
+                            id: elem.id.clone(),
+                            role: elem.role.clone(),
+                            name: elem.name.clone(),
+                            bounds,
+                        };
+                        self.element_refs.insert(elem.id.clone(), elem_ref.clone());
+                        self.last_snapshot_refs.push(elem_ref.clone());
+                        refs.push(elem_ref);
+                    }
+                    println!("📸 [Browser] Snapshot captured via Peekaboo: {} elements", refs.len());
+                    return Ok(refs);
+                }
+            }
+        }
+
+        self.last_snapshot_refs = refs.clone();
         println!("📸 [Browser] Snapshot captured: {} elements", refs.len());
         Ok(refs)
+    }
+
+    /// Clear cached refs when navigation changes the DOM (refs are not stable across navigations).
+    pub fn reset_snapshot(&mut self) {
+        self.element_refs.clear();
+        self.ref_counter = 0;
+        self.last_snapshot_refs.clear();
+        self.last_snapshot_id = None;
     }
 
     // =====================================================
@@ -127,6 +186,20 @@ impl BrowserAutomation {
 
     /// Click element by reference (like clickViaPlaywright)
     pub fn click_by_ref(&self, ref_id: &str, double_click: bool) -> Result<()> {
+        if self.last_snapshot_source == SnapshotSource::Peekaboo {
+            let front_app = CrossAppBridge::get_frontmost_app().ok();
+            let snapshot_id = self.last_snapshot_id.as_deref();
+            peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
+                .context("Peekaboo click failed")?;
+            if double_click {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
+                    .context("Peekaboo double click failed")?;
+            }
+            println!("🖱️ [Browser] Clicked ref '{}' via Peekaboo", ref_id);
+            return Ok(());
+        }
+
         let elem = self.element_refs.get(ref_id)
             .ok_or_else(|| anyhow::anyhow!("Element ref '{}' not found. Take a new snapshot.", ref_id))?;
         
@@ -159,6 +232,14 @@ impl BrowserAutomation {
 
     /// Hover over element by reference (like hoverViaPlaywright)
     pub fn hover_by_ref(&self, ref_id: &str) -> Result<()> {
+        if self.last_snapshot_source == SnapshotSource::Peekaboo {
+            let front_app = CrossAppBridge::get_frontmost_app().ok();
+            let snapshot_id = self.last_snapshot_id.as_deref();
+            peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
+                .context("Peekaboo hover fallback (click) failed")?;
+            return Ok(());
+        }
+
         let elem = self.element_refs.get(ref_id)
             .ok_or_else(|| anyhow::anyhow!("Element ref '{}' not found", ref_id))?;
         
@@ -231,6 +312,32 @@ impl BrowserAutomation {
         None
     }
 
+    pub fn find_first_by_role_contains(&self, needle: &str) -> Option<String> {
+        let needle_lower = needle.to_lowercase();
+        for elem in &self.last_snapshot_refs {
+            if elem.role.to_lowercase().contains(&needle_lower) {
+                return Some(elem.id.clone());
+            }
+        }
+        None
+    }
+
+    pub fn summarize_refs(refs: &[ElementRef], max: usize) -> String {
+        if refs.is_empty() {
+            return "SNAPSHOT_REFS: (none)".to_string();
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for r in refs.iter().take(max) {
+            let name = if r.name.trim().is_empty() { "(unnamed)" } else { r.name.as_str() };
+            parts.push(format!("{} [{}] \"{}\"", r.id, r.role, name));
+        }
+        let mut summary = format!("SNAPSHOT_REFS: {}", parts.join("; "));
+        if refs.len() > max {
+            summary.push_str(&format!("; +{} more", refs.len() - max));
+        }
+        summary
+    }
+
     /// Navigate to URL (opens in default browser or specified browser)
     pub fn navigate(&self, url: &str, browser: Option<&str>) -> Result<()> {
         let browser_name = browser.unwrap_or("Safari");
@@ -273,15 +380,16 @@ impl BrowserAutomation {
 // =====================================================
 
 /// Singleton-style access
-static mut BROWSER_AUTOMATION: Option<BrowserAutomation> = None;
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
-pub fn get_browser_automation() -> &'static mut BrowserAutomation {
-    unsafe {
-        if BROWSER_AUTOMATION.is_none() {
-            BROWSER_AUTOMATION = Some(BrowserAutomation::new());
-        }
-        BROWSER_AUTOMATION.as_mut().unwrap()
-    }
+/// Singleton-style access (Thread-Safe)
+static BROWSER_AUTOMATION: Lazy<Mutex<BrowserAutomation>> = Lazy::new(|| {
+    Mutex::new(BrowserAutomation::new())
+});
+
+pub fn get_browser_automation() -> std::sync::MutexGuard<'static, BrowserAutomation> {
+    BROWSER_AUTOMATION.lock().unwrap()
 }
 
 #[cfg(test)]
@@ -299,7 +407,6 @@ mod tests {
 // LEGACY API COMPATIBILITY (for execution_controller.rs)
 // =====================================================
 
-/// Open URL in Chrome - legacy API
 pub fn open_url_in_chrome(url: &str) -> Result<()> {
     get_browser_automation().navigate(url, Some("Google Chrome"))
 }
@@ -378,4 +485,3 @@ pub fn extract_flight_summary() -> Result<String> {
 pub fn extract_shopping_summary() -> Result<String> {
     Ok("Shopping summary extraction: Use take_snapshot() + find_by_name()".to_string())
 }
-

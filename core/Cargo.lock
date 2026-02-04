@@ -2965,6 +2965,7 @@ dependencies = [
  "lazy_static",
  "log",
  "notify",
+ "once_cell",
  "pdf-extract",
  "regex",
  "reqwest",

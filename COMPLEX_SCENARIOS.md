@@ -138,17 +138,17 @@
 
 ```bash
 # 시나리오 1
-cargo run --bin local_os_agent -- surf "Safari를 열어 Google에서 'Apple stock price'를 검색하세요. 첫 번째 결과를 클릭하고 주가를 확인하세요. Calculator를 열어 그 숫자에 100을 곱하세요. 결과를 복사하고(Cmd+C) Notes에서 새 메모(Cmd+N)를 만들어 'Apple Stock Calculation'이라고 입력한 뒤 결과를 붙여넣으세요(Cmd+V)."
+cargo run --bin local_os_agent -- surf "Safari를 열어 Google에서 'Apple stock price'를 검색하세요. 첫 번째 결과를 클릭하고 주가 숫자를 화면에서 읽으세요. Calculator를 열어 읽은 숫자에 100을 곱하세요. 결과를 복사(Cmd+C)하고 Notes에서 새 메모(Cmd+N)를 만들어 'Apple Stock Calculation'을 입력한 뒤 결과를 붙여넣으세요(Cmd+V)."
 
 # 시나리오 2  
-cargo run --bin local_os_agent -- surf "TextEdit을 열어 새 문서(Cmd+N)를 만들고 'Meeting Summary: Discussed Q1 results'를 입력하세요. 전체 선택(Cmd+A)하고 복사(Cmd+C)하세요. Notes에서 새 메모(Cmd+N)를 만들어 붙여넣으세요(Cmd+V)."
+cargo run --bin local_os_agent -- surf "TextEdit을 열어 새 문서(Cmd+N)를 만들고 'Meeting Summary: Discussed Q1 results and Q2 plans.'를 입력하세요. 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. Mail을 열어 새 이메일(Cmd+N)을 만들고 본문에 붙여넣기(Cmd+V)한 뒤 제목에 'Q1 Meeting Notes'를 입력하세요. 본문 전체 선택(Cmd+A) 후 복사(Cmd+C)하고 Notes로 가서 새 메모(Cmd+N)에 붙여넣으세요(Cmd+V)."
 
 # 시나리오 3
-cargo run --bin local_os_agent -- surf "Calculator를 열어 999 곱하기 3을 계산하세요. 결과를 복사(Cmd+C)하고 Notes를 열어 새 메모(Cmd+N)를 만들어 붙여넣으세요(Cmd+V)."
+cargo run --bin local_os_agent -- surf "Finder를 열어 ~/Desktop으로 이동하세요. .png 또는 .jpg 이미지를 찾아 첫 번째 파일을 더블클릭해 Preview로 여세요. 이미지 전체 선택(Cmd+A) 후 복사(Cmd+C)하고 Notes에서 새 메모(Cmd+N)를 만들어 제목 'Image Archive'를 입력한 다음 이미지를 붙여넣고(Cmd+V) 다음 줄에 'Source: Desktop'을 입력하세요."
 
 # 시나리오 4
-cargo run --bin local_os_agent -- surf "Calculator를 열어 365 곱하기 24를 계산하세요. 결과를 복사(Cmd+C)하고 TextEdit에서 새 문서(Cmd+N)를 만들어 'Total: '를 입력한 뒤 붙여넣으세요(Cmd+V)."
+cargo run --bin local_os_agent -- surf "Calculator를 열어 365×24를 계산하세요. 결과를 복사(Cmd+C)하고 Safari를 열어 Google에서 '8760 hours in days'를 검색하세요. 결과를 확인한 뒤 주소창에 포커스(Cmd+L)하고 URL을 복사(Cmd+C)하세요. TextEdit을 열어 새 문서(Cmd+N)를 만든 뒤 'Total hours per year: '를 입력하고 URL을 붙여넣으세요(Cmd+V). 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요."
 
 # 시나리오 5
-cargo run --bin local_os_agent -- surf "Notes를 열어 새 메모(Cmd+N)를 만들고 'Test 12345'를 입력하세요. 전체 선택(Cmd+A)하고 복사(Cmd+C)한 다음 새 메모(Cmd+N)를 만들어 붙여넣으세요(Cmd+V)."
+cargo run --bin local_os_agent -- surf "Notes를 열어 새 메모(Cmd+N)를 만들고 'Research Topic: Rust programming language'를 입력하세요. 'Rust programming' 텍스트를 선택해 복사(Cmd+C)하고 Safari를 열어 Google 검색창에 붙여넣기(Cmd+V) 후 검색하세요. 첫 번째 결과의 URL을 복사(Cmd+L, Cmd+C)하고 Notes로 돌아가 메모에 붙여넣으세요(Cmd+V). 메모 전체 선택(Cmd+A) 후 복사(Cmd+C)하고 Mail에서 새 이메일(Cmd+N)을 만들어 제목 'Research Findings'을 입력한 뒤 본문에 붙여넣으세요(Cmd+V)."
 ```

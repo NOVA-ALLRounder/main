@@ -80,6 +80,10 @@ impl CLILLMClient {
             }
         }
     }
+
+    pub fn uses_stdin(&self) -> bool {
+        matches!(self.provider, LLMProvider::Codex | LLMProvider::Claude)
+    }
     
     /// Check if CLI is available
     pub fn check_version(&self) -> Result<String> {

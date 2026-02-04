@@ -247,10 +247,10 @@ Output ONLY valid JSON.
             }
         }
         
-        // Try Gemini CLI first if STEER_CLI_LLM is set (BUT skip if image is too large for CLI args)
-        // Large Base64 strings in Command arguments can cause hangs (OS buffer limits) or failures.
+        // Try CLI LLM first if STEER_CLI_LLM is set (skip only when CLI can't use stdin and payload is large)
+        // Large Base64 strings in argv can cause hangs (OS buffer limits) or failures.
         if let Some(cli_client) = crate::cli_llm::CLILLMClient::from_env() {
-            if image_b64.len() > 1024 * 50 { // If > 50KB, probably safer to use Cloud API
+            if !cli_client.uses_stdin() && image_b64.len() > 1024 * 50 {
                  println!("⚠️ [Vision] Image payload too large for CLI args ({} bytes). Routing to Cloud LLM for stability.", image_b64.len());
                  // Fall through to OpenAI logic below
             } else {
@@ -295,6 +295,12 @@ Available actions:
 - Call external service (MCP): {{\"action\": \"mcp\", \"server\": \"filesystem\", \"tool\": \"read_file\", \"arguments\": {{\"path\": \"/path/to/file\"}}}}
 - List MCP tools: {{\"action\": \"mcp_list\"}}
 - Done: {{\"action\": \"done\"}}
+
+SNAPSHOT -> REF FLOW (IMPORTANT):
+- If you need to click a specific UI element, prefer:
+  1) {{\"action\": \"snapshot\"}} to get refs.
+  2) Use an id from SNAPSHOT_REFS in HISTORY with {{\"action\": \"click_ref\", \"ref\": \"E5\"}}.
+- If HISTORY contains SNAPSHOT_REFS, use click_ref and avoid click_visual unless no match exists.
 
 AVAILABLE MCP TOOLS (Use 'mcp' action):
 {}
@@ -422,6 +428,12 @@ Respond with ONE JSON object only.
         9. Transfer: {{ "action": "transfer", "from": "SourceApp", "to": "TargetApp" }} (Reliable Data Move)
         10. MCP Tool: {{ "action": "mcp", "server": "filesystem", "tool": "read_file", "arguments": {{ "path": "/Users/david/..." }} }}
         11. Done: {{ "action": "done" }}
+
+        SNAPSHOT -> REF FLOW (IMPORTANT):
+        - If you need to click a specific UI element, prefer:
+          1) {{ "action": "snapshot" }} to get refs.
+          2) Use an id from SNAPSHOT_REFS in HISTORY with {{ "action": "click_ref", "ref": "E5" }}.
+        - If HISTORY contains SNAPSHOT_REFS, use click_ref and avoid click_visual unless no match exists.
         
         CRITICAL RULES:
         1. **NEW ITEMS**: When opening an app like Notes or TextEdit, ALWAYS create a new item first!

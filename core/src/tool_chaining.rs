@@ -224,20 +224,51 @@ impl CrossAppBridge {
     /// Switch to application (Modified to use 'open -a' for reliability)
     pub fn switch_to_app(app_name: &str) -> Result<()> {
         println!("      🚀 [Bridge] Opening '{}' via CLI...", app_name);
-        
+
+        // Prefer Peekaboo app launch if available (stronger focus + permissions)
+        if crate::peekaboo_cli::is_available() {
+            let status = std::process::Command::new("peekaboo")
+                .arg("app")
+                .arg("launch")
+                .arg(app_name)
+                .status();
+            if let Ok(status) = status {
+                if status.success() {
+                    if Self::wait_for_frontmost(app_name, 8, 200) {
+                        println!("🔀 [Bridge] Switched to: {}", app_name);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         let status = std::process::Command::new("open")
             .arg("-a")
             .arg(app_name)
             .status()?;
-            
+
         if !status.success() {
             return Err(anyhow::anyhow!("Failed to open app '{}' (Exit code: {:?})", app_name, status.code()));
         }
-        
-        // Wait for app to become active
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+
+        if !Self::wait_for_frontmost(app_name, 8, 200) {
+            let _ = crate::applescript::activate_app(app_name);
+        }
+
         println!("🔀 [Bridge] Switched to: {}", app_name);
         Ok(())
+    }
+
+    fn wait_for_frontmost(app_name: &str, retries: usize, wait_ms: u64) -> bool {
+        for _ in 0..retries {
+            if let Ok(front) = Self::get_frontmost_app() {
+                if front.eq_ignore_ascii_case(app_name) {
+                    return true;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+        }
+        false
     }
     
     /// Get frontmost application name
