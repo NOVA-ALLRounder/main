@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Set-Location $RepoPath
+$env:PYTHONPATH = "src"
 
 $resolvedConfig = $ConfigPath
 if (-not (Test-Path $resolvedConfig)) {
@@ -22,7 +23,10 @@ $pythonArgs = @("-m", "collector.main", "--config", $resolvedConfig)
 if (-not $NoConda) {
   $conda = Get-Command conda -ErrorAction SilentlyContinue
   if ($conda) {
-    & $conda.Path run -n $CondaEnv python @pythonArgs
+    $condaExe = $conda.Path
+    if (-not $condaExe) { $condaExe = $conda.Source }
+    if (-not $condaExe) { $condaExe = "conda" }
+    & $condaExe run -n $CondaEnv python @pythonArgs
     exit $LASTEXITCODE
   }
 }

@@ -60,7 +60,8 @@ cargo run --release --bin local_os_agent
 ## 환경변수
 - **STEER_COLLECTOR_MODE**: `dcp` 또는 `internal`
 - **STEER_DCP_ENDPOINT**: DCP 이벤트 수집 주소 (기본 `http://127.0.0.1:8080/events`)
-- **OPENAI_API_KEY**: LLM 기능 사용 시
+- **OPENAI_API_KEY** 또는 **LLM_API_KEY**: LLM 기능 사용 시 (config의 `llm.api_key_env` 값과 동일)
+- **LLM_ENDPOINT / LLM_MODEL**: LLM endpoint/model을 config에 반영할 때 참고
 - **N8N_API_URL / N8N_API_KEY**: n8n 연동 시
 
 ## 테스트 (선택)
@@ -300,6 +301,36 @@ python scripts\build_llm_input.py --config configs\config_run4.yaml --daily logs
   --pattern logs\run4\pattern_summary.json --output logs\run4\llm_input.json --store-db
 ```
 
+### n8n 워크플로우(JSON) 생성
+LLM 입력을 기반으로 n8n 워크플로우 JSON을 생성합니다.
+```powershell
+python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
+  --input logs\run4\llm_input.json --output logs\run4\n8n_workflow.json
+```
+`scripts\run_post_collection.ps1` 실행 시에도 `n8n_workflow.json`이 함께 생성됩니다.
+
+### n8n으로 워크플로우 전달 (Webhook)
+Webhook 기반으로 워크플로우 JSON을 전송합니다.
+```powershell
+$env:N8N_WEBHOOK_URL="https://<your-n8n-webhook-url>"
+python scripts\send_n8n_workflow.py --file logs\run4\n8n_workflow.json
+```
+
+### 실시간 경량화 요약 (5~10분 단위)
+최근 이벤트만으로 LLM 입력을 만들고 즉시 워크플로우를 생성합니다.
+```powershell
+python scripts\build_realtime_llm_input.py --config configs\config_run4.yaml `
+  --since-minutes 10 --output logs\run4\llm_input_realtime.json --max-bytes 8000
+
+python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
+  --input logs\run4\llm_input_realtime.json --output logs\run4\n8n_workflow_realtime.json
+```
+
+자동 루프(5분 간격):
+```powershell
+scripts\run_realtime_llm.ps1 -ConfigPath configs\config_run4.yaml -WindowMinutes 10 -EverySeconds 300
+```
+
 ### Pattern quality evaluation
 ```powershell
 python scripts\evaluate_pattern_quality.py --summaries-dir logs\run4 --output logs\run4\pattern_quality.json
@@ -467,6 +498,17 @@ post_collection:
   routine_min_support: 2
   routine_n_min: 2
   routine_n_max: 3
+```
+
+LLM example:
+```yaml
+llm:
+  enabled: true
+  endpoint: "http://127.0.0.1:8000/v1/chat/completions"
+  model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  timeout_sec: 20
+  max_tokens: 1200
 ```
 
 ### Encryption (raw_json at rest)

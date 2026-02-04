@@ -328,7 +328,7 @@ def _trim_title(value: str, max_len: int) -> str:
         return value
     if len(value) <= max_len:
         return value
-    return value[: max_len - 1] + "…"
+    return value[: max_len - 1] + "?"
 
 
 if __name__ == "__main__":

@@ -16,8 +16,8 @@ hash_keys:
   - file_name
 
 length_limits:
-  window_title: 64
-  url: 128
+  window_title: 128
+  url: 512
   path: 128
   file_path: 128
   filepath: 128
@@ -25,8 +25,8 @@ length_limits:
   content_summary: 256
 
 url_policy:
-  allow_full_url: false
-  keep_domain_only: true
+  allow_full_url: true
+  keep_domain_only: false
 
 redaction_patterns:
   - name: email

@@ -24,6 +24,7 @@ if (-not $NoConda) {
     if ($daily) {
       & $conda.Path run -n DATA_C python scripts\build_llm_input.py --config $resolvedConfig --daily $daily.FullName --pattern (Join-Path $OutputDir "pattern_summary.json") --output (Join-Path $OutputDir "llm_input.json") --max-bytes $MaxBytes --store-db
       & $conda.Path run -n DATA_C python scripts\generate_recommendations.py --config $resolvedConfig --input (Join-Path $OutputDir "llm_input.json") --output-md (Join-Path $OutputDir "activity_recommendations.md") --output-json (Join-Path $OutputDir "activity_recommendations.json")
+      & $conda.Path run -n DATA_C python scripts\generate_n8n_workflow.py --config $resolvedConfig --input (Join-Path $OutputDir "llm_input.json") --output (Join-Path $OutputDir "n8n_workflow.json")
     }
     exit $LASTEXITCODE
   }
@@ -35,4 +36,5 @@ $dailyLocal = Get-ChildItem $OutputDir -Filter "daily_summary_*.json" | Sort-Obj
 if ($dailyLocal) {
   python scripts\build_llm_input.py --config $resolvedConfig --daily $dailyLocal.FullName --pattern (Join-Path $OutputDir "pattern_summary.json") --output (Join-Path $OutputDir "llm_input.json") --max-bytes $MaxBytes --store-db
   python scripts\generate_recommendations.py --config $resolvedConfig --input (Join-Path $OutputDir "llm_input.json") --output-md (Join-Path $OutputDir "activity_recommendations.md") --output-json (Join-Path $OutputDir "activity_recommendations.json")
+  python scripts\generate_n8n_workflow.py --config $resolvedConfig --input (Join-Path $OutputDir "llm_input.json") --output (Join-Path $OutputDir "n8n_workflow.json")
 }

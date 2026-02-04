@@ -21,6 +21,7 @@ apps/core/.env
 behavior_test_output.txt
 collector/**/logs/
 collector/**/archive/
+collector/**/secrets/
 
 # Database
 *.db
