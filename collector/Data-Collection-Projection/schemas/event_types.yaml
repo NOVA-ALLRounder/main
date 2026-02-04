@@ -1,0 +1,24 @@
+version: "1.0"
+
+naming:
+  format: "<domain>.<verb_phrase>"
+  rules:
+    - "use lowercase"
+    - "use underscores between words"
+    - "verb phrase should describe the action"
+  domains:
+    os: "OS-level events and flow"
+    excel: "Excel add-in events"
+    outlook: "Outlook add-in events"
+
+examples:
+  os:
+    - os.app_focus_block
+    - os.idle_start
+    - os.file_changed
+  excel:
+    - excel.refresh_pivot
+    - excel.export_pdf
+  outlook:
+    - outlook.compose_started
+    - outlook.send_clicked

@@ -1,0 +1,3 @@
+# Core dependency for YAML config parsing.
+PyYAML>=6.0
+cryptography>=42.0.0

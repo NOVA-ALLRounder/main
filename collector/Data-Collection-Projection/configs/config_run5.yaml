@@ -1,0 +1,167 @@
+db_path: collector_run5.db
+summary_db_path: collector_summary_run5.db
+migrations_path: migrations
+validation_level: lenient
+wal_mode: true
+log_level: INFO
+privacy_rules_path: configs/privacy_rules_run5.yaml
+
+queue:
+  max_size: 1000
+  shutdown_drain_seconds: 3
+
+ingest:
+  enabled: true
+  host: 127.0.0.1
+  port: 8080
+  token: ""
+
+privacy:
+  hash_salt: dev-salt
+  url_mode: full
+
+store:
+  busy_timeout_ms: 5000
+  insert_batch_size: 100
+  insert_flush_ms: 1000
+  insert_retry_attempts: 3
+  insert_retry_backoff_ms: 50
+
+encryption:
+  enabled: true
+  key_env: DATA_COLLECTOR_ENC_KEY
+  key_path: secrets/collector_key.txt
+  encrypt_raw_json: true
+
+priority:
+  debounce_seconds: 2.0
+  focus_event_types:
+    - os.foreground_changed
+  focus_block_event_type: os.app_focus_block
+  drop_p2_when_queue_over: 0.8
+  p0_event_types:
+    - outlook.send_clicked
+    - excel.export_pdf
+    - excel.export_csv
+    - excel.save_as
+    - os.file_saved
+    - upload_done
+    - share_link_created
+  p1_event_types: []
+  p2_event_types: []
+
+retention:
+  enabled: true
+  interval_minutes: 60
+  raw_events_days: 7
+  sessions_days: 30
+  routine_candidates_days: 90
+  handoff_queue_days: 7
+  daily_summaries_days: 180
+  pattern_summaries_days: 60
+  llm_inputs_days: 30
+  max_db_mb: 500
+  batch_size: 5000
+  vacuum_hours: 24
+
+observability:
+  log_interval_sec: 60
+  activity_log: true
+  activity_top_n: 3
+  activity_min_duration_sec: 5
+  activity_include_title: false
+  activity_title_apps:
+    - chrome.exe
+    - code.exe
+    - notion.exe
+    - whale.exe
+    - discord.exe
+    - kakaotalk.exe
+  activity_title_max_len: 128
+
+activity_detail:
+  enabled: true
+  min_duration_sec: 5
+  store_hint: true
+  full_title_apps:
+    - chrome.exe
+    - code.exe
+    - discord.exe
+    - notion.exe
+    - whale.exe
+    - kakaotalk.exe
+  max_title_len: 256
+
+sensors:
+  auto_start: true
+  processes:
+    - module: sensors.os.windows_foreground
+      args:
+        - --ingest-url
+        - http://127.0.0.1:8080/events
+        - --poll
+        - "1"
+    - module: sensors.os.windows_idle
+      args:
+        - --ingest-url
+        - http://127.0.0.1:8080/events
+        - --idle-threshold
+        - "10"
+        - --poll
+        - "1"
+    - module: sensors.os.file_watcher
+      args:
+        - --ingest-url
+        - http://127.0.0.1:8080/events
+        - --paths
+        - C:\collector_test
+
+post_collection:
+  enabled: true
+  run_sessions: true
+  run_routines: true
+  run_handoff: true
+  run_daily_summary: true
+  run_pattern_summary: true
+  run_llm_input: true
+  run_pattern_report: true
+  output_dir: logs/run5
+  llm_max_bytes: 8000
+  session_gap_minutes: 15
+  routine_days: 7
+  routine_min_support: 2
+  routine_n_min: 2
+  routine_n_max: 3
+
+llm:
+  enabled: false
+  endpoint: ""
+  api_key_env: LLM_API_KEY
+  model: ""
+  timeout_sec: 20
+  max_tokens: 500
+
+automation:
+  enabled: false
+  dry_run: true
+  allow_actions:
+    - open_app
+    - open_url
+  min_confidence: 0.6
+
+logging:
+  dir: logs/run5
+  file_name: collector.log
+  max_mb: 20
+  backup_count: 10
+  json: true
+  to_console: true
+  activity_detail_file: activity_detail.log
+  activity_detail_max_mb: 20
+  activity_detail_backup_count: 10
+  activity_detail_text_file: activity_detail.txt
+  activity_detail_text_max_mb: 10
+  activity_detail_text_backup_count: 5
+  timezone: Asia/Seoul
+  include_run_id: false
+  prune_days: 14
