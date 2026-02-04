@@ -129,3 +129,371 @@ Invoke-RestMethod http://127.0.0.1:5680/health
 ## Notes
 - DCP는 데이터 수집 전용이며, Core는 정책/추천/LLM 처리 담당.
 - UI는 선택사항이며 Core API만으로도 동작 가능.
+
+---
+
+## DCP (Data-Collection-Projection) 상세
+Minimal data collection pipeline that ingests JSON events, normalizes them,
+applies privacy/priority rules, and stores rows in SQLite. It also builds
+sessions, routine candidates, and handoff packages for downstream agents.
+
+### Architecture
+```mermaid
+graph TD
+  A["Sensors / Add-ins / Replay"] --> B["HTTP /events (CORS)"];
+  B --> C["Normalize"];
+  C --> D["Privacy"];
+  D --> E["Priority"];
+  E --> F["SQLite events"];
+  F --> G["Sessions"];
+  G --> H["Routine Candidates"];
+  H --> I["Handoff Queue"];
+  F -.-> J["Retention"];
+  E -.-> K["Observability / Metrics"];
+```
+
+Key runtime signals:
+- /health and /stats endpoints
+- JSON line logs with 1-minute metrics snapshots
+- retention cleanup logs
+
+### Quick start (Windows + Conda)
+```powershell
+conda create -n DATA_C python=3.11.14 -y
+conda activate DATA_C
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Initialize the DB:
+```powershell
+python scripts\init_db.py
+```
+
+Run the core:
+```powershell
+$env:PYTHONPATH = "src"
+python -m collector.main --config configs\config.yaml
+```
+
+Run a separate collection (run2 DB/logs):
+```powershell
+$env:PYTHONPATH = "src"
+python -m collector.main --config configs\config_run2.yaml
+```
+
+Run a separate collection (run3 DB/logs):
+```powershell
+$env:PYTHONPATH = "src"
+python -m collector.main --config configs\config_run3.yaml
+```
+
+Run a separate collection (run4 DB/logs):
+```powershell
+$env:PYTHONPATH = "src"
+python -m collector.main --config configs\config_run4.yaml
+```
+
+Run a separate collection (run5 DB/logs):
+```powershell
+$env:PYTHONPATH = "src"
+python -m collector.main --config configs\config_run5.yaml
+```
+
+Run run5 with auto key load:
+```powershell
+scripts\run_run5.ps1
+```
+
+Check browser content capture quality (run5):
+```powershell
+python scripts\check_content_capture.py --db collector_run5.db --key-path secrets\\collector_key.txt --limit 200
+```
+
+### Auto-start sensors (optional, via config)
+```yaml
+sensors:
+  auto_start: true
+  processes:
+    - module: sensors.os.windows_foreground
+      args: ["--ingest-url","http://127.0.0.1:8080/events","--poll","1"]
+    - module: sensors.os.windows_idle
+      args: ["--ingest-url","http://127.0.0.1:8080/events","--idle-threshold","10","--poll","1"]
+    - module: sensors.os.file_watcher
+      args: ["--ingest-url","http://127.0.0.1:8080/events","--paths","C:\\collector_test"]
+```
+
+### Send a test event (PowerShell)
+```powershell
+$body = @{
+  schema_version="1.0"
+  source="os"
+  app="OS"
+  event_type="os.app_focus_block"
+  resource=@{type="window"; id="test_window"}
+  payload=@{duration_sec=3; window_title="test_title"}
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/events" `
+  -ContentType "application/json" -Body $body
+```
+
+### OS sensors (Windows only)
+Each sensor sends events to the same ingest endpoint.
+```powershell
+$env:PYTHONPATH = "src"
+python -m sensors.os.windows_foreground --ingest-url "http://127.0.0.1:8080/events" --poll 1
+```
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m sensors.os.windows_idle --ingest-url "http://127.0.0.1:8080/events" --idle-threshold 10 --poll 1
+```
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m sensors.os.file_watcher --ingest-url "http://127.0.0.1:8080/events" --paths "C:\\collector_test"
+```
+
+### Replay events (sensor-free)
+```powershell
+python scripts\replay_events.py --file tests\fixtures\sample_events_os_short.jsonl `
+  --endpoint http://127.0.0.1:8080/events --speed fast
+```
+
+### Derived data jobs
+Sessions:
+```powershell
+python scripts\build_sessions.py --since-hours 6 --gap-minutes 15
+```
+
+Routine candidates:
+```powershell
+python scripts\build_routines.py --days 1 --min-support 2 --n-min 2 --n-max 3
+```
+
+Handoff package:
+```powershell
+python scripts\build_handoff.py --keep-latest-pending
+```
+
+Optional crash-safe cursors:
+```powershell
+python scripts\build_sessions.py --use-state --gap-minutes 15
+python scripts\build_routines.py --use-state --min-support 2 --n-min 2 --n-max 3
+```
+
+### Summaries (daily → pattern → LLM input)
+Daily summary:
+```powershell
+python scripts\build_daily_summary.py --config configs\config_run4.yaml --store-db
+```
+
+Pattern summary:
+```powershell
+python scripts\build_pattern_summary.py --summaries-dir logs\run4 --since-days 7 --config configs\config_run4.yaml --store-db
+```
+
+LLM input:
+```powershell
+python scripts\build_llm_input.py --config configs\config_run4.yaml --daily logs\run4\daily_summary_YYYY-MM-DD.json `
+  --pattern logs\run4\pattern_summary.json --output logs\run4\llm_input.json --store-db
+```
+
+### Pattern quality evaluation
+```powershell
+python scripts\evaluate_pattern_quality.py --summaries-dir logs\run4 --output logs\run4\pattern_quality.json
+```
+
+### Mock data for pattern testing
+Generate mock focus blocks:
+```powershell
+python scripts\generate_mock_events.py --days 7 --output tests\fixtures\mock_events_pattern.jsonl
+```
+
+Replay mock events:
+```powershell
+python scripts\replay_events.py --file tests\fixtures\mock_events_pattern.jsonl --endpoint http://127.0.0.1:8080/events --speed fast
+```
+
+### Cold archive (raw preservation)
+Archive raw events:
+```powershell
+python scripts\archive_raw_events.py --config configs\config_run4.yaml --date 2026-01-28 --days 1 --output-dir archive\raw
+```
+
+Build manifest:
+```powershell
+python scripts\archive_manifest.py --archive-dir archive\raw --include-monthly --monthly-dir archive\monthly --output archive\manifest.json
+```
+
+Verify manifest:
+```powershell
+python scripts\verify_archive_manifest.py --manifest archive\manifest.json
+```
+
+Monthly compaction:
+```powershell
+python scripts\compact_archive_monthly.py --archive-dir archive\raw --output-dir archive\monthly --delete-after
+```
+
+Summary DB retention only:
+```powershell
+python scripts\retention_summary_only.py --config configs\config_run4.yaml
+```
+
+### Service / Task Scheduler (Windows)
+Run the core via PowerShell script:
+```powershell
+scripts\run_core.ps1 -CondaEnv DATA_C -ConfigPath configs\config.yaml
+```
+
+Install Task Scheduler entry:
+```powershell
+scripts\install_service.ps1 -TaskName DataCollector -CondaEnv DATA_C -Trigger Logon
+```
+
+Remove it later:
+```powershell
+scripts\uninstall_service.ps1 -TaskName DataCollector
+```
+
+### Logs and stats
+Logs (JSON lines) live in `logs\collector.log` by default. The logger rotates
+by size and keeps multiple files (`collector.log.1`, `collector.log.2`, ...).
+
+Tail logs:
+```powershell
+Get-Content .\logs\collector.log -Tail 50 -Wait
+```
+
+Activity detail logs (run3):
+```powershell
+Get-Content .\logs\run3\activity_detail.log -Tail 50 -Wait
+```
+
+Activity detail text logs (run3):
+```powershell
+Get-Content .\logs\run3\activity_detail.txt -Tail 50 -Wait
+```
+
+Stats endpoint:
+```powershell
+python scripts\print_stats.py
+```
+
+Health check:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/health
+```
+
+### Allowlist recommendations
+Build allowlist candidates from recent focus usage:
+```powershell
+python scripts\recommend_allowlist.py --days 3 --min-minutes 10 --min-blocks 3
+```
+
+Apply to `configs\privacy_rules.yaml` (auto-backup created):
+```powershell
+python scripts\recommend_allowlist.py --days 3 --min-minutes 10 --min-blocks 3 --apply
+```
+
+### On-demand window title lookup (debug)
+Query focus block titles from the DB when needed (no log noise):
+```powershell
+python scripts\show_focus_titles.py --config configs\config_run2.yaml --since-hours 6 --local-time
+```
+
+### Activity details (app + title hint aggregation)
+Aggregate per-app activity hints (requires activity_detail enabled):
+```powershell
+python scripts\show_activity_details.py --config configs\config_run2.yaml --order duration --limit 30
+```
+
+### Activity summary report
+Summarize recent activity_details:
+```powershell
+python scripts\summarize_activity.py --config configs\config_run3.yaml --since-hours 24
+```
+
+### Pattern report (hourly)
+Generate hourly usage patterns:
+```powershell
+python scripts\report_patterns.py --config configs\config_run4.yaml --since-days 3 --output reports\pattern_report.md
+```
+
+### Browser extension (Chrome / Whale)
+For page-level browser activity (URL + title + optional content summary), load the extension:
+- Chrome: open `chrome://extensions`, enable Developer mode, load unpacked
+  from `browser_extension\`.
+- Whale: open `whale://extensions`, enable Developer mode, load unpacked
+  from `browser_extension\`, and set `BROWSER_APP = "WHALE.EXE"` in
+  `browser_extension\background.js`.
+URL mode is controlled in `browser_extension\background.js`:
+- `URL_MODE = "full"` (full URL)
+- `URL_MODE = "domain"` (domain only)
+Content capture is controlled in `browser_extension\content.js`:
+- `DOMAIN_ALLOWLIST` to restrict domains (use `["*"]` for all)
+- content is sent as `content_summary` + `content` (full text), and full text is
+  stored only in `raw_json` (run4 enables encryption by default; you can disable it).
+
+### Config
+Main config: `configs\config.yaml`
+- ingest: host/port/token
+- queue: in-memory size and shutdown drain time
+- store: SQLite busy timeout and batch insert behavior
+- encryption: optional at-rest encryption for raw_json (requires env key)
+- retention: cleanup policies and vacuum thresholds
+- logging: JSON log path, rotation, timezone
+- privacy.url_mode: `rules` (use rules file), `full` (keep full URL), `domain` (store domain only)
+- summary_db_path: optional separate SQLite file for summaries
+- post_collection: optional automatic jobs (sessions/routines/handoff/summaries/LLM)
+
+post_collection example:
+```yaml
+post_collection:
+  enabled: true
+  run_sessions: true
+  run_routines: true
+  run_handoff: true
+  run_daily_summary: true
+  run_pattern_summary: true
+  run_llm_input: true
+  run_pattern_report: true
+  output_dir: logs/run5
+  llm_max_bytes: 8000
+  session_gap_minutes: 15
+  routine_days: 7
+  routine_min_support: 2
+  routine_n_min: 2
+  routine_n_max: 3
+```
+
+### Encryption (raw_json at rest)
+Set an encryption key and enable in config (recommended for detailed content capture):
+```powershell
+# Generate a key
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Set env var for current PowerShell session
+$env:DATA_COLLECTOR_ENC_KEY = "<paste_generated_key>"
+```
+Then enable in config (example in `configs\config_run4.yaml`):
+```yaml
+encryption:
+  enabled: true
+  key_env: DATA_COLLECTOR_ENC_KEY
+  key_path: secrets/collector_key.txt  # optional file fallback
+  encrypt_raw_json: true
+```
+To store the key in a file (auto-loaded if env is missing):
+```powershell
+mkdir secrets | Out-Null
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" | `
+  Set-Content secrets\collector_key.txt
+```
+
+Privacy rules: `configs\privacy_rules.yaml`
+- masking and hashing rules
+- allowlist/denylist apps
+- URL sanitization and redaction patterns
