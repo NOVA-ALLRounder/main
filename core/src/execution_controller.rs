@@ -1,6 +1,6 @@
 use crate::nl_automation::{ApprovalContext, ExecutionResult, Plan, StepType};
 use crate::approval_gate;
-use crate::executor;
+
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 use crate::browser_automation;
 use serde_json::Value;
@@ -23,7 +23,7 @@ pub async fn execute_plan(plan: &Plan, start_index: usize) -> ExecutionResult {
             StepType::Navigate => {
                 if let Some(url) = step.data.get("url").and_then(|v| v.as_str()) {
                     if let Err(err) = browser_automation::open_url_in_chrome(url)
-                        .or_else(|_| executor::open_url(url))
+                        .or_else(|_| crate::applescript::open_url(url).map(|_| ()))
                     {
                         logs.push(format!("Failed to open url {}: {}", url, err));
                         return ExecutionResult {

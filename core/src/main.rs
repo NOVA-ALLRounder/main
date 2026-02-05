@@ -1,17 +1,21 @@
 use local_os_agent::{
-    schema, session, policy, llm_gateway, analyzer, db, notifier, monitor, applescript,
-    n8n_api, dependency_check, scheduler, executor, visual_driver, integrations, recommendation,
+    schema, session, policy, llm_gateway, analyzer, db, notifier, monitor, applescript, bash_executor,
+    n8n_api, dependency_check, scheduler, visual_driver, integrations, recommendation,
     workflow_schema, pattern_detector, feedback_collector, api_server, orchestrator, privacy,
-    memory, security, send_policy, chat_sanitize, shell_analysis, shell_actions, replan_templates,
+    memory, security, send_policy, chat_sanitize, shell_analysis, shell_actions,
     command_queue, context_pruning, tool_policy, project_scanner, runtime_verification,
-    replanning_config, quality_scorer, chat_gate, visual_verification, semantic_verification,
+    quality_scorer, chat_gate, visual_verification, semantic_verification,
     performance_verification, judgment, release_gate, tool_result_guard, consistency_check,
-    static_checks, singleton_lock, nl_automation, intent_router, slot_filler, plan_builder,
+    static_checks, nl_automation, intent_router, slot_filler, plan_builder,
     execution_controller, verification_engine, approval_gate, nl_store, browser_automation,
-    dynamic_controller,
     mcp_client,
-    env_flag,
 };
+
+use local_os_agent::singleton_lock;
+use local_os_agent::env_flag;
+
+
+
 
 #[cfg(target_os = "macos")]
 use local_os_agent::macos;
@@ -21,9 +25,13 @@ use chrono::Utc;
 use uuid::Uuid;
 use serde_json::json;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
+use tracing::{info, warn, error};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize Tracing
+    tracing_subscriber::fmt::init();
+
     // [Self-Healing] Panic Hook
     if !env_flag("STEER_PANIC_STD") {
         std::panic::set_hook(Box::new(|info| {
@@ -109,10 +117,10 @@ async fn main() -> anyhow::Result<()> {
     }
     
     // 1. Init LLM
-    let llm_client = match llm_gateway::LLMClient::new() {
-        Ok(c) => Some(c),
+    let llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>> = match llm_gateway::OpenAILLMClient::new() {
+        Ok(c) => Some(std::sync::Arc::new(c)),
         Err(e) => {
-            eprintln!("⚠️ Failed to init LLM Gateway: {}", e);
+            warn!("⚠️ Failed to init LLM Gateway: {}", e);
             None
         }
     };
@@ -121,14 +129,14 @@ async fn main() -> anyhow::Result<()> {
     if let Some(llm) = &llm_client {
         let scheduler = scheduler::Scheduler::new(llm.clone());
         scheduler.start();
-        println!("🧠 Brain Routine Scheduler Active.");
+        info!("🧠 Brain Routine Scheduler Active.");
     }
 
     // 2.5 Init MCP
     if let Err(e) = mcp_client::init_mcp() {
-        eprintln!("⚠️ Failed to init MCP: {}", e);
+        warn!("⚠️ Failed to init MCP: {}", e);
     } else {
-        println!("🔌 MCP System Initialized.");
+        info!("🔌 MCP System Initialized.");
     }
 
     // 1. Start Native Event Tap (replaces IPC Adapter)
@@ -138,17 +146,16 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     {
         if env_flag("STEER_DISABLE_EVENT_TAP") {
-            println!("⚠️  Event Tap disabled via STEER_DISABLE_EVENT_TAP.");
+            info!("⚠️  Event Tap disabled via STEER_DISABLE_EVENT_TAP.");
         } else if let Err(e) = macos::events::start_event_tap(log_tx.clone()) {
-            eprintln!("❌ Failed to start Event Tap: {}", e);
+            error!("❌ Failed to start Event Tap: {}", e);
         }
     }
 
     // 2. Start "Shadow Analyzer" (Decoupled Module)
     // CRITICAL FIX: Always consume log_rx, even without LLM
     if let Some(c) = llm_client.clone() {
-        let llm_client_ref = std::sync::Arc::new(c);
-        analyzer::spawn(log_rx, llm_client_ref);
+        analyzer::spawn(log_rx, c);
     } else {
         // Fallback: Just save events to DB without LLM analysis
         tokio::spawn(async move {
@@ -199,8 +206,8 @@ async fn main() -> anyhow::Result<()> {
         
         if let Some(llm) = llm_client.clone() {
             policy.unlock(); // Allow agent to act
-            let controller = dynamic_controller::DynamicController::new(llm, None);
-            match controller.surf(&goal).await {
+            let mut planner = local_os_agent::controller::planner::Planner::new(llm, None);
+            match planner.run_goal(&goal, None).await {
                 Ok(_) => println!("✅ Surf completed successfully!"),
                 Err(e) => println!("❌ Surf failed: {}", e),
             }
@@ -344,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
                 match policy.check_with_context(&action, cwd.as_deref()) {
                     Ok(_) => {
                         println!("⚙️  Executing: '{}'", cmd);
-                        match executor::run_shell(&cmd).await {
+                        match bash_executor::exec(&cmd) {
                             Ok(out) => println!("Output:\n{}", out),
                             Err(e) => println!("❌ Exec failed: {}", e),
                         }
@@ -352,10 +359,10 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => {
                         if let Ok(Some(_approval)) = db::find_valid_exec_approval(&cmd, cwd.as_deref()) {
                             println!("✅ Approved command found. Executing: '{}'", cmd);
-                            match executor::run_shell(&cmd).await {
-                                Ok(out) => println!("Output:\n{}", out),
-                                Err(e) => println!("❌ Exec failed: {}", e),
-                            }
+                        match bash_executor::exec(&cmd) {
+                            Ok(out) => println!("Output:\n{}", out),
+                            Err(e) => println!("❌ Exec failed: {}", e),
+                        }
                         } else {
                             let approval = db::create_exec_approval(&cmd, cwd.as_deref(), 3600).ok();
                             if let Some(approval) = approval {
@@ -374,7 +381,7 @@ async fn main() -> anyhow::Result<()> {
                 if parts.len() < 2 { println!("Usage: open <url>"); continue; }
                 let url = parts[1];
                 println!("🌐 Opening URL: {}", url);
-                if let Err(e) = executor::open_url(url) {
+                if let Err(e) = crate::applescript::open_url(url).map(|_| ()) {
                     println!("❌ Open failed: {}", e);
                 }
             }
@@ -800,44 +807,44 @@ async fn main() -> anyhow::Result<()> {
                         let start = split[1].trim();
                         let end = split[2].trim();
                         
-                        println!("➕ Adding event: '{}'...", title);
+                        info!("➕ Adding event: '{}'...", title);
                         match integrations::calendar::CalendarClient::new().await {
                             Ok(client) => {
                                 match client.create_event(title, start, end).await {
-                                    Ok(id) => println!("✅ Event created! ID: {}", id),
-                                    Err(e) => println!("❌ Failed: {}", e),
+                                    Ok(id) => info!("✅ Event created! ID: {}", id),
+                                    Err(e) => error!("❌ Failed: {}", e),
                                 }
                             }
-                            Err(e) => println!("⚠️  Calendar auth failed: {}", e),
+                            Err(e) => warn!("⚠️  Calendar auth failed: {}", e),
                         }
                     }
-                    _ => println!("Unknown calendar subcommand. Use: today, week, add"),
+                    _ => warn!("Unknown calendar subcommand. Use: today, week, add"),
                 }
             }
             "surf" => {
-                if parts.len() < 2 { println!("Usage: surf <goal>"); continue; }
+                if parts.len() < 2 { warn!("Usage: surf <goal>"); continue; }
                 let goal = parts[1..].join(" ");
                 
                 if let Some(brain) = &llm_client {
-                    let controller = dynamic_controller::DynamicController::new(brain.clone(), None);
+                    let mut planner = local_os_agent::controller::planner::Planner::new(brain.clone(), None);
                     // Run concurrently to allow Ctrl+C? For now blocking is fine as it has internal timeout/loop
-                    if let Err(e) = controller.surf(&goal).await {
-                        println!("❌ Surf failed: {}", e);
+                    if let Err(e) = planner.run_goal(&goal, None).await {
+                        error!("❌ Surf failed: {}", e);
                     }
                 } else {
-                    println!("⚠️  LLM Client not available.");
+                    warn!("⚠️  LLM Client not available.");
                 }
             }
             // Super Agent Mode (Unified Orchestrator)
             _ => {
                 if let Ok(orch) = orchestrator::Orchestrator::new().await {
-                   println!("🤖 Super Agent: Processing '{}'...", input);
+                   info!("🤖 Super Agent: Processing '{}'...", input);
                    match orch.handle_request(input).await {
-                       Ok(resp) => println!("{}", resp),
-                       Err(e) => println!("❌ Super Agent Error: {}", e),
+                       Ok(resp) => info!("{}", resp),
+                       Err(e) => error!("❌ Super Agent Error: {}", e),
                    }
                 } else {
-                   println!("⚠️  Orchestrator could not initialization.");
+                   warn!("⚠️  Orchestrator could not initialization.");
                 }
             }
         }

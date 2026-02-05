@@ -21,7 +21,7 @@ pub struct VisualVerifyResult {
     pub verdicts: Vec<VisualVerdict>,
 }
 
-pub async fn verify_screen(llm: &LLMClient, req: VisualVerifyRequest) -> Result<VisualVerifyResult> {
+pub async fn verify_screen(llm: &dyn LLMClient, req: VisualVerifyRequest) -> Result<VisualVerifyResult> {
     if req.prompts.is_empty() {
         return Ok(VisualVerifyResult { ok: true, verdicts: vec![] });
     }

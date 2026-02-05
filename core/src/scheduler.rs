@@ -6,12 +6,12 @@ use std::str::FromStr;
 use cron::Schedule;
 
 pub struct Scheduler {
-    llm: Arc<LLMClient>,
+    llm: Arc<dyn LLMClient>,
 }
 
 impl Scheduler {
-    pub fn new(llm: LLMClient) -> Self {
-        Self { llm: Arc::new(llm) }
+    pub fn new(llm: Arc<dyn LLMClient>) -> Self {
+        Self { llm }
     }
 
     pub fn start(&self) {
@@ -78,15 +78,15 @@ impl Scheduler {
                         println!("   ▶️ running routine logic: '{}'...", prompt);
                         
                         // Instantiate Executor on the fly (lightweight enough)
-                        let executor = crate::executor::AgentExecutor::new((*llm_clone).clone());
+                        let mut planner = crate::controller::planner::Planner::new(llm_clone.clone(), None);
                         let mut attempt: u32 = 0;
                         loop {
-                            match executor.execute_goal(&prompt).await {
-                                Ok(res) => {
+                            match planner.run_goal(&prompt, None).await {
+                                Ok(_) => {
                                     if attempt > 0 {
-                                        println!("✅ Routine '{}' Recovered after {} retries: {}", prompt, attempt, res);
+                                        println!("✅ Routine '{}' Recovered after {} retries", prompt, attempt);
                                     } else {
-                                        println!("✅ Routine '{}' Completed: {}", prompt, res);
+                                        println!("✅ Routine '{}' Completed", prompt);
                                     }
                                     if let Some(id) = run_id {
                                         let _ = db::finish_routine_run(id, "success", None);

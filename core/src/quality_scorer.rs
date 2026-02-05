@@ -151,7 +151,7 @@ pub fn score_quality(
 }
 
 pub async fn score_quality_with_llm(
-    llm: &LLMClient,
+    llm: &dyn LLMClient,
     goal: Option<&str>,
     runtime: Option<&RuntimeVerifyResult>,
     code_review: Option<&CodeReviewInput>,

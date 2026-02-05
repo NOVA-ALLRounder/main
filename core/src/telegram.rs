@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use crate::llm_gateway::LLMClient;
-use crate::dynamic_controller::DynamicController;
+// Duplicate removed
 use log::{info, error};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -42,22 +42,27 @@ pub struct TelegramBot {
     token: String,
     allowed_user_id: Option<u64>,
     client: reqwest::Client,
-    llm: Arc<LLMClient>,
+    llm: Arc<dyn LLMClient>,
     tx_analyzer: Option<mpsc::Sender<String>>,
 }
 
 impl TelegramBot {
-    pub fn new(token: String, allowed_user_id: Option<u64>, llm: Arc<LLMClient>, tx_analyzer: Option<mpsc::Sender<String>>) -> Self {
+    pub fn new(token: String, allowed_user_id: Option<u64>, llm: Arc<dyn LLMClient>, tx_analyzer: Option<mpsc::Sender<String>>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
+            
         Self {
             token,
             allowed_user_id,
-            client: reqwest::Client::new(),
+            client,
             llm,
             tx_analyzer,
         }
     }
 
-    pub fn from_env(llm: Arc<LLMClient>, tx_analyzer: Option<mpsc::Sender<String>>) -> Option<Self> {
+    pub fn from_env(llm: Arc<dyn LLMClient>, tx_analyzer: Option<mpsc::Sender<String>>) -> Option<Self> {
         let token = std::env::var("TELEGRAM_BOT_TOKEN").ok()?;
         let allowed_user_id = std::env::var("TELEGRAM_USER_ID")
             .ok()
@@ -88,7 +93,7 @@ impl TelegramBot {
 
                                     // Spawn agent task
                                     tokio::spawn(async move {
-                                        let controller = DynamicController::new((*bot_clone.llm).clone(), bot_clone.tx_analyzer.clone());
+                                        let mut planner = crate::controller::planner::Planner::new(bot_clone.llm.clone(), bot_clone.tx_analyzer.clone());
                                         
                                         // TODO: Pass Telegram context to Surf so it knows where to reply?
                                         // For now, we just run the task. 
@@ -97,7 +102,7 @@ impl TelegramBot {
                                         // or better, adding a "telegram_reply" action that uses this ID.
                                         // For MVP, if surf succeeds, we send "Done".
                                         
-                                        match controller.surf(&text_clone).await {
+                                        match planner.run_goal(&text_clone, None).await {
                                             Ok(_) => {
                                                 let _ = bot_clone.send_message(chat_id, "✅ Task Completed.").await;
                                             },

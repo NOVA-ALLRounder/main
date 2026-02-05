@@ -14,7 +14,7 @@ pub enum TaskType {
 }
 
 pub struct Orchestrator {
-    llm: LLMClient,
+    llm: std::sync::Arc<dyn LLMClient>,
     #[allow(dead_code)]
     n8n: N8nApi,
     // VisualDriver is stateless per run usually, but we can keep config here
@@ -23,7 +23,7 @@ pub struct Orchestrator {
 impl Orchestrator {
     pub async fn new() -> Result<Self> {
         Ok(Self {
-            llm: LLMClient::new()?,
+            llm: std::sync::Arc::new(crate::llm_gateway::OpenAILLMClient::new()?),
             n8n: N8nApi::from_env()?,
         })
     }

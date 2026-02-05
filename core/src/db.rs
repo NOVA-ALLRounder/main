@@ -764,6 +764,19 @@ pub fn resolve_exec_approval(id: &str, status: &str, resolved_by: Option<&str>, 
     Ok(())
 }
 
+pub fn get_exec_approval_status(id: &str) -> Result<String> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let status: String = conn.query_row(
+            "SELECT status FROM exec_approvals WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        return Ok(status);
+    }
+    Err(rusqlite::Error::QueryReturnedNoRows)
+}
+
 pub fn list_exec_approvals(status_filter: Option<&str>, limit: i64) -> Result<Vec<ExecApproval>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {

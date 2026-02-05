@@ -1,11 +1,11 @@
-use local_os_agent::llm_gateway::LLMClient;
+use local_os_agent::llm_gateway::{LLMClient, OpenAILLMClient};
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     
-    let client = LLMClient::new()?;
+    let client = OpenAILLMClient::new()?;
     println!("🤖 Testing LLM with input '야'...");
     
     let ui_dummy = json!({

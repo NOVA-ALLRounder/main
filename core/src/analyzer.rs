@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 pub fn spawn(
     mut log_rx: mpsc::Receiver<String>,
     #[allow(unused)] // LLM might be unused if we rely solely on patterns for now
-    llm_client: Arc<llm_gateway::LLMClient>
+    llm_client: Arc<dyn llm_gateway::LLMClient>
 ) {
     tokio::spawn(async move {
         // Buffers
@@ -120,7 +120,7 @@ async fn process_buffer(
     detector: &PatternDetector,
     matcher: &TemplateMatcher,
     memory: &Option<MemoryStore>,
-    llm: &Arc<llm_gateway::LLMClient>
+    llm: &Arc<dyn llm_gateway::LLMClient>
 ) {
     if buffer.is_empty() { return; }
 

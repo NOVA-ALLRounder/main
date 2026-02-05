@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub llm_client: Option<llm_gateway::LLMClient>,
+    pub llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>>,
     pub current_goal: Arc<Mutex<Option<String>>>,
 }
 
@@ -297,7 +297,7 @@ async fn auth_middleware(
 }
 
 /// Start the HTTP API server for desktop GUI
-pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> anyhow::Result<()> {
+pub async fn start_api_server(llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>>) -> anyhow::Result<()> {
     let state = AppState {
         llm_client,
         current_goal: Arc::new(Mutex::new(None)),
@@ -510,7 +510,7 @@ async fn run_visual_verification_handler(
     let Some(llm) = &state.llm_client else {
         return Json(visual_verification::VisualVerifyResult { ok: false, verdicts: vec![] });
     };
-    match visual_verification::verify_screen(llm, payload).await {
+    match visual_verification::verify_screen(llm.as_ref(), payload).await {
         Ok(result) => {
             let summary = if result.ok { "Visual verification passed" } else { "Visual verification failed" };
             let details = json!({
@@ -636,7 +636,7 @@ async fn score_quality_handler(
     let score = if use_llm {
         if let Some(llm) = &state.llm_client {
             match quality_scorer::score_quality_with_llm(
-                llm,
+                llm.as_ref(),
                 payload.goal.as_deref(),
                 Some(&runtime),
                 payload.code_review.as_ref(),
@@ -847,7 +847,7 @@ async fn handle_chat(
                     .with_pre_check("Is there a search input field visible?")
                     .with_post_check("Is the text 'Hello World' visible in the search bar?"));
                       
-                if let Err(e) = driver.execute(Some(&llm_clone)).await {
+                if let Err(e) = driver.execute(Some(llm_clone.as_ref())).await {
                     eprintln!("❌ Vision Demo Failed: {}", e);
                 } else {
                     println!("✅ Vision Demo Completed Successfully.");
@@ -1590,9 +1590,9 @@ async fn execute_goal_handler(
     if let Some(llm) = state.llm_client {
         // Spawn background task for OODA loop
         tokio::spawn(async move {
-            let executor = crate::executor::AgentExecutor::new(llm);
-            match executor.execute_goal(&payload.goal).await {
-                Ok(res) => println!("✅ Goal Execution Success: {}", res),
+            let mut planner = crate::controller::planner::Planner::new(llm, None);
+            match planner.run_goal(&payload.goal, None).await {
+                Ok(_) => println!("✅ Goal Execution Success"),
                 Err(e) => println!("❌ Goal Execution Failed: {}", e),
             }
         });

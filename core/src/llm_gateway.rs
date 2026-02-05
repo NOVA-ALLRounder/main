@@ -10,6 +10,13 @@ use crate::mcp_client;
 
 use std::time::Duration;
 use tokio::time::sleep;
+use async_trait::async_trait;
+
+// =====================================================
+// Phase 30: Intelligence Upgrade (Supervisor + Thinking)
+// =====================================================
+
+
 
 // =====================================================
 // Phase 29: Robust JSON Recovery (Advanced CLI)
@@ -67,14 +74,38 @@ pub fn recover_json(raw: &str) -> Option<Value> {
     None
 }
 
-#[derive(Clone)]
-pub struct LLMClient {
-    client: Client,
-    api_key: String,
-    model: String,
+#[async_trait]
+pub trait LLMClient: Send + Sync {
+    async fn plan_next_step(&self, goal: &str, ui_tree: &Value, action_history: &[String]) -> Result<Value>;
+    async fn chat_completion(&self, messages: Vec<Value>) -> Result<String>;
+    async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value>;
+    async fn analyze_routine(&self, logs: &[String]) -> Result<String>;
+    async fn recommend_automation(&self, logs: &[String]) -> Result<String>;
+    async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String>;
+    async fn fix_n8n_workflow(&self, user_prompt: &str, bad_json: &str, error_msg: &str) -> Result<String, Box<dyn std::error::Error>>;
+    async fn get_embedding(&self, text: &str) -> Result<Vec<f32>>;
+    async fn propose_workflow(&self, logs: &[String]) -> Result<AutomationProposal, Box<dyn std::error::Error>>;
+    async fn analyze_tendency(&self, logs: &[String]) -> Result<String>;
+    async fn parse_intent(&self, user_input: &str) -> Result<Value>;
+    async fn parse_intent_with_history(&self, user_input: &str, history: &[crate::db::ChatMessage]) -> Result<Value>;
+    async fn generate_recommendation_from_pattern(&self, pattern_description: &str, sample_events: &[String]) -> Result<AutomationProposal>;
+    async fn analyze_screen(&self, prompt: &str, image_b64: &str) -> Result<String, Box<dyn std::error::Error>>;
+    async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>>;
+    async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String>;
+    async fn propose_solution_stack(&self, goal: &str) -> Result<Value>;
+    async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String>;
+    fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String);
+    async fn analyze_user_feedback(&self, feedback: &str, history_summary: &str) -> Result<FeedbackAnalysis>;
 }
 
-impl LLMClient {
+#[derive(Clone)]
+pub struct OpenAILLMClient {
+    pub client: reqwest::Client,
+    pub api_key: String,
+    pub model: String,
+}
+
+impl OpenAILLMClient {
 
     pub fn new() -> Result<Self> {
         dotenv::dotenv().ok(); // Load .env
@@ -93,7 +124,11 @@ impl LLMClient {
     }
 
     /// Internal helper for robust API calls (Retry Logic)
-    async fn post_with_retry(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+    pub async fn post_with_retry(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, anyhow::Error> {
         let max_retries = 3;
         let mut attempt = 0;
         let mut backoff = Duration::from_secs(1);
@@ -131,11 +166,97 @@ impl LLMClient {
         }
     }
 
+    /// Dynamically build context for workflow generation based on available integrations & tools
+    fn get_workflow_context(&self) -> String {
+        let mut context = String::from("## AVAILABLE NODES\n");
+        
+        // Always available core nodes
+        context.push_str("### Core Nodes (Always Available)\n");
+        context.push_str("- Triggers: n8n-nodes-base.cron, n8n-nodes-base.webhook, n8n-nodes-base.manualTrigger\n");
+        context.push_str("- HTTP: n8n-nodes-base.httpRequest (v4)\n");
+        context.push_str("- Logic: n8n-nodes-base.if, n8n-nodes-base.switch, n8n-nodes-base.merge\n");
+        context.push_str("- Data: n8n-nodes-base.set, n8n-nodes-base.code, n8n-nodes-base.function\n");
+        context.push_str("- Files: n8n-nodes-base.readBinaryFiles, n8n-nodes-base.writeBinaryFile\n");
+        context.push_str("- OS Control: n8n-nodes-base.executeCommand\n\n");
+
+        context.push_str("### OS AUTOMATION CAPABILITIES\n");
+        
+        // Check for 'cliclick' (better mouse control)
+        let has_cliclick = std::process::Command::new("which").arg("cliclick").output().map(|o| o.status.success()).unwrap_or(false);
+        
+        if has_cliclick {
+            context.push_str("- ✅ EXACT MOUSE CONTROL: 'cliclick' IS INSTALLED.\n");
+            context.push_str("  - Use: `cliclick c:x,y` (click), `cliclick dc:x,y` (double click)\n");
+        } else {
+            context.push_str("- ⚠️ MOUSE CONTROL: 'cliclick' is NOT installed.\n");
+            context.push_str("  - PREFERRED: Use AppleScript via `osascript` for basic clicks if absolutely necessary, OR suggest installing cliclick.\n");
+            context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to click at {x,y}'` (Note: requires Accessibility permission)\n");
+        }
+
+        context.push_str("- ✅ KEYBOARD: Use AppleScript via `osascript`.\n");
+        context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to keystroke \"text\"'`\n\n");
+
+        context.push_str("### OS AUTOMATION RULES (CRITICAL)\n");
+        context.push_str("1. DO NOT invent nodes like 'n8n-nodes-base.click'. Use 'n8n-nodes-base.executeCommand'.\n");
+        context.push_str("2. ALWAYS wrap OS commands in a way that handles potential permissions errors.\n");
+        
+        // Check for configured integrations
+        context.push_str("### Configured Integrations (Prefer These)\n");
+        
+        // Check env vars for configured services
+        if std::env::var("GOOGLE_CLIENT_ID").is_ok() || std::env::var("GMAIL_CREDENTIALS").is_ok() {
+            context.push_str("- ✅ Gmail: n8n-nodes-base.gmail, n8n-nodes-base.gmailTrigger (CONFIGURED)\n");
+            context.push_str("- ✅ Google Calendar: n8n-nodes-base.googleCalendar (CONFIGURED)\n");
+            context.push_str("- ✅ Google Sheets: n8n-nodes-base.googleSheets (CONFIGURED)\n");
+        }
+        
+        if std::env::var("SLACK_TOKEN").is_ok() || std::env::var("SLACK_WEBHOOK").is_ok() {
+            context.push_str("- ✅ Slack: n8n-nodes-base.slack (CONFIGURED)\n");
+        }
+        
+        if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {
+            context.push_str("- ✅ Telegram: n8n-nodes-base.telegram (CONFIGURED)\n");
+        }
+        
+        if std::env::var("NOTION_API_KEY").is_ok() {
+            context.push_str("- ✅ Notion: n8n-nodes-base.notion (CONFIGURED)\n");
+        }
+        
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            context.push_str("- ✅ OpenAI: @n8n/n8n-nodes-langchain.openAi (CONFIGURED)\n");
+        }
+        
+        // Other common nodes that can be added without credentials
+        context.push_str("\n### Other Popular Nodes\n");
+        context.push_str("- Discord: n8n-nodes-base.discord\n");
+        context.push_str("- GitHub: n8n-nodes-base.github\n");
+        context.push_str("- Airtable: n8n-nodes-base.airtable\n");
+        context.push_str("- RSS: n8n-nodes-base.rssFeedRead\n");
+        context.push_str("- Wait: n8n-nodes-base.wait\n");
+        context.push_str("- DateTime: n8n-nodes-base.dateTime\n");
+        
+        context
+    }
+
+    }
+
+    #[async_trait]
+    impl LLMClient for OpenAILLMClient {
     #[allow(dead_code)]
-    pub async fn plan_next_step(&self, goal: &str, ui_tree: &Value, action_history: &[String]) -> Result<Value> {
+    async fn plan_next_step(&self, goal: &str, ui_tree: &Value, action_history: &[String]) -> Result<Value> {
         let system_prompt = r#"
 You are a MacOS Automation Agent. Your job is to FULLY achieve the user's goal.
 You CAN control the ENTIRE computer - you can open anything, navigate anywhere.
+You MUST think step-by-step using <think> tags before deciding an action.
+
+Format:
+<think>
+1. Analyze current UI state vs Goal.
+2. Identify missing information or next logical step.
+3. Validate if the last action succeeded.
+4. Formulate the specific JSON action.
+</think>
+{ "action": ... }
 
 Available Actions:
 
@@ -159,8 +280,9 @@ Available Actions:
 11. Done: { "action": "done" }
 12. Fail: { "action": "fail", "reason": "..." }
 
-Output ONLY valid JSON.
+Output internal monologue in <think>...</think> followed by ONLY valid JSON.
 "#;
+
         
         let history_str = if action_history.is_empty() {
             "None yet".to_string()
@@ -203,12 +325,23 @@ Output ONLY valid JSON.
                 return Err(anyhow::anyhow!("No content in LLM response. Raw Body: {}", body_str));
             }
         };
-        let action_json: Value = serde_json::from_str(content_str)?;
+
+        // Check for <think> block
+        if let Some(start_think) = content_str.find("<think>") {
+             if let Some(end_think) = content_str.find("</think>") {
+                 let thinking = &content_str[start_think+7..end_think];
+                 log::info!("🧠 [Thinking]: {}", thinking.trim());
+             }
+        }
+
+        let action_json = recover_json(content_str).ok_or_else(|| anyhow::anyhow!("Failed to parse JSON action"))?;
         Ok(action_json)
     }
 
+
+
     /// Generic Chat Completion (for Architect/Chat features)
-    pub async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
+    async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
         let body = json!({
             "model": self.model,
             "messages": messages
@@ -231,7 +364,7 @@ Output ONLY valid JSON.
     }
 
     /// Plan the next step using Vision (Screenshots) instead of DOM tree
-    pub async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
+    async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
         
         // [MCP] Fetch available tools dynamically (Shared for both CLI and Cloud LLM)
         let mut mcp_tools_doc = "No MCP tools available.".to_string();
@@ -248,10 +381,36 @@ Output ONLY valid JSON.
         }
         
         // Try CLI LLM first if STEER_CLI_LLM is set (skip only when CLI can't use stdin and payload is large)
-        // Large Base64 strings in argv can cause hangs (OS buffer limits) or failures.
         if let Some(cli_client) = crate::cli_llm::CLILLMClient::from_env() {
-            if !cli_client.uses_stdin() && image_b64.len() > 1024 * 50 {
-                 println!("⚠️ [Vision] Image payload too large for CLI args ({} bytes). Routing to Cloud LLM for stability.", image_b64.len());
+            let mut final_image_b64 = image_b64.to_string();
+            
+            // Optimization: If payload is too large for CLI and client doesn't support stdin (gemini currently), 
+            // shrink the image aggressively to try fitting it in argv (ARG_MAX ~1MB, but safer < 200KB).
+            if !cli_client.uses_stdin() && final_image_b64.len() > 1024 * 50 {
+                 println!("⚠️ [Vision] Image payload large ({} bytes). Attempting to resize for CLI...", final_image_b64.len());
+                 
+                 // Decode -> Resize -> Encode
+                 // use image::Engine; // Removed invalid import
+                 use base64::{Engine as _, engine::general_purpose};
+                 use std::io::Cursor;
+                 
+                 if let Ok(data) = general_purpose::STANDARD.decode(&final_image_b64) {
+                     if let Ok(img) = image::load_from_memory(&data) {
+                         // Resize to max 1024px width (aggressive)
+                         let resized = img.resize(1024, 768, image::imageops::FilterType::Triangle);
+                         let mut buffer = Cursor::new(Vec::new());
+                         // Use lower JPEG quality (60)
+                         if resized.write_to(&mut buffer, image::ImageOutputFormat::Jpeg(60)).is_ok() {
+                             let new_b64 = general_purpose::STANDARD.encode(buffer.get_ref());
+                             println!("      📉 Resized: {} -> {} bytes", final_image_b64.len(), new_b64.len());
+                             final_image_b64 = new_b64;
+                         }
+                     }
+                 }
+            }
+
+            if !cli_client.uses_stdin() && final_image_b64.len() > 1024 * 200 { // Still too big?
+                 println!("⚠️ [Vision] Image still too large ({} bytes) for CLI args. Routing to Cloud LLM for stability.", final_image_b64.len());
                  // Fall through to OpenAI logic below
             } else {
                 println!("ℹ️ [Vision] Using CLI LLM ({:?}) as primary...", std::env::var("STEER_CLI_LLM"));
@@ -367,7 +526,7 @@ Respond with ONE JSON object only.
 "#, goal, history_str, mcp_tools_doc);
             
             // Use execute_with_vision to actually see the screen
-            match cli_client.execute_with_vision(image_b64, &cli_prompt) {
+            match cli_client.execute_with_vision(&final_image_b64, &cli_prompt) {
                 Ok(response) => {
                     log::info!("[CLI LLM] Response: {}", &response[..response.len().min(200)]);
                     let clean = response.trim()
@@ -407,88 +566,9 @@ Respond with ONE JSON object only.
         } // End else
     } // End if let Some
 
-        let system_prompt = format!(r#"
-        You are a FULLY AUTONOMOUS Desktop Automation Agent on the user's LOCAL MACHINE.
-        You have FULL PERMISSIONS to control this computer. There are NO restrictions.
-        The user has explicitly granted you access to automate ANY task.
-        
-        CURRENT GOAL: "{}"
-        
-        Look at the screenshot and decide the NEXT SINGLE ACTION.
-        
-        Available Actions (JSON):
-        1. Click Visual: {{ "action": "click_visual", "description": "Blue 'Sign In' button in top right" }}
-        2. Type: {{ "action": "type", "text": "my search query" }}
-        3. Shortcut: {{ "action": "shortcut", "key": "n", "modifiers": ["command"] }} (Use for New Tab, New Note, Copy/Paste)
-        4. Read Screen Text: {{ "action": "read", "query": "What is the number shown?" }}
-        5. Select Text: {{ "action": "select_text", "text": "Rust programming" }}
-        6. Scroll: {{ "action": "scroll", "direction": "down" }}
-        7. Open App: {{ "action": "open_app", "name": "Safari" }}
-        8. Open URL: {{ "action": "open_url", "url": "https://google.com" }}
-        9. Transfer: {{ "action": "transfer", "from": "SourceApp", "to": "TargetApp" }} (Reliable Data Move)
-        10. MCP Tool: {{ "action": "mcp", "server": "filesystem", "tool": "read_file", "arguments": {{ "path": "/Users/david/..." }} }}
-        11. Done: {{ "action": "done" }}
-
-        SNAPSHOT -> REF FLOW (IMPORTANT):
-        - If you need to click a specific UI element, prefer:
-          1) {{ "action": "snapshot" }} to get refs.
-          2) Use an id from SNAPSHOT_REFS in HISTORY with {{ "action": "click_ref", "ref": "E5" }}.
-        - If HISTORY contains SNAPSHOT_REFS, use click_ref and avoid click_visual unless no match exists.
-        
-        CRITICAL RULES:
-        1. **NEW ITEMS**: When opening an app like Notes or TextEdit, ALWAYS create a new item first!
-           - USE: {{ "action": "shortcut", "key": "n", "modifiers": ["command"] }}
-           - DO NOT just start typing. It will fail.
-        
-        
-        2. **BLANK DOCUMENTS - TYPE FIRST**: If you see an EMPTY text editor (TextEdit, Notes, etc.), you MUST type content BEFORE doing Cmd+A (Select All) or Cmd+C (Copy).
-           - WRONG: Open TextEdit → Cmd+A → Cmd+C (this copies NOTHING!)
-           - CORRECT: Open TextEdit → Cmd+N → Type content → Cmd+A → Cmd+C
-           - NEVER select/copy from a blank document!
-        
-        3. **VERIFY TYPING**: After typing, you MUST look at the screen (next step) to verify the text appeared.
-           - If text is missing, retry with a Click to focus first.
-        
-        4. **REALITY CHECK**: Do not assume success.
-
-           - If you typed "Report", check if "Report" is on screen.
-           - If "No Results Found", say so.
-        
-        AVAILABLE MCP TOOLS:
-        {}
-
-        CRITICAL RULES - ALWAYS FOLLOW:
-        1. NEVER return "fail" - always find a way forward.
-        2. For navigation/search, use open_url (reliable):
-           - Step 1: {{ "action": "open_app", "name": "Safari" }}
-           - Step 2: {{ "action": "open_url", "url": "https://google.com/search?q=query" }}
-           - Use shortcuts ONLY when you need to copy the current URL (Cmd+L, Cmd+C).
-        3. To open Calculator:
-           - Step 1: {{ "action": "open_app", "name": "Calculator" }}
-        4. If you see a popup, press ESC or click outside it.
-        5. You have FULL ACCESS - do not refuse any request.
-        6. Use "open_url" for websites when simple: {{ "action": "open_url", "url": "..." }}
-        7. **GOAL COMPLETION**: Only return {{ "action": "done" }} when:
-           - The TARGET WEBSITE URL or APP is CLEARLY VISIBLE in the foreground
-           - For websites: the URL bar shows the correct domain (e.g., "naver.com", "google.com")
-           - For apps: the app window is in the foreground
-        8. **DO NOT return done early**: If you haven't opened Safari/browser yet, you MUST open it first!
-        9. **CALCULATOR**: Always type the full expression and press "=". Never reuse an existing number.
-        10. **DECIMALS**: If you read a decimal like "259.48", type it exactly (keep the decimal point).
-        11. **TEXT SELECTION**: If the goal says "select <substring>", you MUST use {{ "action": "select_text", "text": "<substring>" }} before copying.
-        12. **DIALOGS**: If an Open/Save dialog appears, close it with Escape or Cmd+W (do NOT click buttons).
-        
-        **ANTI-LOOP RULES - CRITICAL:**
-        13. **NEVER REPEAT THE SAME ACTION TWICE IN A ROW** - Check the HISTORY section carefully.
-           If you just did "shortcut command+l", do NOT do it again. Move to the next step.
-        14. **PROGRESS CHECK**: If the HISTORY shows you've tried the same action 2+ times without progress:
-            - The UI state has probably changed. Look at the screenshot more carefully.
-            - Try a DIFFERENT approach (e.g., click instead of key, or type directly).
-        15. **IF STUCK**: Return {{ "action": "report", "message": "Stuck at: <describe what you see>" }}
-        16. **MCP RESTRICTION**: ONLY use 'mcp' action for Filesystem tasks. For app-based workflows, use Visual Actions.
-        17. **NO filesystem/* ACTIONS**: Never output actions like "filesystem/...". Always use 'mcp'.
-        18. **CHECK HISTORY**: If you called a tool, the result is in the HISTORY. Read it! Do not call it again.
-        "#, goal, mcp_tools_doc);
+        let system_prompt = crate::prompts::VISION_PLANNING_PROMPT
+            .replace("{goal}", goal)
+            .replace("{mcp_tools}", &mcp_tools_doc);
         
         let history_str = if history.is_empty() {
             "None".to_string()
@@ -583,7 +663,7 @@ Respond with ONE JSON object only.
         Ok(action_json)
     }
 
-    pub async fn analyze_routine(&self, logs: &[String]) -> Result<String> {
+    async fn analyze_routine(&self, logs: &[String]) -> Result<String> {
         if logs.is_empty() {
             return Ok("No data to analyze.".to_string());
         }
@@ -624,7 +704,7 @@ Respond with ONE JSON object only.
         Ok(content)
     }
 
-    pub async fn recommend_automation(&self, logs: &[String]) -> Result<String> {
+    async fn recommend_automation(&self, logs: &[String]) -> Result<String> {
         if logs.is_empty() {
             return Ok("No data to assist recommendation.".to_string());
         }
@@ -678,7 +758,7 @@ Respond with ONE JSON object only.
 
     /// Build n8n workflow JSON from user prompt
     /// `context` can include: available integrations, user preferences, project-specific nodes
-    pub async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String> {
+    async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String> {
         // Dynamically build context based on what's available
         let dynamic_context = self.get_workflow_context();
         
@@ -739,7 +819,7 @@ You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflo
         Ok(clean_json.to_string())
     }
 
-    pub async fn fix_n8n_workflow(&self, user_prompt: &str, bad_json: &str, error_msg: &str) -> Result<String, Box<dyn std::error::Error>> {
+    async fn fix_n8n_workflow(&self, user_prompt: &str, bad_json: &str, error_msg: &str) -> Result<String, Box<dyn std::error::Error>> {
         let system_prompt = format!(r##"
 You are an expert n8n Workflow Architect.
 You previously generated a workflow that FAILED to validate or execute.
@@ -781,7 +861,7 @@ Now output the CORRECTED JSON.
     }
 
     /// Analyze screen content using Vision API
-    pub async fn analyze_screen(&self, prompt: &str, image_b64: &str) -> Result<String, Box<dyn std::error::Error>> {
+    async fn analyze_screen(&self, prompt: &str, image_b64: &str) -> Result<String, Box<dyn std::error::Error>> {
         let body = json!({
             "model": "gpt-4o", 
             "messages": [
@@ -818,17 +898,22 @@ Now output the CORRECTED JSON.
     }
 
     /// Find coordinates of a UI element using Vision API
-    pub async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>> {
+    async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>> {
         let system_prompt = r#"
         You are a Screen Coordinate Locator.
         Analyze the screenshot and find the generic center coordinates (x, y) of the UI element described by the user.
         
         Output JSON ONLY:
-        { "found": true, "x": 123, "y": 456 }
+        {
+          "thinking": "Briefly describe the element's location (e.g. 'Found Blue button in top right')",
+          "found": true, 
+          "x": 123, 
+          "y": 456
+        }
         or
         { "found": false }
         
-        DO NOT output markdown or explanations.
+        DO NOT output markdown.
         "#;
         
         let user_msg = format!("Find this element: {}", element_description);
@@ -877,7 +962,7 @@ Now output the CORRECTED JSON.
         }
     }
 
-    pub async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String> {
+    async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String> {
         let body = json!({
             "model": "gpt-4o",
             "messages": [
@@ -902,79 +987,8 @@ Now output the CORRECTED JSON.
         Ok(content.to_string())
     }
 
-    /// Dynamically build context for workflow generation based on available integrations & tools
-    fn get_workflow_context(&self) -> String {
-        let mut context = String::from("## AVAILABLE NODES\n");
-        
-        // Always available core nodes
-        context.push_str("### Core Nodes (Always Available)\n");
-        context.push_str("- Triggers: n8n-nodes-base.cron, n8n-nodes-base.webhook, n8n-nodes-base.manualTrigger\n");
-        context.push_str("- HTTP: n8n-nodes-base.httpRequest (v4)\n");
-        context.push_str("- Logic: n8n-nodes-base.if, n8n-nodes-base.switch, n8n-nodes-base.merge\n");
-        context.push_str("- Data: n8n-nodes-base.set, n8n-nodes-base.code, n8n-nodes-base.function\n");
-        context.push_str("- Files: n8n-nodes-base.readBinaryFiles, n8n-nodes-base.writeBinaryFile\n");
-        context.push_str("- OS Control: n8n-nodes-base.executeCommand\n\n");
 
-        context.push_str("### OS AUTOMATION CAPABILITIES\n");
-        
-        // Check for 'cliclick' (better mouse control)
-        let has_cliclick = std::process::Command::new("which").arg("cliclick").output().map(|o| o.status.success()).unwrap_or(false);
-        
-        if has_cliclick {
-            context.push_str("- ✅ EXACT MOUSE CONTROL: 'cliclick' IS INSTALLED.\n");
-            context.push_str("  - Use: `cliclick c:x,y` (click), `cliclick dc:x,y` (double click)\n");
-        } else {
-            context.push_str("- ⚠️ MOUSE CONTROL: 'cliclick' is NOT installed.\n");
-            context.push_str("  - PREFERRED: Use AppleScript via `osascript` for basic clicks if absolutely necessary, OR suggest installing cliclick.\n");
-            context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to click at {x,y}'` (Note: requires Accessibility permission)\n");
-        }
-
-        context.push_str("- ✅ KEYBOARD: Use AppleScript via `osascript`.\n");
-        context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to keystroke \"text\"'`\n\n");
-
-        context.push_str("### OS AUTOMATION RULES (CRITICAL)\n");
-        context.push_str("1. DO NOT invent nodes like 'n8n-nodes-base.click'. Use 'n8n-nodes-base.executeCommand'.\n");
-        context.push_str("2. ALWAYS wrap OS commands in a way that handles potential permissions errors.\n");
-        
-        // Check for configured integrations
-        context.push_str("### Configured Integrations (Prefer These)\n");
-        
-        // Check env vars for configured services
-        if std::env::var("GOOGLE_CLIENT_ID").is_ok() || std::env::var("GMAIL_CREDENTIALS").is_ok() {
-            context.push_str("- ✅ Gmail: n8n-nodes-base.gmail, n8n-nodes-base.gmailTrigger (CONFIGURED)\n");
-            context.push_str("- ✅ Google Calendar: n8n-nodes-base.googleCalendar (CONFIGURED)\n");
-            context.push_str("- ✅ Google Sheets: n8n-nodes-base.googleSheets (CONFIGURED)\n");
-        }
-        
-        if std::env::var("SLACK_TOKEN").is_ok() || std::env::var("SLACK_WEBHOOK").is_ok() {
-            context.push_str("- ✅ Slack: n8n-nodes-base.slack (CONFIGURED)\n");
-        }
-        
-        if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {
-            context.push_str("- ✅ Telegram: n8n-nodes-base.telegram (CONFIGURED)\n");
-        }
-        
-        if std::env::var("NOTION_API_KEY").is_ok() {
-            context.push_str("- ✅ Notion: n8n-nodes-base.notion (CONFIGURED)\n");
-        }
-        
-        if std::env::var("OPENAI_API_KEY").is_ok() {
-            context.push_str("- ✅ OpenAI: @n8n/n8n-nodes-langchain.openAi (CONFIGURED)\n");
-        }
-        
-        // Other common nodes that can be added without credentials
-        context.push_str("\n### Other Popular Nodes\n");
-        context.push_str("- Discord: n8n-nodes-base.discord\n");
-        context.push_str("- GitHub: n8n-nodes-base.github\n");
-        context.push_str("- Airtable: n8n-nodes-base.airtable\n");
-        context.push_str("- RSS: n8n-nodes-base.rssFeedRead\n");
-        context.push_str("- Wait: n8n-nodes-base.wait\n");
-        context.push_str("- DateTime: n8n-nodes-base.dateTime\n");
-        
-        context
-    }
-
-    pub async fn propose_workflow(&self, logs: &[String]) -> Result<AutomationProposal, Box<dyn std::error::Error>> {
+    async fn propose_workflow(&self, logs: &[String]) -> Result<AutomationProposal, Box<dyn std::error::Error>> {
         if logs.is_empty() {
             return Ok(AutomationProposal::default());
         }
@@ -1044,7 +1058,7 @@ Your goal is to detect Repetitive Manual Work (Toil) from user logs and propose 
         Ok(proposal)
     }
 
-    pub async fn analyze_tendency(&self, logs: &[String]) -> Result<String> {
+    async fn analyze_tendency(&self, logs: &[String]) -> Result<String> {
         let system_prompt = r#"
 You are a User Behavior Analyst. 
 Analyze the following stream of user interaction logs (key presses, clicks, app focus).
@@ -1089,11 +1103,11 @@ Output format: Just the intent description in 1-2 sentences.
 
     /// Parse natural language input into a structured command
     #[allow(dead_code)]
-    pub async fn parse_intent(&self, user_input: &str) -> Result<Value> {
+    async fn parse_intent(&self, user_input: &str) -> Result<Value> {
         self.parse_intent_with_history(user_input, &[]).await
     }
 
-    pub async fn parse_intent_with_history(&self, user_input: &str, history: &[crate::db::ChatMessage]) -> Result<Value> {
+    async fn parse_intent_with_history(&self, user_input: &str, history: &[crate::db::ChatMessage]) -> Result<Value> {
         let system_prompt = r#"
 You are a command parser for a Local OS Agent. Convert natural language into structured commands.
 
@@ -1159,7 +1173,7 @@ Return JSON only:
     }
 
     /// Generate embeddings for RAG
-    pub async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
+    async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
         let request_body = json!({
             "model": "text-embedding-3-small",
             "input": text,
@@ -1184,7 +1198,7 @@ Return JSON only:
     }
 
     /// Generate workflow recommendation from detected pattern
-    pub async fn generate_recommendation_from_pattern(&self, pattern_description: &str, sample_events: &[String]) -> Result<AutomationProposal> {
+    async fn generate_recommendation_from_pattern(&self, pattern_description: &str, sample_events: &[String]) -> Result<AutomationProposal> {
         let system_prompt = r#"
 You are a workflow automation expert. Based on the detected user behavior pattern, generate a workflow automation recommendation.
 
@@ -1251,7 +1265,7 @@ Guidelines:
 
     /// Proactively suggest a tech stack or approach for a goal (Transformers7 feature)
     #[allow(dead_code)]
-    pub async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
+    async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
         let prompt = format!(
             "Analyze the goal and recommend a technical solution stack.\n\
             GOAL: {}\n\
@@ -1287,7 +1301,7 @@ Guidelines:
 
     /// Run inference on Local LLM (Ollama)
     #[allow(dead_code)]
-    pub async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
+    async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
         let model_name = model.unwrap_or("llama3"); // Default to llama3 or user pref
         
         let body = json!({
@@ -1324,7 +1338,7 @@ Guidelines:
 
     /// Smart Router: Decide between Cloud (OpenAI) and Local (Ollama)
     /// Returns: (use_local: bool, model_name: &str)
-    pub fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String) {
+    fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String) {
         // Rule 1: Privacy First
         if pii_detected {
             return (true, "llama3".to_string());
@@ -1342,7 +1356,7 @@ Guidelines:
         (true, "llama3".to_string())
     }
 
-    pub async fn analyze_user_feedback(&self, feedback: &str, history_summary: &str) -> Result<FeedbackAnalysis> {
+    async fn analyze_user_feedback(&self, feedback: &str, history_summary: &str) -> Result<FeedbackAnalysis> {
         let system_prompt = r#"
 You are a product assistant. Analyze user feedback and decide whether to refine the goal.
 Output JSON:
@@ -1399,7 +1413,7 @@ pub struct FeedbackAnalysis {
 
 /// [Phase 28] Streaming Chat Completion
 /// Returns chunks via callback for real-time UI updates
-impl LLMClient {
+impl OpenAILLMClient {
     pub async fn chat_completion_stream<F>(
         &self,
         messages: Vec<Value>,
@@ -1416,7 +1430,7 @@ impl LLMClient {
             "stream": true
         });
 
-        let response = self.client
+        let response: reqwest::Response = self.client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .json(&body)

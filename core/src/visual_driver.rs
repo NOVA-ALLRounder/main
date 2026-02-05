@@ -1,4 +1,4 @@
-use crate::executor;
+
 use crate::applescript;
 use anyhow::{Context, Result};
 use std::process::Command;
@@ -8,6 +8,8 @@ use image::io::Reader as ImageReader;
 use std::io::Cursor;
 
 use serde::{Serialize, Deserialize};
+use crate::error::AppError;
+use tracing::{info, warn, error, debug};
 
 // =====================================================
 // Clawdbot-inspired helper functions
@@ -100,7 +102,7 @@ impl VisualDriver {
             .arg("-x").arg("-t").arg("jpg").arg("-C").arg(&output_path)
             .status().context("Failed to run screencapture")?;
             
-        if !status.success() { return Err(anyhow::anyhow!("screencapture failed")); }
+        if !status.success() { return Err(AppError::Vision("screencapture failed".to_string()).into()); }
 
         let image_data = fs::read(&output_path).context("Failed to read image")?;
         let _ = fs::remove_file(&output_path);
@@ -170,21 +172,22 @@ impl VisualDriver {
 
     /// Adaptive Wait: Wait until the screen is STABLE (Diff < threshold)
     /// This ensures we don't act during animations, but proceed immediately when static.
-    pub async fn wait_for_ui_settle(timeout_ms: u64) -> Result<()> {
+    /// Returns Ok(true) if settled, Ok(false) if timed out.
+    pub async fn wait_for_ui_settle(timeout_ms: u64) -> Result<bool> {
         let start = std::time::Instant::now();
-        let threshold = 0.01; // 1% diff = stable
+        let threshold = 0.005; // 0.5% diff = stricter stability
         let mut consecutive_stable_frames = 0;
-        let required_stable_frames = 2; // ~400ms of stability
+        let required_stable_frames = 3; // ~600ms of stability (200ms interval * 3)
 
         let mut prev_img = match Self::capture_image_internal() {
             Ok(img) => img,
-            Err(_) => return Ok(()), // Fail safe
+            Err(_) => return Ok(true), // Fail safe: assume stable if capture fails (to avoid blocking)
         };
 
         loop {
             if start.elapsed().as_millis() as u64 > timeout_ms {
-                println!("      ⏰ Timeout waiting for UI settle (waited {}ms). Proceeding.", timeout_ms);
-                break;
+                warn!("      ⏰ Timeout waiting for UI settle (waited {}ms). Unstable.", timeout_ms);
+                return Ok(false);
             }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -194,21 +197,19 @@ impl VisualDriver {
                     let diff = Self::calculate_diff(&prev_img, &new_img);
                     if diff < threshold {
                         consecutive_stable_frames += 1;
-                        // print!("."); // Heartbeat
                         if consecutive_stable_frames >= required_stable_frames {
-                            println!("      ⚡️ UI Settled (Ready).");
-                            break;
+                            info!("      ⚡️ UI Settled (Ready).");
+                            return Ok(true);
                         }
                     } else {
                         consecutive_stable_frames = 0;
-                         println!("      🌊 UI Moving ({:.1}% diff)...", diff * 100.0);
+                         info!("      🌊 UI Moving ({:.1}% diff)...", diff * 100.0);
                     }
                     prev_img = new_img;
                 },
                 Err(_) => {} 
             }
         }
-        Ok(())
     }
 
     pub fn add_step(&mut self, step: SmartStep) -> &mut Self {
@@ -222,8 +223,8 @@ impl VisualDriver {
         self
     }
 
-    async fn verify_condition(llm: &crate::llm_gateway::LLMClient, prompt: &str) -> Result<bool> {
-        println!("      👁️ Vision Check: '{}'", prompt);
+    async fn verify_condition(llm: &dyn crate::llm_gateway::LLMClient, prompt: &str) -> Result<bool> {
+        info!("      👁️ Vision Check: '{}'", prompt);
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Brief pause before capture
         
         match Self::capture_screen() {
@@ -235,36 +236,36 @@ impl VisualDriver {
                 match llm.analyze_screen(&full_prompt, &b64).await {
                     Ok(resp) => {
                         let success = resp.trim().to_uppercase().starts_with("YES");
-                        println!("      🤖 Result: {}", if success { "PASS" } else { "FAIL" });
+                        info!("      🤖 Result: {}", if success { "PASS" } else { "FAIL" });
                         Ok(success)
                     },
                     Err(e) => {
-                        println!("      ⚠️ Vision API Error: {}", e);
+                        warn!("      ⚠️ Vision API Error: {}", e);
                         Ok(false) // Conservative failure
                     }
                 }
             },
             Err(e) => {
-                println!("      ⚠️ Capture Failed: {}", e);
+                warn!("      ⚠️ Capture Failed: {}", e);
                 Ok(false)
             }
         }
     }
 
-    pub async fn execute(&self, llm: Option<&crate::llm_gateway::LLMClient>) -> Result<()> {
-        println!("👻 [Smart Visual Driver] Starting Verified Automation...");
+    pub async fn execute(&self, llm: Option<&dyn crate::llm_gateway::LLMClient>) -> Result<()> {
+        info!("👻 [Smart Visual Driver] Starting Verified Automation...");
         
         for (i, step) in self.steps.iter().enumerate() {
-            println!("   Step {}: {}", i + 1, step.description);
+            info!("   Step {}: {}", i + 1, step.description);
             
             // 1. Pre-Verification
             if let Some(pre_prompt) = &step.pre_verify {
                 if let Some(brain) = llm {
                     if !Self::verify_condition(brain, pre_prompt).await? {
                          if step.critical {
-                             return Err(anyhow::anyhow!("❌ Pre-check failed: {}", pre_prompt));
+                             return Err(AppError::Execution(format!("❌ Pre-check failed: {}", pre_prompt)).into());
                          } else {
-                             println!("      ⚠️ Pre-check failed, but proceeding (non-critical).");
+                             warn!("      ⚠️ Pre-check failed, but proceeding (non-critical).");
                          }
                     }
                 }
@@ -273,7 +274,7 @@ impl VisualDriver {
             // 2. Action Execution
             match &step.action {
                 UiAction::OpenUrl(url) => {
-                    executor::open_url(url)?;
+                    crate::applescript::open_url(url).map(|_| ())?;
                 }
                 UiAction::Wait(secs) => {
                     tokio::time::sleep(tokio::time::Duration::from_secs(*secs)).await;
@@ -286,6 +287,11 @@ impl VisualDriver {
                         target_clone
                     );
                     
+                    if crate::env_flag("STEER_ADAPTIVE_POLLING") {
+                        info!("      ⏳ Adaptive Polling: Waiting for UI settle...");
+                        let _ = Self::wait_for_ui_settle(2000).await;
+                    }
+
                     // [Survival] Run blocking script with timeout
                     let task = tokio::task::spawn_blocking(move || {
                         applescript::run(&script)
@@ -294,14 +300,14 @@ impl VisualDriver {
                     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
                         Ok(Ok(Ok(_))) => {}, // Success
                         Ok(Ok(Err(e))) => {
-                            println!("      (Click failed: {})", e);
-                            if step.critical { return Err(anyhow::anyhow!("Critical Click Failed: {}", e)); }
+                            warn!("      (Click failed: {})", e);
+                            if step.critical { return Err(AppError::Execution(format!("Critical Click Failed: {}", e)).into()); }
                         }
                         Ok(Err(_)) => { // JoinError
                              return Err(anyhow::anyhow!("Task Panic"));
                         }
                         Err(_) => { // Timeout
-                             println!("      (Click timed out)");
+                             warn!("      (Click timed out)");
                              if step.critical { return Err(anyhow::anyhow!("Critical Click Timed Out")); }
                         }
                     }
@@ -368,7 +374,7 @@ impl VisualDriver {
                     
                     // Helper function to execute menu click
                     async fn execute_menu_click(app: &str, menu_items: &str, description: &str) -> Result<(), anyhow::Error> {
-                        println!("      🔧 [WORKAROUND] Using menu click for {}", description);
+                        info!("      🔧 [WORKAROUND] Using menu click for {}", description);
                         let script = format!(r#"
                             tell application "System Events"
                                 tell process "{}"
@@ -433,14 +439,25 @@ impl VisualDriver {
                                 if result.is_ok() { return Ok(()); }
                             }
                             } else if is_calculator {
-                                let result = execute_menu_click(
+                                // Try English first, then Korean
+                                let english_result = execute_menu_click(
                                     app,
                                     r#"click menu item "Copy" of menu "Edit" of menu bar 1"#,
-                                    "Calculator Cmd+C"
+                                    "Calculator Cmd+C (En)"
                                 ).await;
-                                if result.is_ok() { return Ok(()); }
-
-                        }
+                                
+                                if english_result.is_ok() { 
+                                    return Ok(()); 
+                                } else {
+                                    // Fallback to Korean
+                                    let korean_result = execute_menu_click(
+                                        app,
+                                        r#"click menu item "복사" of menu "편집" of menu bar 1"#,
+                                        "Calculator Cmd+C (Ko)"
+                                    ).await;
+                                    if korean_result.is_ok() { return Ok(()); }
+                                }
+                            }
                         
                         // WORKAROUND: Cmd+N (New Note/Document)
                         if key == "n" && modifiers.contains(&"command".to_string()) && is_notes {
@@ -488,8 +505,8 @@ impl VisualDriver {
                     };
                     
                     
-                    println!("      ⌨️ Shortcut: {} + {:?}", key_str, modifiers);
-                    println!("      🔍 [DEBUG] AppleScript Command: {}", script);
+                    info!("      ⌨️ Shortcut: {} + {:?}", key_str, modifiers);
+                    debug!("      🔍 [DEBUG] AppleScript Command: {}", script);
                     let task = tokio::task::spawn_blocking(move || {
                         applescript::run(&script)
                     });
@@ -501,57 +518,60 @@ impl VisualDriver {
                     }
                 }
                 UiAction::ClickVisual(desc) => {
-                    println!("      👁️ Vision Click: Finding '{}'...", desc);
+                    info!("      👁️ Vision Click: Finding '{}'...", desc);
                     if let Some(brain) = llm {
                          let max_retries = 2;
                          for attempt in 0..=max_retries {
                              if attempt > 0 {
-                                 println!("      ⏳ Retry {}/{}: Re-observing screen...", attempt, max_retries);
+                                 info!("      ⏳ Retry {}/{}: Re-observing screen...", attempt, max_retries);
                                  tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                             } else if crate::env_flag("STEER_ADAPTIVE_POLLING") {
+                                 info!("      ⏳ Adaptive Polling: Waiting for UI settle before Vision...");
+                                 let _ = Self::wait_for_ui_settle(2000).await;
                              }
 
-                             println!("      📸 Capturing screen for Vision Click...");
+                             debug!("      📸 Capturing screen for Vision Click...");
                              match Self::capture_screen() {
                                 Ok((b64, scale)) => {
-                                    println!("      🔍 Calling find_element_coordinates (image size: {} bytes)...", b64.len());
+                                    debug!("      🔍 Calling find_element_coordinates (image size: {} bytes)...", b64.len());
                                     match brain.find_element_coordinates(desc, &b64).await {
                                         Ok(Some((x_raw, y_raw))) => {
                                             // Apply scaling back to original screen size
                                             let x = (x_raw as f32 * scale) as i32;
                                             let y = (y_raw as f32 * scale) as i32;
-                                            println!("      🎯 LLM Target: ({}, {}) [Scaled x{:.2}]", x, y, scale);
+                                            info!("      🎯 LLM Target: ({}, {}) [Scaled x{:.2}]", x, y, scale);
                                             
                                             // [Phase 4] Hybrid Grounding (macOS only)
                                             #[cfg(target_os = "macos")]
                                             {
                                                 use crate::macos::accessibility;
                                                 if let Some((_sx, _sy)) = accessibility::get_element_center_at(x, y) {
-                                                    println!("      🧲 Grounded: Valid UI Element confirmed at ({}, {})", x, y);
+                                                    info!("      🧲 Grounded: Valid UI Element confirmed at ({}, {})", x, y);
                                                 } else {
-                                                    println!("      ⚠️  Warning: No UI Element found at coordinates via Accessibility API.");
+                                                    warn!("      ⚠️  Warning: No UI Element found at coordinates via Accessibility API.");
                                                     // Optional: If we are strict, we could continue (retry) here.
                                                     // For now, we trust vision but warn.
                                                 }
                                             }
 
                                             let script = format!("tell application \"System Events\" to click at {{{}, {}}}", x, y);
-                                            println!("      🖱️ Executing AppleScript: {}", script);
+                                            debug!("      🖱️ Executing AppleScript: {}", script);
                                             if let Err(e) = applescript::run(&script) {
-                                                 println!("      ❌ Click visual script failed: {}", e);
+                                                 error!("      ❌ Click visual script failed: {}", e);
                                                  if step.critical { return Err(anyhow::anyhow!("Visual Click execution failed")); }
                                             } else {
-                                                 println!("      ✅ Click executed successfully!");
+                                                 info!("      ✅ Click executed successfully!");
                                             }
                                             break; // Success!
                                         },
                                         Ok(None) => {
-                                            println!("      ⚠️ Element '{}' not found on screen.", desc);
+                                            warn!("      ⚠️ Element '{}' not found on screen.", desc);
                                             if attempt == max_retries && step.critical {
                                                  return Err(anyhow::anyhow!("Visual Element '{}' not found after retries", desc));
                                             }
                                         },
                                         Err(e) => {
-                                            println!("      ⚠️ LLM Vision Error: {}", e);
+                                            error!("      ⚠️ LLM Vision Error: {}", e);
                                             if attempt == max_retries && step.critical {
                                                  return Err(anyhow::anyhow!("Visual Click LLM error"));
                                             }
@@ -559,13 +579,13 @@ impl VisualDriver {
                                     }
                                 },
                                 Err(e) => {
-                                    println!("      ❌ Screen capture failed: {}", e);
+                                    error!("      ❌ Screen capture failed: {}", e);
                                     if attempt == max_retries && step.critical { return Err(anyhow::anyhow!("Screen capture failed")); }
                                 }
                              }
                          }
                     } else {
-                        println!("      ⚠️ No LLM client provided for Visual Click.");
+                        warn!("      ⚠️ No LLM client provided for Visual Click.");
                     }
                 }
             }
@@ -573,8 +593,15 @@ impl VisualDriver {
             // 3. Post-Verification
             if let Some(post_prompt) = &step.post_verify {
                  if let Some(brain) = llm {
-                    // Wait a bit for UI to settle
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    // Wait a bit for UI to settle (Strict)
+                    if !Self::wait_for_ui_settle(4000).await? {
+                        if step.critical {
+                             return Err(anyhow::anyhow!("❌ Post-action UI failed to settle."));
+                        } else {
+                             warn!("      ⚠️ UI unstable after action, but proceeding (non-critical).");
+                        }
+                    }
+                    
                     if !Self::verify_condition(brain, post_prompt).await? && step.critical {
                          return Err(anyhow::anyhow!("❌ Post-check failed: {}", post_prompt));
                     }
@@ -582,7 +609,7 @@ impl VisualDriver {
             }
         }
         
-        println!("👻 [Smart Visual Driver] Automation Complete.");
+        info!("👻 [Smart Visual Driver] Automation Complete.");
         Ok(())
     }
 }

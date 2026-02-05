@@ -1,3 +1,5 @@
+pub mod controller;
+pub mod prompts;
 pub mod schema;
 pub mod session;
 pub mod policy;
@@ -22,7 +24,7 @@ pub mod applescript;
 pub mod n8n_api;
 pub mod dependency_check;
 pub mod scheduler;
-pub mod executor;
+
 pub mod visual_driver;
 pub mod integrations;
 pub mod recommendation;
@@ -38,13 +40,13 @@ pub mod send_policy;
 pub mod chat_sanitize;
 pub mod shell_analysis;
 pub mod shell_actions;
-pub mod replan_templates;
+
 pub mod command_queue;
 pub mod context_pruning;
 pub mod tool_policy;
 pub mod project_scanner;
 pub mod runtime_verification;
-pub mod replanning_config;
+
 pub mod quality_scorer;
 pub mod chat_gate;
 pub mod visual_verification;
@@ -56,6 +58,7 @@ pub mod tool_result_guard;
 pub mod consistency_check;
 pub mod static_checks;
 pub mod singleton_lock;
+
 pub mod nl_automation;
 pub mod intent_router;
 pub mod slot_filler;
@@ -63,18 +66,20 @@ pub mod plan_builder;
 pub mod execution_controller;
 pub mod verification_engine;
 pub mod nl_store;
-pub mod dynamic_controller;
-pub mod content_extractor;
-pub mod telegram;
-pub mod architect;
-pub mod config_manager;
-pub mod screen_recorder;
-pub mod cli_llm;
-pub mod reality_check;
 
-#[cfg(target_os = "macos")]
+pub mod error;
+
 pub mod macos;
+pub mod reality_check;
+pub mod cli_llm;
+pub mod config_manager;
+pub mod content_extractor;
+pub mod screen_recorder;
+pub mod telegram;
 
 pub fn env_flag(key: &str) -> bool {
-    std::env::var(key).unwrap_or_default() == "1"
+    std::env::var(key)
+        .ok()
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }

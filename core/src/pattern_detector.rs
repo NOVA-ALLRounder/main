@@ -58,12 +58,12 @@ use crate::llm_gateway::LLMClient;
 /// Pattern detector engine
 pub struct PatternDetector {
     config: PatternConfig,
-    llm_client: Option<LLMClient>,
+    llm_client: Option<std::sync::Arc<dyn LLMClient>>,
 }
 
 impl PatternDetector {
     pub fn new() -> Self {
-        let llm_client = LLMClient::new().ok();
+        let llm_client = crate::llm_gateway::OpenAILLMClient::new().ok().map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn LLMClient>);
         Self {
             config: PatternConfig::default(),
             llm_client,
@@ -71,7 +71,7 @@ impl PatternDetector {
     }
 
     pub fn with_config(config: PatternConfig) -> Self {
-        let llm_client = LLMClient::new().ok();
+        let llm_client = crate::llm_gateway::OpenAILLMClient::new().ok().map(|c| std::sync::Arc::new(c) as std::sync::Arc<dyn LLMClient>);
         Self { config, llm_client }
     }
 
@@ -397,7 +397,7 @@ impl PatternDetector {
         let mut handled_indices = std::collections::HashSet::new();
 
         // Pre-compute embeddings for all patterns descriptions
-        let mut embeddings = Vec::new();
+        let mut embeddings: Vec<Option<Vec<f32>>> = Vec::new();
         for p in &patterns {
             if let Ok(emb) = client.get_embedding(&p.description).await {
                 embeddings.push(Some(emb));

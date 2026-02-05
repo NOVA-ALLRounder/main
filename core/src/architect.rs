@@ -5,13 +5,13 @@ use serde_json::json;
 use crate::db;
 
 pub struct ArchitectSession {
-    llm: Arc<LLMClient>,
+    llm: Arc<dyn LLMClient>,
     pub recommendation: Recommendation,
     history: Vec<serde_json::Value>,
 }
 
 impl ArchitectSession {
-    pub fn new(llm: Arc<LLMClient>, recommendation: Recommendation) -> Self {
+    pub fn new(llm: Arc<dyn LLMClient>, recommendation: Recommendation) -> Self {
         // Initial System Prompt
         let system_prompt = format!(
             "You are 'The Architect', an intelligent automation expert.

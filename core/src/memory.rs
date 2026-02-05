@@ -11,11 +11,11 @@ use std::sync::Arc;
 pub struct MemoryStore {
     conn: Connection,
     table_name: String,
-    llm: Arc<LLMClient>,
+    llm: Arc<dyn LLMClient>,
 }
 
 impl MemoryStore {
-    pub async fn new(uri: &str, llm: Arc<LLMClient>) -> Result<Self> {
+    pub async fn new(uri: &str, llm: Arc<dyn LLMClient>) -> Result<Self> {
         let conn = connect(uri).execute().await?;
         
         Ok(Self {
@@ -265,7 +265,7 @@ impl MemoryStore {
 mod tests {
     use super::*;
     use serde_json::json;
-    use crate::llm_gateway::LLMClient;
+    use crate::llm_gateway::{LLMClient, OpenAILLMClient};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -285,7 +285,7 @@ mod tests {
         }
         let uri = temp_dir.to_str().unwrap();
 
-        let llm = Arc::new(LLMClient::new().unwrap());
+        let llm = Arc::new(OpenAILLMClient::new().unwrap());
         let store = MemoryStore::new(uri, llm).await.unwrap();
         
         // 1. Add

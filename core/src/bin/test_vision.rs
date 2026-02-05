@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("🧪 Starting Vision Test...");
     
     // Initialize LLM (requires OPENAI_API_KEY in .env)
-    let llm = LLMClient::new().expect("Failed to init LLM. Check .env");
+    let llm = std::sync::Arc::new(local_os_agent::llm_gateway::OpenAILLMClient::new().expect("Failed to init LLM"));
     
     // Create a Vision Driver
     let mut driver = VisualDriver::new();
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ));
 
     // Execute
-    match driver.execute(Some(&llm)).await {
+    match driver.execute(Some(llm.as_ref())).await {
         Ok(_) => println!("✅ Test Passed!"),
         Err(e) => println!("❌ Test Failed: {}", e),
     }
