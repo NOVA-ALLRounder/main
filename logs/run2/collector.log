@@ -1,0 +1,3 @@
+{"ts":"2026-01-31 12:39:55","level":"INFO","component":"__main__","run_id":"60c852e2effc4f72adcb270fd50b316d","event":"starting collector"}
+{"ts":"2026-01-31 12:39:55","level":"INFO","component":"__main__","run_id":"60c852e2effc4f72adcb270fd50b316d","event":"ingest listening on http://127.0.0.1:8080"}
+{"ts":"2026-01-31 12:39:55","level":"INFO","component":"__main__","run_id":"60c852e2effc4f72adcb270fd50b316d","event":"retention","meta":{"event":"retention","deleted_events":0,"deleted_sessions":0,"deleted_routines":0,"deleted_handoff":0,"expired_handoff":0,"deleted_daily_summaries":0,"deleted_pattern_summaries":0,"deleted_llm_inputs":0,"db_size_before":4096,"db_size_after":143360,"vacuumed":true}}
