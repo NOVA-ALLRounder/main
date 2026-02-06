@@ -56,6 +56,9 @@ toml = "0.8"
 thiserror = "2.0.18"
 winapi = { version = "0.3.9", features = ["winuser"] }
 screenshots = "0.8.10"
+lettre = { version = "0.11.19", features = ["tokio1-native-tls", "builder"] }
+teloxide = { version = "0.17.0", features = ["macros"] }
+tokio-util = { version = "0.7.18", features = ["compat"] }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
