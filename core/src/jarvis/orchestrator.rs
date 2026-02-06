@@ -2,8 +2,8 @@
 
 use crate::jarvis::{
     command_parser::CommandParser, engines::*, error_handler::*, event_bus::*,
-    intent_classifier::*, models::*, performance::*, plan_builder::*,
-    session_manager::*, skills::*, tools::ToolRegistry, PrivacyMode,
+    intent_classifier::*, models::*, parallel_executor::ParallelExecutor, performance::*,
+    plan_builder::*, session_manager::*, skills::*, tools::ToolRegistry, PrivacyMode,
 };
 use anyhow::Result;
 use std::sync::Arc;
@@ -23,6 +23,9 @@ pub struct JarvisOrchestrator {
     intent_classifier: Arc<IntentClassifier>,
     plan_builder: Arc<PlanBuilder>,
     llm_client: Option<Arc<crate::domains::intelligence::llm_gateway::LLMClient>>, // For conversational responses
+
+    // Phase 5: Parallel execution engine
+    parallel_executor: Arc<ParallelExecutor>,
 
     // Engines (to be implemented in later phases)
     context_engine: Option<Arc<ContextEngine>>,
@@ -79,6 +82,10 @@ impl JarvisOrchestrator {
             }
         };
 
+        // Initialize parallel executor (Phase 5)
+        let parallel_executor = Arc::new(ParallelExecutor::new(skill_registry.clone()));
+        log::info!("✅ Parallel executor initialized - Multi-step plans will execute concurrently");
+
         Ok(Self {
             event_bus,
             session_manager,
@@ -98,6 +105,7 @@ impl JarvisOrchestrator {
                 PlanBuilder::new()
             }),
             llm_client: llm_client.clone(), // Store for conversational responses
+            parallel_executor,
             context_engine: None,
             vision_engine: None,
             pattern_detector: None,
@@ -184,8 +192,16 @@ impl JarvisOrchestrator {
                             });
                         }
 
-                        // Execute plan
-                        match self.execute_plan(plan).await {
+                        // Execute plan (use parallel if >= 2 steps)
+                        let execution_result = if plan.steps.len() >= 2 {
+                            log::info!("Using parallel execution for {} steps", plan.steps.len());
+                            self.execute_plan_parallel(plan).await
+                        } else {
+                            log::info!("Using sequential execution for single step");
+                            self.execute_plan(plan).await
+                        };
+
+                        match execution_result {
                             Ok(result) => (Some(result.message), true),
                             Err(e) => (Some(format!("Error: {}", e)), true),
                         }
@@ -258,7 +274,7 @@ impl JarvisOrchestrator {
         Ok(response)
     }
 
-    /// Execute execution plan step by step
+    /// Execute execution plan step by step (sequential)
     async fn execute_plan(&self, mut plan: ExecutionPlan) -> Result<Response> {
         let mut results = Vec::new();
 
@@ -318,6 +334,21 @@ impl JarvisOrchestrator {
             message: results.join("\n"),
             data: Some(serde_json::to_value(&plan)?),
         })
+    }
+
+    /// Execute execution plan in parallel (Phase 5: Parallel execution engine)
+    /// Uses parallel executor to run independent steps concurrently
+    async fn execute_plan_parallel(&self, plan: ExecutionPlan) -> Result<Response> {
+        log::info!(
+            "Starting parallel execution of plan: {} ({} steps)",
+            plan.description,
+            plan.steps.len()
+        );
+
+        // Use parallel executor
+        self.parallel_executor
+            .execute_parallel(plan, "default".to_string())
+            .await
     }
 
     /// Handle user command
@@ -672,5 +703,112 @@ mod tests {
         let result = orchestrator.handle_command(command).await;
         // Should fail to parse
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_parallel_execution() {
+        use crate::jarvis::plan_builder::{ExecutionPlan, PlanStep, StepStatus};
+
+        let orchestrator = JarvisOrchestrator::new().await.unwrap();
+
+        // Create a multi-step plan with different skills
+        let plan = ExecutionPlan {
+            description: "Test parallel execution".to_string(),
+            steps: vec![
+                PlanStep {
+                    step_number: 1,
+                    description: "Step 1".to_string(),
+                    skill: "computer_use".to_string(),
+                    action: "test".to_string(),
+                    params: serde_json::json!({}),
+                    requires_approval: false,
+                    status: StepStatus::Pending,
+                },
+                PlanStep {
+                    step_number: 2,
+                    description: "Step 2".to_string(),
+                    skill: "email".to_string(),
+                    action: "test".to_string(),
+                    params: serde_json::json!({}),
+                    requires_approval: false,
+                    status: StepStatus::Pending,
+                },
+                PlanStep {
+                    step_number: 3,
+                    description: "Step 3".to_string(),
+                    skill: "telegram".to_string(),
+                    action: "test".to_string(),
+                    params: serde_json::json!({}),
+                    requires_approval: false,
+                    status: StepStatus::Pending,
+                },
+            ],
+            requires_approval: false,
+        };
+
+        let start = std::time::Instant::now();
+        let result = orchestrator.execute_plan_parallel(plan).await;
+        let duration = start.elapsed();
+
+        // Verify result (may succeed or fail depending on skill implementation)
+        assert!(result.is_ok());
+
+        // Log execution time
+        println!("Parallel execution completed in {:?}", duration);
+    }
+
+    #[tokio::test]
+    async fn test_sequential_vs_parallel_execution() {
+        use crate::jarvis::plan_builder::{ExecutionPlan, PlanStep, StepStatus};
+
+        let orchestrator = JarvisOrchestrator::new().await.unwrap();
+
+        // Single step plan - should use sequential
+        let single_step_plan = ExecutionPlan {
+            description: "Single step".to_string(),
+            steps: vec![PlanStep {
+                step_number: 1,
+                description: "Only step".to_string(),
+                skill: "computer_use".to_string(),
+                action: "test".to_string(),
+                params: serde_json::json!({}),
+                requires_approval: false,
+                status: StepStatus::Pending,
+            }],
+            requires_approval: false,
+        };
+
+        // Multi-step plan - should use parallel
+        let multi_step_plan = ExecutionPlan {
+            description: "Multi step".to_string(),
+            steps: vec![
+                PlanStep {
+                    step_number: 1,
+                    description: "Step 1".to_string(),
+                    skill: "computer_use".to_string(),
+                    action: "test".to_string(),
+                    params: serde_json::json!({}),
+                    requires_approval: false,
+                    status: StepStatus::Pending,
+                },
+                PlanStep {
+                    step_number: 2,
+                    description: "Step 2".to_string(),
+                    skill: "email".to_string(),
+                    action: "test".to_string(),
+                    params: serde_json::json!({}),
+                    requires_approval: false,
+                    status: StepStatus::Pending,
+                },
+            ],
+            requires_approval: false,
+        };
+
+        // Both should complete without error
+        let single_result = orchestrator.execute_plan(single_step_plan).await;
+        let multi_result = orchestrator.execute_plan_parallel(multi_step_plan).await;
+
+        assert!(single_result.is_ok());
+        assert!(multi_result.is_ok());
     }
 }
