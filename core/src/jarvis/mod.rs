@@ -14,6 +14,7 @@ pub mod intent_classifier;  // Phase 4: Intent classification
 pub mod models;
 pub mod observers;
 pub mod orchestrator;
+pub mod parallel_executor;  // Phase 5: Parallel execution engine
 pub mod patterns;
 pub mod performance;
 pub mod plan_builder;  // Phase 4: Multi-step planning
