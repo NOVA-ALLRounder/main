@@ -399,16 +399,50 @@ def main():
         auto_start_sensors=not args.no_sensors
     )
     
-    # 시그널 핸들러
+    # 시그널 핸들러 (Ctrl+C, SIGTERM)
     def signal_handler(sig, frame):
+        logger.info(f"Received signal {sig}, shutting down...")
         collector.stop()
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Windows 종료 이벤트 핸들러
+    try:
+        import win32api
+        import win32con
+        
+        def windows_shutdown_handler(ctrl_type):
+            """Windows 콘솔 이벤트 핸들러 (종료/로그오프 감지)."""
+            # CTRL_CLOSE_EVENT (콘솔 창 닫기)
+            # CTRL_LOGOFF_EVENT (로그오프)
+            # CTRL_SHUTDOWN_EVENT (시스템 종료)
+            if ctrl_type in (win32con.CTRL_CLOSE_EVENT, 
+                            win32con.CTRL_LOGOFF_EVENT, 
+                            win32con.CTRL_SHUTDOWN_EVENT):
+                logger.info(f"Windows shutdown event detected: {ctrl_type}")
+                collector.stop()
+                return True
+            return False
+        
+        win32api.SetConsoleCtrlHandler(windows_shutdown_handler, True)
+        logger.info("Windows shutdown handler registered")
+        
+    except ImportError:
+        # pywin32가 없으면 atexit fallback
+        import atexit
+        
+        @atexit.register
+        def cleanup_on_exit():
+            logger.info("Cleanup on exit...")
+            collector.stop()
+        
+        logger.info("Using atexit fallback (install pywin32 for better shutdown handling)")
+    
     collector.run_forever()
 
 
 if __name__ == "__main__":
     main()
+
