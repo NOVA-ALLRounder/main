@@ -14,6 +14,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# 데이터 경량화: 의미 없는 컨트롤 타입 필터링
+SKIP_CONTROL_TYPES = {"Pane", "Group", "Custom", "Document", "Window", "Thumb", "ScrollBar"}
+
+# element_value 최대 길이 (100자로 제한)
+MAX_VALUE_LENGTH = 100
+
+
 class UIAutomationSensor:
     def __init__(self, emitter: HttpEmitter, interval: float = 1.0):
         self._emitter = emitter
@@ -37,31 +44,31 @@ class UIAutomationSensor:
             if not element:
                 return
 
-            # Quick check to avoid heavy processing if nothing changed (optional optimization)
-            # For now, we rely on semantic deduplication.
-
             # 1. Process & Window Info
             process_id = element.ProcessId
-            process_name = "unknown"
-            try:
-                # auto.GetProcessName is not standard, use psutil if needed or uiautomation helper
-                # generic approach:
-                pass 
-            except:
-                pass
-                
-            # auto.Control has ProcessId. 
-            # We can try to get process name via simple lookup if needed, 
-            # but element.Name and ControlType are most important.
             
             # 2. Element Info
             control_type = element.ControlTypeName
+            
+            # 데이터 경량화: 의미 없는 컨트롤 타입 SKIP
+            if control_type in SKIP_CONTROL_TYPES:
+                return
+            
             name = element.Name
+            
+            # 이름이 없는 요소도 SKIP (의미 없는 이벤트)
+            if not name or name.strip() == "":
+                return
+            
             try:
                 # Some controls don't support ValuePattern at all - silently handle
                 value = element.GetValuePattern().Value
             except:
                 value = ""
+
+            # 데이터 경량화: element_value 100자 제한
+            if value and len(value) > MAX_VALUE_LENGTH:
+                value = value[:MAX_VALUE_LENGTH] + "..."
 
             automation_id = element.AutomationId
             
@@ -70,14 +77,14 @@ class UIAutomationSensor:
             window_title = window.Name if window else "Unknown"
             window_handle = window.NativeWindowHandle if window else 0
 
-            # 3. Construct Payload
+            # 3. Construct Payload (bounding_rect 제거로 경량화)
             payload = {
                 "window_title": window_title,
                 "control_type": control_type,
                 "element_name": name,
                 "element_value": value,
                 "automation_id": automation_id,
-                "bounding_rect": str(element.BoundingRectangle),
+                # "bounding_rect" 제거 - 데이터 경량화
             }
             
             # 4. Deduplication
@@ -90,18 +97,14 @@ class UIAutomationSensor:
             self.last_data_hash = current_hash
             
             # 5. Build and Send Event
-            # Note: We don't have easy access to app name here without psutil, 
-            # but window_title is often enough for "app".
-            # We can leave 'app' as 'unknown' or try to derive it.
-            
             event = build_event(
                 source="ui_automation",
-                app=window_title, # Fallback to window title as app identifier
+                app=window_title,
                 event_type="user.interaction",
                 resource_type="ui_element",
                 resource_id=automation_id or name or "unknown",
                 payload=payload,
-                priority="P2", # P2 = High priority, but not critical system event
+                priority="P2",
                 window_id=str(window_handle),
                 pid=process_id
             )
@@ -111,7 +114,7 @@ class UIAutomationSensor:
                 # Optimized console output for user visibility
                 action_desc = f"{control_type} '{name}'"
                 if value:
-                    action_desc += f" = '{value}'"
+                    action_desc += f" = '{value[:50]}'" if len(value) > 50 else f" = '{value}'"
                 print(f"[{window_title}] {action_desc}", flush=True)
             
         except Exception as e:

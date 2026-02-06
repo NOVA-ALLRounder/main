@@ -1,0 +1,36 @@
+# Privacy Rules Configuration - 개인정보 보호 규칙
+#
+# 전체 수집 모드: allowlist_apps가 비어있으면 모든 앱 수집
+# 특정 앱 제외: denylist_apps에 추가
+
+# 허용된 앱 목록 (비어있으면 모든 앱 허용)
+allowlist_apps: []
+
+# 차단된 앱 목록 (민감한 앱 제외)
+denylist_apps:
+  - 1Password.exe
+  - KeePass.exe
+  - LastPass.exe
+  - Bitwarden.exe
+  - Dashlane.exe
+
+# PII 마스킹 패턴 (정규표현식)
+redaction_patterns:
+  - pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    replacement: '[EMAIL]'
+  - pattern: '\b\d{3}[-.]?\d{3,4}[-.]?\d{4}\b'
+    replacement: '[PHONE]'
+  - pattern: '\b\d{6}[-]?\d{7}\b'
+    replacement: '[RRN]'  # 주민등록번호
+  - pattern: '\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'
+    replacement: '[CARD]'  # 카드번호
+
+# 민감한 창 제목 패턴 (이 패턴이 포함된 창은 수집 제외)
+sensitive_window_patterns:
+  - "비밀번호"
+  - "Password"
+  - "로그인"
+  - "Login"
+  - "인증"
+  - "결제"
+  - "Payment"
