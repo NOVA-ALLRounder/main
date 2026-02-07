@@ -1,0 +1,16 @@
+# Data-Collection-Projection Dependencies
+
+# Core
+uiautomation>=2.0.0
+pynput>=1.7.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# LLM
+openai>=1.0.0
+
+# Windows shutdown handling
+pywin32>=306
+
+# Optional
+cryptography>=41.0.0
