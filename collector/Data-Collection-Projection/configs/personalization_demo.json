@@ -1,0 +1,50 @@
+{
+  "persona": "beta-demo",
+  "tools": [
+    "Chrome",
+    "VSCode",
+    "Notion",
+    "Slack",
+    "Gmail"
+  ],
+  "goals": [
+    "Summarize work sessions and create follow-up tasks",
+    "Auto-capture context when switching between apps",
+    "Generate daily focus report"
+  ],
+  "preferences": {
+    "language": "ko",
+    "notifications": "minimal",
+    "working_hours": "09:00-19:00",
+    "timezone": "Asia/Seoul"
+  },
+  "preferred_actions": [
+    {
+      "tool": "Notion",
+      "goal": "Create daily summary page"
+    },
+    {
+      "tool": "Slack",
+      "goal": "Post focus report"
+    },
+    {
+      "tool": "Gmail",
+      "goal": "Draft follow-up email"
+    }
+  ],
+  "api_endpoints": [],
+  "ids": {
+    "notion_database_id": "demo_db_001",
+    "slack_channel": "demo-channel",
+    "gmail_to": "demo@example.com"
+  },
+  "safety": {
+    "allow_actions": [
+      "notion",
+      "slack",
+      "gmail"
+    ],
+    "require_approval": true,
+    "redact_sensitive": true
+  }
+}

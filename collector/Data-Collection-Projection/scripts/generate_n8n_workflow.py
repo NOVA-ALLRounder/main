@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ def parse_args() -> argparse.Namespace:
         default="dcp-workflow",
         help="default webhook path hint for LLM",
     )
+    parser.add_argument("--profile", default="", help="personalization profile json")
     return parser.parse_args()
 
 
@@ -36,6 +38,16 @@ def _load_json(path: str) -> dict:
         return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _load_profile(path: str) -> dict:
+    if path:
+        return _load_json(path)
+    try:
+        default_path = Path(__file__).resolve().parents[1] / "configs" / "personalization_demo.json"
+        return _load_json(str(default_path))
     except Exception:
         return {}
 
@@ -86,9 +98,40 @@ def _validate(payload: dict) -> bool:
     return True
 
 
-def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_path: str) -> dict:
+def _load_env_key(var_name: str) -> None:
+    if os.getenv(var_name):
+        return
+    # Best-effort: look for .env in repo root and load OPENAI_API_KEY
+    try:
+        for parent in Path(__file__).resolve().parents:
+            env_path = parent / ".env"
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if not line or line.strip().startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key == var_name:
+                    os.environ[key] = value.strip()
+                    return
+    except Exception:
+        return
+
+
+def _call_llm(
+    llm_config,
+    llm_input: dict,
+    fallback: dict,
+    name: str,
+    webhook_path: str,
+    profile: dict,
+) -> dict:
     api_key = ""
     if llm_config.api_key_env:
+        _load_env_key(llm_config.api_key_env)
         api_key = os.getenv(llm_config.api_key_env, "")
 
     schema_path = PROJECT_ROOT / "schemas" / "n8n_workflow.schema.json"
@@ -104,11 +147,18 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_pa
             "Prefer a single trigger node and 2-5 action/logic nodes.",
             "Use common built-in n8n nodes only.",
             "Do not include sensitive raw content.",
+            "Avoid placeholder URLs like example.com.",
+            "If profile.tools is provided, include at least one node that matches those tools (e.g., Slack/Notion/Gmail).",
+            "Include at least one IF node that uses key_events from llm_input to gate actions.",
+            "If profile.ids is provided, use those identifiers instead of placeholders (e.g., databaseId, channel, toEmail).",
+            "Include a time-window condition using profile.preferences.working_hours (e.g., only during working hours).",
+            "Include both true and false branches from the IF node (e.g., notify vs. defer).",
+            "Do not use generic httpRequest nodes for Notion/Slack/Gmail if native nodes exist.",
+            "IF node must use true/false outputs (not main) for branching.",
+            "If profile.safety.allow_actions is set, only use those action tools.",
+            "If profile.safety.require_approval is true, include an IF gate before any action nodes.",
         ],
-        "style_guide": {
-            "language": "en",
-            "tone": "concise",
-        },
+        "style_guide": {"language": "en", "tone": "concise"},
         "n8n_hints": {
             "workflow_name": name,
             "default_webhook_path": webhook_path,
@@ -122,13 +172,21 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_pa
         },
         "schema": schema_text,
         "llm_input": llm_input,
+        "profile": profile,
         "fallback": fallback,
     }
 
+    messages = [
+        {"role": "system", "content": "You are a strict JSON generator."},
+        {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+    ]
+
     body = {
         "model": llm_config.model,
-        "input": prompt,
+        "messages": messages,
         "max_tokens": llm_config.max_tokens,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
     }
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -142,12 +200,21 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_pa
         )
         with urllib.request.urlopen(req, timeout=llm_config.timeout_sec) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8", errors="ignore")
+            print(f"llm_http_error status={exc.code} body={raw[:2000]}")
+        except Exception:
+            print(f"llm_http_error status={exc.code}")
+        return {}
+    except Exception as exc:
+        print(f"llm_request_failed: {exc}")
         return {}
 
     try:
         parsed = json.loads(raw)
     except Exception:
+        print("llm_invalid_json_response")
         return {}
 
     if _validate(parsed):
@@ -165,6 +232,9 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_pa
                 content = str(message.get("content") or "")
             else:
                 content = str(choices[0].get("text") or "")
+        elif "output" in parsed:
+            # Responses API style
+            content = json.dumps(parsed.get("output"), ensure_ascii=False)
     if content:
         try:
             parsed_content = json.loads(content)
@@ -181,19 +251,67 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict, name: str, webhook_pa
 def main() -> None:
     args = parse_args()
     llm_input = _load_json(args.input)
+    profile = _load_profile(args.profile)
     fallback = _fallback_workflow(args.name, args.webhook_path)
     payload = fallback
 
     config = load_config(args.config) if args.config else None
     if config and config.llm.enabled and config.llm.endpoint:
-        llm_payload = _call_llm(config.llm, llm_input, fallback, args.name, args.webhook_path)
+        llm_payload = _call_llm(
+            config.llm, llm_input, fallback, args.name, args.webhook_path, profile
+        )
         if llm_payload:
             payload = llm_payload
+            _apply_time_window(payload, profile)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"n8n_workflow_saved={out_path}")
+
+
+def _apply_time_window(payload: dict, profile: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    working_hours = (
+        (profile.get("preferences") or {}).get("working_hours") if isinstance(profile, dict) else None
+    )
+    if not isinstance(working_hours, str) or "-" not in working_hours:
+        return
+    try:
+        start_s, end_s = [part.strip() for part in working_hours.split("-", 1)]
+        start_hour = int(start_s.split(":")[0])
+        end_hour = int(end_s.split(":")[0])
+    except Exception:
+        return
+
+    nodes = payload.get("nodes")
+    if not isinstance(nodes, list):
+        return
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if "if" not in str(node.get("type", "")).lower():
+            continue
+        params = node.setdefault("parameters", {})
+        conditions = params.setdefault("conditions", {})
+        # If time window already present, skip.
+        if "working_hours" in json.dumps(conditions, ensure_ascii=False):
+            return
+        if "$now" in json.dumps(conditions, ensure_ascii=False):
+            return
+        number_conditions = conditions.setdefault("number", [])
+        if not isinstance(number_conditions, list):
+            number_conditions = []
+            conditions["number"] = number_conditions
+        number_conditions.append(
+            {"value1": "={{$now.hour}}", "operation": "largerEqual", "value2": start_hour}
+        )
+        number_conditions.append(
+            {"value1": "={{$now.hour}}", "operation": "smaller", "value2": end_hour}
+        )
+        return
 
 
 if __name__ == "__main__":

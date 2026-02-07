@@ -48,6 +48,11 @@ conda activate DATA_C
 ```
 기본 포트: `http://127.0.0.1:8080/events`
 
+허용 앱 선택 포함 실행:
+```powershell
+.\scripts\run_all.ps1 -SelectAllowlist
+```
+
 ### 2) Core 실행 (DCP 연동)
 ```powershell
 $env:STEER_COLLECTOR_MODE="dcp"
@@ -331,6 +336,56 @@ python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
 scripts\run_realtime_llm.ps1 -ConfigPath configs\config_run4.yaml -WindowMinutes 10 -EverySeconds 300
 ```
 
+### 하이브리드 LLM 입력 (실시간 + 요약 결합)
+```powershell
+python scripts\build_hybrid_llm_input.py --output logs\llm_input_hybrid.json `
+  --realtime logs\llm_input_realtime.json
+```
+
+하이브리드 입력으로 워크플로우 생성:
+```powershell
+python scripts\generate_n8n_workflow.py --config configs\config.yaml `
+  --input logs\llm_input_hybrid.json --output logs\n8n_workflow_hybrid.json
+```
+
+워크플로우 자동 개선(점수 기준 충족 시까지 재시도):
+```powershell
+python scripts\generate_workflow_with_retry.py --config configs\config.yaml `
+  --input logs\llm_input_hybrid.json --output logs\n8n_workflow_hybrid.json `
+  --profile configs\personalization_demo.json --score-config configs\score_config.json `
+  --min-score 85 --max-attempts 3
+```
+
+### 워크플로우 검증
+```powershell
+python scripts\validate_n8n_workflow.py --file logs\n8n_workflow_hybrid.json
+```
+
+### 전송 결과 로그/리트라이
+전송 성공/실패는 `logs/n8n_delivery.log`에 기록되고, 실패 payload는
+`logs/n8n_delivery_retry.jsonl`에 쌓입니다.
+
+### 워크플로우 품질 점수 기준 (간단한 플로우 우선, 세분화)
+품질 점수는 **복잡도보다 정확성/적합성**에 가중치를 둡니다.
+아래 항목은 `scripts/score_n8n_workflow.py`에 반영된 기준입니다.
+기본 가중치는 `configs/score_config.json`에서 수정 가능합니다.
+
+- name 존재: +10
+- nodes 존재: +10
+- 트리거(webhook/cron) 포함: +15
+- placeholder 제거(예: example.com, your_*): -40 (있으면 감점)
+- profile.tools 매칭 노드: **최대 +30** (도구 수에 따라 +10씩, 없으면 -20)
+- profile.ids 사용: **최대 +15** (ID 수에 따라 +5씩)
+- key_events 사용: **최대 +20** (참조 횟수에 따라 가중)
+- 시간대 조건 사용: +15
+- IF 분기 true/false: +5 (선택)
+- 액션 노드 존재(Notion/Slack/Gmail/HTTP): +10
+
+### 품질 루프(운영 자동화)
+```powershell
+scripts\run_quality_loop.ps1 -ConfigPath configs\config.yaml -EverySeconds 600 -WindowMinutes 10
+```
+
 ### Pattern quality evaluation
 ```powershell
 python scripts\evaluate_pattern_quality.py --summaries-dir logs\run4 --output logs\run4\pattern_quality.json
@@ -398,6 +453,16 @@ Tail logs:
 Get-Content .\logs\collector.log -Tail 50 -Wait
 ```
 
+Detailed DB tail (raw payloads):
+```powershell
+python scripts\tail_events.py --db collector.db --since-minutes 10 --poll 1 --drop-idle
+```
+
+Filter by apps:
+```powershell
+python scripts\tail_events.py --db collector.db --apps chrome.exe,code.exe,notion.exe,whale.exe --poll 1 --drop-idle
+```
+
 Activity detail logs (run3):
 ```powershell
 Get-Content .\logs\run3\activity_detail.log -Tail 50 -Wait
@@ -427,6 +492,13 @@ python scripts\recommend_allowlist.py --days 3 --min-minutes 10 --min-blocks 3
 Apply to `configs\privacy_rules.yaml` (auto-backup created):
 ```powershell
 python scripts\recommend_allowlist.py --days 3 --min-minutes 10 --min-blocks 3 --apply
+```
+
+수동 선택(Allow/Deny) 후 적용:
+```powershell
+python scripts\allowlist_wizard.py --config configs\config.yaml --output configs\allowlist_selection.yaml --include-observed
+notepad configs\allowlist_selection.yaml
+python scripts\allowlist_wizard.py --config configs\config.yaml --apply-selection configs\allowlist_selection.yaml
 ```
 
 ### On-demand window title lookup (debug)

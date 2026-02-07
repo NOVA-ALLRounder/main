@@ -16,13 +16,13 @@ hash_keys:
   - file_name
 
 length_limits:
-  window_title: 128
-  url: 512
+  window_title: 512
+  url: 2048
   path: 128
   file_path: 128
   filepath: 128
   file_name: 64
-  content_summary: 256
+  content_summary: 2048
 
 url_policy:
   allow_full_url: true
@@ -45,75 +45,7 @@ drop_payload_keys:
   - clipboard
 
 allowlist_apps:
-  - os
-  - applicationframehost.exe
-  - systemsettings.exe
-  - textinputhost.exe
-  - windowsterminal.exe
   - chrome.exe
-  - msedge.exe
-  - edge.exe
-  - whale.exe
-  - firefox.exe
-  - brave.exe
-  - opera.exe
-  - arc.exe
-  - outlook
-  - outlook.exe
-  - excel
-  - excel.exe
-  - winword.exe
-  - powerpnt.exe
-  - onenote.exe
-  - onenotem.exe
-  - msaccess.exe
-  - visio.exe
-  - project.exe
-  - mspub.exe
-  - onedrive.exe
-  - onedrivesetup.exe
-  - sharepoint.exe
-  - teams.exe
-  - msteams.exe
-  - ms-teams.exe
-  - teamsbootstrapper.exe
-  - lync.exe
-  - skype.exe
-  - webex.exe
-  - zoom.exe
-  - slack.exe
-  - discord.exe
-  - kakaotalk.exe
-  - notion.exe
-  - notion calendar.exe
-  - microsoft.notes.exe
-  - obsidian.exe
-  - evernote.exe
-  - trello.exe
-  - jira.exe
-  - confluence.exe
-  - code.exe
-  - devenv.exe
-  - pycharm64.exe
-  - githubdesktop.exe
-  - gitkraken.exe
-  - sourcetree.exe
-  - postman.exe
-  - insomnia.exe
-  - docker desktop.exe
-  - dockerdesktop.exe
-  - figma.exe
-  - figma agent.exe
-  - adobe xd.exe
-  - illustrator.exe
-  - photoshop.exe
-  - acrobat.exe
-  - 7zfm.exe
-  - 3dsmax.exe
-  - revit.exe
-  - sketchup.exe
-  - unity hub.exe
-  - unity.exe
 
 # Example denylist: password managers, finance apps, personal messengers.
 denylist_apps:

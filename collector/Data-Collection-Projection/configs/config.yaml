@@ -64,11 +64,6 @@ observability:
   activity_include_title: false
   activity_title_apps:
   - chrome.exe
-  - code.exe
-  - notion.exe
-  - whale.exe
-  - discord.exe
-  - kakaotalk.exe
   activity_title_max_len: 128
 activity_detail:
   enabled: true
@@ -76,12 +71,7 @@ activity_detail:
   store_hint: true
   full_title_apps:
   - chrome.exe
-  - code.exe
-  - discord.exe
-  - notion.exe
-  - whale.exe
-  - kakaotalk.exe
-  max_title_len: 256
+  max_title_len: 512
 sensors:
   auto_start: true
   processes:
@@ -126,7 +116,7 @@ llm:
   endpoint: "https://api.openai.com/v1/chat/completions"
   api_key_env: OPENAI_API_KEY
   model: "gpt-4o-mini"
-  timeout_sec: 20
+  timeout_sec: 60
   max_tokens: 1200
 automation:
   enabled: false

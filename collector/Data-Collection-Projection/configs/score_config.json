@@ -1,0 +1,21 @@
+{
+  "weights": {
+    "name": 10,
+    "nodes": 10,
+    "trigger": 15,
+    "placeholder_penalty": -40,
+    "tool_match_per": 10,
+    "tool_match_max": 30,
+    "tool_missing_penalty": -20,
+    "id_match_per": 5,
+    "id_match_max": 15,
+    "key_events_base": 10,
+    "key_events_per": 5,
+    "key_events_max": 20,
+    "time_window": 15,
+    "if_branching": 5,
+    "action_node": 10,
+    "allow_actions_penalty": -15,
+    "approval_missing_penalty": -10
+  }
+}

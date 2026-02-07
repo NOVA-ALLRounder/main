@@ -18,6 +18,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-top-apps", type=int, default=5)
     parser.add_argument("--max-titles", type=int, default=5)
     parser.add_argument("--max-events", type=int, default=8)
+    parser.add_argument("--min-duration-sec", type=int, default=5)
+    parser.add_argument("--drop-idle", action="store_true")
     return parser.parse_args()
 
 
@@ -127,10 +129,15 @@ def main() -> None:
     for ts, app, event_type, payload_json in rows:
         app = str(app or "unknown")
         app_counts[app] += 1
-        event_counts[str(event_type or "unknown")] += 1
+        event_type_str = str(event_type or "unknown")
+        if args.drop_idle and event_type_str.startswith("os.idle_"):
+            continue
+        event_counts[event_type_str] += 1
         payload = _safe_json(payload_json)
         duration = payload.get("duration_sec")
         if isinstance(duration, (int, float)):
+            if float(duration) < float(args.min_duration_sec):
+                continue
             app_durations[app] += float(duration)
         title = str(payload.get("window_title") or "").strip()
         if title and not _contains_sensitive(title):
