@@ -163,12 +163,43 @@ def _build_payload(
     time_bucket_patterns = pattern.get("time_bucket_patterns") or {}
     focus_block_stats = pattern.get("focus_block_stats") or {}
 
+    counts = daily.get("counts") or {}
+    top_transitions = daily.get("top_transitions") or []
+    key_event_tokens = []
+    for event_name in (daily.get("key_events") or {}).keys():
+        key_event_tokens.extend(_tokenize_event(event_name))
+    key_event_tokens = _unique_limited(key_event_tokens, 12)
+
+    intents = _infer_intents(top_apps, key_event_tokens, top_transitions)
+    workflow_hints = _workflow_hints(intents)
+    if top_transitions:
+        workflow_hints = dict(workflow_hints or {})
+        workflow_hints["recommended_template"] = "sequence_triggered_notification"
+        if not workflow_hints.get("required_tools"):
+            workflow_hints["required_tools"] = ["slack"]
+        workflow_hints["sequence_based"] = True
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "date_local": daily.get("date_local"),
+        "counts": counts,
         "top_apps": top_apps,
         "top_titles": top_titles,
         "key_events": daily.get("key_events", {}),
+        "key_event_tokens": key_event_tokens,
+        "app_transitions": top_transitions,
+        "intent_candidates": intents,
+        "intent_summary": (
+            {
+                "primary_intent": intents[0]["intent_id"],
+                "confidence": intents[0]["confidence"],
+                "label": intents[0]["label"],
+            }
+            if intents
+            else {}
+        ),
+        "workflow_hints": workflow_hints,
+        "sequence_signature": _sequence_signature_from_transitions(top_transitions),
         "hourly_patterns": hourly_patterns,
         "weekday_patterns": weekday_patterns,
         "sequence_patterns": sequence_patterns,
@@ -196,6 +227,11 @@ def _compress_payload(payload: dict, *, max_bytes: int) -> dict:
     if _size(compact) <= max_bytes:
         return compact
 
+    compact["app_transitions"] = (compact.get("app_transitions") or [])[:4]
+    compact["key_event_tokens"] = (compact.get("key_event_tokens") or [])[:8]
+    if _size(compact) <= max_bytes:
+        return compact
+
     compact["top_apps"] = (compact.get("top_apps") or [])[:3]
     compact["hourly_patterns"] = (compact.get("hourly_patterns") or [])[:5]
     compact["weekday_patterns"] = _trim_weekday_patterns(
@@ -212,6 +248,8 @@ def _compress_payload(payload: dict, *, max_bytes: int) -> dict:
     compact["time_bucket_patterns"] = {}
     compact["focus_block_stats"] = {}
     compact["key_events"] = {}
+    compact["key_event_tokens"] = []
+    compact["app_transitions"] = []
     compact["notes"] = ["compressed: reduced lists for size limit"]
     return compact
 
@@ -223,6 +261,154 @@ def _trim_weekday_patterns(value: dict, max_items: int) -> dict:
             continue
         trimmed[weekday] = items[: max(0, max_items)]
     return trimmed
+
+
+def _tokenize_event(name: str) -> list[str]:
+    import re
+
+    tokens = re.split(r"[^A-Za-z0-9]+", name or "")
+    stop = {"os", "app", "focus", "block", "idle", "event", "window"}
+    out = []
+    for token in tokens:
+        if not token:
+            continue
+        t = token.lower()
+        if t in stop or len(t) <= 2:
+            continue
+        out.append(t)
+    return out
+
+
+def _unique_limited(values: list[str], limit: int) -> list[str]:
+    seen = set()
+    out = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_app_name(name: str) -> str:
+    return str(name or "").strip().lower()
+
+
+def _infer_intents(
+    top_apps: list[dict],
+    key_event_tokens: list[str],
+    transitions: list[dict],
+) -> list[dict]:
+    app_names = {_normalize_app_name(item.get("app")) for item in top_apps if item.get("app")}
+
+    def _hit(token_list: list[str], *needles: str) -> bool:
+        for needle in needles:
+            if needle in token_list:
+                return True
+        return False
+
+    intents: list[dict] = []
+
+    def add_intent(intent_id: str, label: str, evidence: list[str], base: float = 0.6) -> None:
+        confidence = min(0.95, base + 0.1 * len(evidence))
+        intents.append(
+            {
+                "intent_id": intent_id,
+                "label": label,
+                "confidence": round(confidence, 2),
+                "evidence": evidence,
+            }
+        )
+
+    tokens = [t.lower() for t in key_event_tokens]
+    evidence: list[str] = []
+    if _hit(tokens, "summary", "report", "daily"):
+        evidence.append("key_event_tokens")
+    if "notion" in " ".join(app_names):
+        evidence.append("app:notion")
+    if evidence:
+        add_intent("daily_summary", "Daily summary/report", evidence)
+
+    evidence = []
+    if _hit(tokens, "slack", "notify", "message"):
+        evidence.append("key_event_tokens")
+    if any("slack" in app for app in app_names):
+        evidence.append("app:slack")
+    if evidence:
+        add_intent("team_update", "Team update/notification", evidence)
+
+    evidence = []
+    if _hit(tokens, "email", "gmail", "outlook", "followup"):
+        evidence.append("key_event_tokens")
+    if any("outlook" in app or "gmail" in app for app in app_names):
+        evidence.append("app:mail")
+    if evidence:
+        add_intent("followup_email", "Draft follow-up email", evidence)
+
+    evidence = []
+    if _hit(tokens, "file", "save", "export", "upload"):
+        evidence.append("key_event_tokens")
+    if evidence:
+        add_intent("file_backup", "File save/export follow-up", evidence)
+
+    if transitions:
+        add_intent(
+            "focus_recap",
+            "Focus recap from app switching",
+            ["app_transitions"],
+            base=0.5,
+        )
+
+    intents.sort(key=lambda item: item.get("confidence", 0), reverse=True)
+    return intents[:3]
+
+
+def _workflow_hints(intents: list[dict]) -> dict:
+    if not intents:
+        return {}
+    primary = intents[0]["intent_id"]
+    template_map = {
+        "daily_summary": "daily_summary_to_notion",
+        "team_update": "focus_report_to_slack",
+        "followup_email": "followup_email_draft",
+        "file_backup": "file_save_followup",
+        "focus_recap": "focus_report_to_slack",
+    }
+    required_tools_map = {
+        "daily_summary": ["notion"],
+        "team_update": ["slack"],
+        "followup_email": ["gmail"],
+        "file_backup": ["notion"],
+        "focus_recap": ["slack"],
+    }
+    return {
+        "recommended_template": template_map.get(primary, ""),
+        "required_tools": required_tools_map.get(primary, []),
+    }
+
+
+def _sequence_signature_from_transitions(transitions: list[dict]) -> str:
+    if not transitions:
+        return ""
+    # Build a coarse signature from top transitions.
+    seq = []
+    for item in transitions[:3]:
+        app_from = item.get("from")
+        app_to = item.get("to")
+        if app_from:
+            seq.append(str(app_from))
+        if app_to:
+            seq.append(str(app_to))
+    if not seq:
+        return ""
+    # De-dup sequential repeats.
+    compact = []
+    for app in seq:
+        if not compact or compact[-1] != app:
+            compact.append(app)
+    return " -> ".join(compact[:6])
 
 
 def _store_llm_input(

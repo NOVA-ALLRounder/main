@@ -49,6 +49,16 @@ def _compress_payload(payload: dict, max_bytes: int) -> dict:
         return payload
 
     compact = dict(payload)
+    compact["recent_events"] = (compact.get("recent_events") or [])[:5]
+    if _size(compact) <= max_bytes:
+        return compact
+
+    compact["recent_sequence"] = (compact.get("recent_sequence") or [])[:6]
+    compact["app_transitions"] = (compact.get("app_transitions") or [])[:4]
+    compact["key_event_tokens"] = (compact.get("key_event_tokens") or [])[:8]
+    if _size(compact) <= max_bytes:
+        return compact
+
     compact["top_titles"] = []
     if _size(compact) <= max_bytes:
         return compact
@@ -57,6 +67,7 @@ def _compress_payload(payload: dict, max_bytes: int) -> dict:
     compact["hourly_patterns"] = (compact.get("hourly_patterns") or [])[:3]
     compact["sequence_patterns"] = (compact.get("sequence_patterns") or [])[:2]
     compact["transition_patterns"] = (compact.get("transition_patterns") or [])[:2]
+    compact["focus_blocks"] = (compact.get("focus_blocks") or [])[:3]
     if _size(compact) <= max_bytes:
         return compact
 
@@ -67,6 +78,10 @@ def _compress_payload(payload: dict, max_bytes: int) -> dict:
     compact["time_bucket_patterns"] = {}
     compact["focus_block_stats"] = {}
     compact["key_events"] = {}
+    compact["recent_events"] = []
+    compact["recent_sequence"] = []
+    compact["app_transitions"] = []
+    compact["key_event_tokens"] = []
     compact["notes"] = ["compressed: reduced lists for size limit"]
     return compact
 
@@ -86,9 +101,21 @@ def main() -> None:
         "generated_at": _now_utc(),
         "window": realtime.get("window"),
         "date_local": daily.get("date_local") or realtime.get("date_local"),
+        "quality": realtime.get("quality") or {},
         "top_apps": realtime.get("top_apps") or daily.get("top_apps") or [],
         "top_titles": realtime.get("top_titles") or daily.get("top_titles") or [],
+        "focus_blocks": realtime.get("focus_blocks") or [],
         "key_events": realtime.get("key_events") or daily.get("key_events") or {},
+        "key_event_tokens": realtime.get("key_event_tokens") or [],
+        "app_transitions": realtime.get("app_transitions") or daily.get("top_transitions") or [],
+        "recent_sequence": realtime.get("recent_sequence") or [],
+        "recent_events": realtime.get("recent_events") or [],
+        "intent_candidates": realtime.get("intent_candidates") or daily.get("intent_candidates") or [],
+        "intent_summary": realtime.get("intent_summary") or daily.get("intent_summary") or {},
+        "workflow_hints": realtime.get("workflow_hints") or daily.get("workflow_hints") or {},
+        "sequence_signature": realtime.get("sequence_signature")
+        or daily.get("sequence_signature")
+        or "",
         "hourly_patterns": pattern.get("patterns") or [],
         "weekday_patterns": pattern.get("weekday_patterns") or {},
         "sequence_patterns": pattern.get("sequence_patterns") or [],

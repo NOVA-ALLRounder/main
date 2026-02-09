@@ -46,6 +46,10 @@ drop_payload_keys:
 
 allowlist_apps:
   - chrome.exe
+  - code.exe
+  - powershell.exe
+  - notion.exe
+  - kakaotalk.exe
 
 # Example denylist: password managers, finance apps, personal messengers.
 denylist_apps:

@@ -18,6 +18,51 @@ graph TD
 - **UI**: `apps/web`, `apps/desktop` (선택)
 - **Scripts**: `scripts` (빌드/가디언/서비스 유틸)
 
+## 기술 스택
+- **Data Collection (DCP)**: Python 3.11, SQLite, YAML config, PowerShell scripts
+- **Core**: Rust (API/정책/분석/권한), SQLite state
+- **AI/Workflow**: OpenAI API 호환 LLM, n8n Workflow JSON
+- **OS Sensors**: Windows foreground/idle/file watcher 센서
+
+## 워크플로우 (AI & Analysis 중심)
+```mermaid
+graph TD
+  S[OS Sensors] --> E[/events ingest]
+  E --> N[Normalize + Privacy + Priority]
+  N --> DB[(SQLite events)]
+  DB --> SES[Sessions / Routines]
+  DB --> DS[Daily Summary]
+  DB --> PS[Pattern Summary]
+  DS --> L1[LLM Input]
+  PS --> L1
+  DB --> L2[Realtime LLM Input]
+  L2 --> L3[Hybrid LLM Input]
+  L1 --> WF[LLM Workflow Generator]
+  L3 --> WF
+  WF --> SC[Quality Scoring]
+  SC -->|retry| WF
+  WF --> N8N[n8n Workflow JSON]
+```
+
+### AI & Analysis 핵심 스크립트
+- LLM 입력 생성: `collector/Data-Collection-Projection/scripts/build_llm_input.py`
+- 실시간 입력: `collector/Data-Collection-Projection/scripts/build_realtime_llm_input.py`
+- 하이브리드 입력: `collector/Data-Collection-Projection/scripts/build_hybrid_llm_input.py`
+- 워크플로우 생성: `collector/Data-Collection-Projection/scripts/generate_n8n_workflow.py`
+- 품질 루프: `collector/Data-Collection-Projection/scripts/generate_workflow_with_retry.py`
+- 점수 평가: `collector/Data-Collection-Projection/scripts/score_n8n_workflow.py`
+
+### LLM 입력 스키마 (요약)
+핵심 필드를 짧게 유지하면서 **행동 패턴 추론에 필요한 구조**만 전달합니다.
+- `top_apps`, `top_titles`, `focus_blocks`
+- `recent_sequence` (앱 전환 흐름), `app_transitions`
+- `sequence_signature` (앱 순서 요약)
+- `key_events`, `key_event_tokens`
+- `recent_events` (샘플 이벤트)
+- `quality` (total_events, unique_apps, active_minutes)
+- `intent_candidates`, `intent_summary`
+- `workflow_hints` (recommended_template, required_tools)
+
 ## 사전 준비 (Windows 기준)
 - **Conda** (DATA_C 환경 사용)
 - **Python 3.11** (DCP)
@@ -182,38 +227,16 @@ $env:PYTHONPATH = "src"
 python -m collector.main --config configs\config.yaml
 ```
 
-Run a separate collection (run2 DB/logs):
+Run with demo config (no sensors, demo DB/logs):
 ```powershell
 $env:PYTHONPATH = "src"
-python -m collector.main --config configs\config_run2.yaml
+python -m collector.main --config configs\config_demo.yaml
 ```
 
-Run a separate collection (run3 DB/logs):
+Demo sequence generation (optional):
 ```powershell
-$env:PYTHONPATH = "src"
-python -m collector.main --config configs\config_run3.yaml
-```
-
-Run a separate collection (run4 DB/logs):
-```powershell
-$env:PYTHONPATH = "src"
-python -m collector.main --config configs\config_run4.yaml
-```
-
-Run a separate collection (run5 DB/logs):
-```powershell
-$env:PYTHONPATH = "src"
-python -m collector.main --config configs\config_run5.yaml
-```
-
-Run run5 with auto key load:
-```powershell
-scripts\run_run5.ps1
-```
-
-Check browser content capture quality (run5):
-```powershell
-python scripts\check_content_capture.py --db collector_run5.db --key-path secrets\\collector_key.txt --limit 200
+python scripts\generate_demo_events.py --output logs\demo\demo_events_sequence.jsonl --apps "CHROME.EXE,NOTION.EXE,KAKAOTALK.EXE" --cycles 3 --start-minutes-ago 15 --include-key-events
+python scripts\replay_events.py --file logs\demo\demo_events_sequence.jsonl --endpoint http://127.0.0.1:8080/events --speed fast
 ```
 
 ### Auto-start sensors (optional, via config)
@@ -292,25 +315,25 @@ python scripts\build_routines.py --use-state --min-support 2 --n-min 2 --n-max 3
 ### Summaries (daily → pattern → LLM input)
 Daily summary:
 ```powershell
-python scripts\build_daily_summary.py --config configs\config_run4.yaml --store-db
+python scripts\build_daily_summary.py --config configs\config.yaml --store-db
 ```
 
 Pattern summary:
 ```powershell
-python scripts\build_pattern_summary.py --summaries-dir logs\run4 --since-days 7 --config configs\config_run4.yaml --store-db
+python scripts\build_pattern_summary.py --summaries-dir logs --since-days 7 --config configs\config.yaml --store-db
 ```
 
 LLM input:
 ```powershell
-python scripts\build_llm_input.py --config configs\config_run4.yaml --daily logs\run4\daily_summary_YYYY-MM-DD.json `
-  --pattern logs\run4\pattern_summary.json --output logs\run4\llm_input.json --store-db
+python scripts\build_llm_input.py --config configs\config.yaml --daily logs\daily_summary_YYYY-MM-DD.json `
+  --pattern logs\pattern_summary.json --output logs\llm_input.json --store-db
 ```
 
 ### n8n 워크플로우(JSON) 생성
 LLM 입력을 기반으로 n8n 워크플로우 JSON을 생성합니다.
 ```powershell
-python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
-  --input logs\run4\llm_input.json --output logs\run4\n8n_workflow.json
+python scripts\generate_n8n_workflow.py --config configs\config.yaml `
+  --input logs\llm_input.json --output logs\n8n_workflow.json
 ```
 `scripts\run_post_collection.ps1` 실행 시에도 `n8n_workflow.json`이 함께 생성됩니다.
 
@@ -318,22 +341,22 @@ python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
 Webhook 기반으로 워크플로우 JSON을 전송합니다.
 ```powershell
 $env:N8N_WEBHOOK_URL="https://<your-n8n-webhook-url>"
-python scripts\send_n8n_workflow.py --file logs\run4\n8n_workflow.json
+python scripts\send_n8n_workflow.py --file logs\n8n_workflow.json
 ```
 
 ### 실시간 경량화 요약 (5~10분 단위)
 최근 이벤트만으로 LLM 입력을 만들고 즉시 워크플로우를 생성합니다.
 ```powershell
-python scripts\build_realtime_llm_input.py --config configs\config_run4.yaml `
-  --since-minutes 10 --output logs\run4\llm_input_realtime.json --max-bytes 8000
+python scripts\build_realtime_llm_input.py --config configs\config.yaml `
+  --since-minutes 10 --output logs\llm_input_realtime.json --max-bytes 8000
 
-python scripts\generate_n8n_workflow.py --config configs\config_run4.yaml `
-  --input logs\run4\llm_input_realtime.json --output logs\run4\n8n_workflow_realtime.json
+python scripts\generate_n8n_workflow.py --config configs\config.yaml `
+  --input logs\llm_input_realtime.json --output logs\n8n_workflow_realtime.json
 ```
 
 자동 루프(5분 간격):
 ```powershell
-scripts\run_realtime_llm.ps1 -ConfigPath configs\config_run4.yaml -WindowMinutes 10 -EverySeconds 300
+scripts\run_realtime_llm.ps1 -ConfigPath configs\config.yaml -WindowMinutes 10 -EverySeconds 300
 ```
 
 ### 하이브리드 LLM 입력 (실시간 + 요약 결합)
@@ -373,13 +396,19 @@ python scripts\validate_n8n_workflow.py --file logs\n8n_workflow_hybrid.json
 - name 존재: +10
 - nodes 존재: +10
 - 트리거(webhook/cron) 포함: +15
+- simple flow 보너스 (<=3 nodes + trigger): +5
+- 과도한 노드 수(>=9): -10
 - placeholder 제거(예: example.com, your_*): -40 (있으면 감점)
 - profile.tools 매칭 노드: **최대 +30** (도구 수에 따라 +10씩, 없으면 -20)
+- simple context에서 tool 미사용 페널티 완화
 - profile.ids 사용: **최대 +15** (ID 수에 따라 +5씩)
 - key_events 사용: **최대 +20** (참조 횟수에 따라 가중)
 - 시간대 조건 사용: +15
 - IF 분기 true/false: +5 (선택)
 - 액션 노드 존재(Notion/Slack/Gmail/HTTP): +10
+- 입력 사용($json/key_events/recent_events) 보너스: +5
+- 입력 미사용 페널티: -10 (simple context는 -3)
+- 연결 없음(멀티노드인데 connections 비어있음): -10
 
 ### 품질 루프(운영 자동화)
 ```powershell
@@ -388,7 +417,7 @@ scripts\run_quality_loop.ps1 -ConfigPath configs\config.yaml -EverySeconds 600 -
 
 ### Pattern quality evaluation
 ```powershell
-python scripts\evaluate_pattern_quality.py --summaries-dir logs\run4 --output logs\run4\pattern_quality.json
+python scripts\evaluate_pattern_quality.py --summaries-dir logs --output logs\pattern_quality.json
 ```
 
 ### Mock data for pattern testing
@@ -405,7 +434,7 @@ python scripts\replay_events.py --file tests\fixtures\mock_events_pattern.jsonl 
 ### Cold archive (raw preservation)
 Archive raw events:
 ```powershell
-python scripts\archive_raw_events.py --config configs\config_run4.yaml --date 2026-01-28 --days 1 --output-dir archive\raw
+python scripts\archive_raw_events.py --config configs\config.yaml --date 2026-01-28 --days 1 --output-dir archive\raw
 ```
 
 Build manifest:
@@ -425,7 +454,7 @@ python scripts\compact_archive_monthly.py --archive-dir archive\raw --output-dir
 
 Summary DB retention only:
 ```powershell
-python scripts\retention_summary_only.py --config configs\config_run4.yaml
+python scripts\retention_summary_only.py --config configs\config.yaml
 ```
 
 ### Service / Task Scheduler (Windows)
@@ -463,14 +492,14 @@ Filter by apps:
 python scripts\tail_events.py --db collector.db --apps chrome.exe,code.exe,notion.exe,whale.exe --poll 1 --drop-idle
 ```
 
-Activity detail logs (run3):
+Activity detail logs:
 ```powershell
-Get-Content .\logs\run3\activity_detail.log -Tail 50 -Wait
+Get-Content .\logs\activity_detail.log -Tail 50 -Wait
 ```
 
-Activity detail text logs (run3):
+Activity detail text logs:
 ```powershell
-Get-Content .\logs\run3\activity_detail.txt -Tail 50 -Wait
+Get-Content .\logs\activity_detail.txt -Tail 50 -Wait
 ```
 
 Stats endpoint:
@@ -504,25 +533,25 @@ python scripts\allowlist_wizard.py --config configs\config.yaml --apply-selectio
 ### On-demand window title lookup (debug)
 Query focus block titles from the DB when needed (no log noise):
 ```powershell
-python scripts\show_focus_titles.py --config configs\config_run2.yaml --since-hours 6 --local-time
+python scripts\show_focus_titles.py --config configs\config.yaml --since-hours 6 --local-time
 ```
 
 ### Activity details (app + title hint aggregation)
 Aggregate per-app activity hints (requires activity_detail enabled):
 ```powershell
-python scripts\show_activity_details.py --config configs\config_run2.yaml --order duration --limit 30
+python scripts\show_activity_details.py --config configs\config.yaml --order duration --limit 30
 ```
 
 ### Activity summary report
 Summarize recent activity_details:
 ```powershell
-python scripts\summarize_activity.py --config configs\config_run3.yaml --since-hours 24
+python scripts\summarize_activity.py --config configs\config.yaml --since-hours 24
 ```
 
 ### Pattern report (hourly)
 Generate hourly usage patterns:
 ```powershell
-python scripts\report_patterns.py --config configs\config_run4.yaml --since-days 3 --output reports\pattern_report.md
+python scripts\report_patterns.py --config configs\config.yaml --since-days 3 --output reports\pattern_report.md
 ```
 
 ### Browser extension (Chrome / Whale)
@@ -538,7 +567,7 @@ URL mode is controlled in `browser_extension\background.js`:
 Content capture is controlled in `browser_extension\content.js`:
 - `DOMAIN_ALLOWLIST` to restrict domains (use `["*"]` for all)
 - content is sent as `content_summary` + `content` (full text), and full text is
-  stored only in `raw_json` (run4 enables encryption by default; you can disable it).
+  stored only in `raw_json` (encryption is enabled by default; you can disable it).
 
 ### Config
 Main config: `configs\config.yaml`
@@ -563,7 +592,7 @@ post_collection:
   run_pattern_summary: true
   run_llm_input: true
   run_pattern_report: true
-  output_dir: logs/run5
+  output_dir: logs
   llm_max_bytes: 8000
   session_gap_minutes: 15
   routine_days: 7
@@ -592,7 +621,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 # Set env var for current PowerShell session
 $env:DATA_COLLECTOR_ENC_KEY = "<paste_generated_key>"
 ```
-Then enable in config (example in `configs\config_run4.yaml`):
+Then enable in config (example in `configs\config.yaml`):
 ```yaml
 encryption:
   enabled: true
@@ -611,3 +640,4 @@ Privacy rules: `configs\privacy_rules.yaml`
 - masking and hashing rules
 - allowlist/denylist apps
 - URL sanitization and redaction patterns
+

@@ -35,12 +35,14 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _score(file_path: str, profile: str, score_config: str) -> tuple[int, list[str]]:
+def _score(file_path: str, profile: str, score_config: str, llm_input: str) -> tuple[int, list[str]]:
     cmd = ["python", "scripts/score_n8n_workflow.py", "--file", file_path]
     if profile:
         cmd += ["--profile", profile]
     if score_config:
         cmd += ["--score-config", score_config]
+    if llm_input:
+        cmd += ["--llm-input", llm_input]
     result = subprocess.run(cmd, capture_output=True, text=True)
     score = 0
     notes = []
@@ -90,7 +92,7 @@ def main() -> None:
         ]
         subprocess.run(cmd, check=False)
 
-        score, notes = _score(args.output, str(temp_profile_path), args.score_config)
+        score, notes = _score(args.output, str(temp_profile_path), args.score_config, args.input)
         entry = {
             "ts": _now_utc(),
             "attempt": attempt,

@@ -10,6 +10,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--file", required=True, help="workflow json path")
     parser.add_argument("--profile", default="", help="personalization profile json")
     parser.add_argument("--score-config", default="", help="score config json path")
+    parser.add_argument("--llm-input", default="", help="llm_input json path")
     return parser.parse_args()
 
 
@@ -37,11 +38,88 @@ def _load_score_config(path: str) -> dict:
     return _load_json(str(default_path))
 
 
+def _load_llm_input(path: str) -> dict:
+    if not path:
+        return {}
+    return _load_json(path)
+
+
+def _is_simple_context(llm_input: dict) -> bool:
+    if not isinstance(llm_input, dict):
+        return False
+    top_apps = llm_input.get("top_apps") or []
+    key_events = llm_input.get("key_events") or {}
+    recent_events = llm_input.get("recent_events") or []
+    quality = llm_input.get("quality") or {}
+    total_events = quality.get("total_events", 0)
+    return (
+        len(top_apps) <= 2
+        and len(key_events) <= 3
+        and len(recent_events) <= 6
+        and (total_events <= 30 if isinstance(total_events, int) else True)
+    )
+
+
+def _has_input_usage(nodes: list[dict]) -> bool:
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        params = node.get("parameters") or {}
+        try:
+            blob = json.dumps(params, ensure_ascii=False)
+        except Exception:
+            continue
+        if "$json" in blob or "key_events" in blob or "recent_events" in blob:
+            return True
+    return False
+
+
+def _expected_tools(llm_input: dict) -> list[str]:
+    if not isinstance(llm_input, dict):
+        return []
+    hints = llm_input.get("workflow_hints") or {}
+    if isinstance(hints, dict) and hints.get("required_tools"):
+        return [str(t).lower() for t in hints.get("required_tools") if str(t).strip()]
+    intent_summary = llm_input.get("intent_summary") or {}
+    primary = intent_summary.get("primary_intent")
+    mapping = {
+        "daily_summary": ["notion"],
+        "team_update": ["slack"],
+        "followup_email": ["gmail"],
+        "file_backup": ["notion"],
+        "focus_recap": ["slack"],
+    }
+    return mapping.get(primary, [])
+
+
+def _expects_sequence(llm_input: dict) -> bool:
+    if not isinstance(llm_input, dict):
+        return False
+    recent_sequence = llm_input.get("recent_sequence") or []
+    transitions = llm_input.get("app_transitions") or []
+    return (isinstance(recent_sequence, list) and len(recent_sequence) >= 3) or bool(transitions)
+
+
+def _has_sequence_usage(nodes: list[dict]) -> bool:
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        params = node.get("parameters") or {}
+        try:
+            blob = json.dumps(params, ensure_ascii=False).lower()
+        except Exception:
+            continue
+        if "recent_sequence" in blob or "app_transitions" in blob or "sequence_signature" in blob:
+            return True
+    return False
+
+
 def main() -> None:
     args = parse_args()
     data = _load_json(args.file)
     profile = _load_profile(args.profile)
     score_cfg = _load_score_config(args.score_config) or {}
+    llm_input = _load_llm_input(args.llm_input)
     weights = score_cfg.get("weights") or {}
 
     score = 0
@@ -50,6 +128,8 @@ def main() -> None:
     nodes = data.get("nodes") if isinstance(data, dict) else []
     if not isinstance(nodes, list):
         nodes = []
+    node_count = len(nodes)
+    simple_mode = _is_simple_context(llm_input)
 
     # Base structure (minimal)
     if data.get("name"):
@@ -63,6 +143,11 @@ def main() -> None:
         score += int(weights.get("trigger", 15))
     else:
         notes.append("missing_trigger")
+
+    if node_count and node_count <= int(weights.get("simple_flow_max_nodes", 3)) and has_trigger:
+        score += int(weights.get("simple_flow_bonus", 5))
+    if node_count >= int(weights.get("over_complex_nodes", 9)):
+        score += int(weights.get("over_complex_penalty", -10))
 
     # Placeholder detection
     placeholder = False
@@ -96,7 +181,10 @@ def main() -> None:
             max_w = int(weights.get("tool_match_max", 30))
             score += min(max_w, per * len(matched_tools))
         else:
-            score += int(weights.get("tool_missing_penalty", -20))
+            penalty = int(weights.get("tool_missing_penalty", -20))
+            if simple_mode:
+                penalty = int(weights.get("tool_missing_penalty_simple", -5))
+            score += penalty
             notes.append("no_profile_tool_nodes")
 
     # Profile ids usage (partial credit)
@@ -186,6 +274,46 @@ def main() -> None:
         score += int(weights.get("action_node", 10))
     else:
         notes.append("no_action_nodes")
+
+    # Input usage (only if webhook trigger present)
+    uses_webhook = any("webhook" in t for t in node_types)
+    if uses_webhook and node_count > 1:
+        if _has_input_usage(nodes):
+            score += int(weights.get("input_usage_bonus", 5))
+        else:
+            penalty = int(weights.get("input_unused_penalty", -10))
+            if simple_mode:
+                penalty = int(weights.get("input_unused_penalty_simple", -3))
+            score += penalty
+            notes.append("no_input_usage")
+
+    # Intent/tool alignment (avoid irrelevant action tools)
+    expected_tools = _expected_tools(llm_input)
+    if expected_tools:
+        if any(tool in str(t).lower() for t in node_types for tool in expected_tools):
+            score += int(weights.get("intent_tool_bonus", 5))
+        else:
+            penalty = int(weights.get("intent_tool_missing_penalty", -10))
+            if simple_mode:
+                penalty = int(weights.get("intent_tool_missing_penalty_simple", -3))
+            score += penalty
+            notes.append("intent_tool_mismatch")
+
+    # Sequence usage when sequence hints exist
+    if _expects_sequence(llm_input):
+        if _has_sequence_usage(nodes):
+            score += int(weights.get("sequence_usage_bonus", 5))
+        else:
+            penalty = int(weights.get("sequence_unused_penalty", -10))
+            if simple_mode:
+                penalty = int(weights.get("sequence_unused_penalty_simple", -3))
+            score += penalty
+            notes.append("sequence_not_used")
+
+    # Connection sanity (avoid disconnected multi-node workflows)
+    if node_count > 1 and not connections:
+        score += int(weights.get("empty_connections_penalty", -10))
+        notes.append("missing_connections")
 
     # Safety: allow_actions enforcement (no penalty if not provided)
     safety = profile.get("safety") if isinstance(profile, dict) else {}
