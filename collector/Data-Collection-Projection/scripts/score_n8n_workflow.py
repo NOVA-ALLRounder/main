@@ -26,9 +26,26 @@ def _load_json(path: str) -> dict:
 
 def _load_profile(path: str) -> dict:
     if path:
-        return _load_json(path)
-    default_path = Path(__file__).resolve().parents[1] / "configs" / "personalization_demo.json"
-    return _load_json(str(default_path))
+        base = _load_json(path)
+    else:
+        default_path = Path(__file__).resolve().parents[1] / "configs" / "personalization_demo.json"
+        base = _load_json(str(default_path))
+    learned_path = Path(__file__).resolve().parents[1] / "configs" / "profile_learned.json"
+    learned = _load_json(str(learned_path))
+    if not isinstance(base, dict):
+        base = {}
+    if not isinstance(learned, dict) or not learned:
+        return base
+    merged = json.loads(json.dumps(base))
+    if learned.get("tools"):
+        merged["tools"] = learned.get("tools")
+    if learned.get("preferences"):
+        prefs = merged.get("preferences") or {}
+        if not isinstance(prefs, dict):
+            prefs = {}
+        prefs.update(learned.get("preferences"))
+        merged["preferences"] = prefs
+    return merged
 
 
 def _load_score_config(path: str) -> dict:
@@ -114,6 +131,78 @@ def _has_sequence_usage(nodes: list[dict]) -> bool:
     return False
 
 
+def _count_conditions(node: dict) -> int:
+    if not isinstance(node, dict):
+        return 0
+    params = node.get("parameters") or {}
+    conditions = params.get("conditions") or {}
+    if not isinstance(conditions, dict):
+        return 0
+    total = 0
+    for value in conditions.values():
+        if isinstance(value, list):
+            total += len(value)
+    return total
+
+
+def _conditions_blob(if_nodes: list[dict]) -> str:
+    try:
+        return json.dumps([node.get("parameters", {}) for node in if_nodes], ensure_ascii=False).lower()
+    except Exception:
+        return ""
+
+
+def _has_condition_tokens(if_nodes: list[dict], tokens: list[str]) -> bool:
+    blob = _conditions_blob(if_nodes)
+    return any(token in blob for token in tokens)
+
+
+def _recommended_template(llm_input: dict) -> str:
+    if not isinstance(llm_input, dict):
+        return ""
+    hints = llm_input.get("workflow_hints") or {}
+    if isinstance(hints, dict):
+        return str(hints.get("recommended_template") or "")
+    return ""
+
+
+def _meta_note(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    meta = data.get("meta") or {}
+    if isinstance(meta, dict):
+        return str(meta.get("note") or "")
+    return ""
+
+
+def _validate_connections(data: dict) -> tuple[bool, list[str]]:
+    nodes = data.get("nodes") if isinstance(data, dict) else []
+    if not isinstance(nodes, list):
+        nodes = []
+    node_names = {n.get("name") for n in nodes if isinstance(n, dict) and n.get("name")}
+    node_ids = {n.get("id") for n in nodes if isinstance(n, dict) and n.get("id")}
+    connections = data.get("connections") if isinstance(data, dict) else {}
+    if not isinstance(connections, dict):
+        return False, ["connections_not_dict"]
+
+    issues = []
+    for source, link in connections.items():
+        if source not in node_names and source not in node_ids:
+            issues.append(f"unknown_source:{source}")
+        if not isinstance(link, dict):
+            continue
+        for branch in link.get("main") or []:
+            if not isinstance(branch, list):
+                continue
+            for item in branch:
+                if not isinstance(item, dict):
+                    continue
+                target = item.get("node")
+                if target and target not in node_names and target not in node_ids:
+                    issues.append(f"unknown_target:{target}")
+    return len(issues) == 0, issues
+
+
 def main() -> None:
     args = parse_args()
     data = _load_json(args.file)
@@ -144,9 +233,13 @@ def main() -> None:
     else:
         notes.append("missing_trigger")
 
-    if node_count and node_count <= int(weights.get("simple_flow_max_nodes", 3)) and has_trigger:
+    if simple_mode and node_count and node_count <= int(weights.get("simple_flow_max_nodes", 3)) and has_trigger:
         score += int(weights.get("simple_flow_bonus", 5))
-    if node_count >= int(weights.get("over_complex_nodes", 9)):
+    over_complex_nodes = int(weights.get("over_complex_nodes", 9))
+    over_complex_nodes2 = int(weights.get("over_complex_nodes2", 14))
+    if node_count >= over_complex_nodes2:
+        score += int(weights.get("over_complex_penalty2", -15))
+    elif node_count >= over_complex_nodes:
         score += int(weights.get("over_complex_penalty", -10))
 
     # Placeholder detection
@@ -245,6 +338,15 @@ def main() -> None:
 
     # IF node branching
     if_nodes = [n for n in nodes if isinstance(n, dict) and "if" in str(n.get("type", "")).lower()]
+    condition_count = sum(_count_conditions(n) for n in if_nodes)
+    min_conditions = int(weights.get("min_conditions", 2))
+    if not simple_mode:
+        if not if_nodes:
+            score += int(weights.get("missing_if_penalty", -6))
+            notes.append("missing_if_node")
+        elif condition_count < min_conditions:
+            score += int(weights.get("under_condition_penalty", -8))
+            notes.append("under_conditioned_if")
     has_branching = False
     connections = data.get("connections") if isinstance(data, dict) else {}
     if isinstance(connections, dict) and if_nodes:
@@ -267,6 +369,60 @@ def main() -> None:
     # Branching is optional for simple flows, no penalty if absent
     if has_branching:
         score += int(weights.get("if_branching", 5))
+
+    # Condition coverage expectations
+    expects_time = False
+    prefs = profile.get("preferences") if isinstance(profile, dict) else {}
+    if isinstance(prefs, dict) and prefs.get("working_hours"):
+        expects_time = True
+    time_context = llm_input.get("time_context") if isinstance(llm_input, dict) else {}
+    if isinstance(time_context, dict) and time_context.get("active_hours"):
+        expects_time = True
+    expects_sequence = _expects_sequence(llm_input)
+    expects_frequency = bool((llm_input.get("key_events") or {})) or bool(
+        (llm_input.get("quality") or {}).get("active_minutes")
+    )
+    safety = profile.get("safety") if isinstance(profile, dict) else {}
+    expects_approval = bool(safety.get("require_approval")) or bool(
+        llm_input.get("auto_approve") if isinstance(llm_input, dict) else False
+    )
+
+    has_time_condition = _has_condition_tokens(if_nodes, ["$now.hour", "working_hours", "hour"])
+    has_sequence_condition = _has_condition_tokens(
+        if_nodes, ["sequence_signature", "recent_sequence", "app_transitions"]
+    )
+    has_frequency_condition = _has_condition_tokens(
+        if_nodes, ["key_events", "active_minutes", "total_events"]
+    )
+    has_approval_condition = _has_condition_tokens(if_nodes, ["auto_approve", "approval"])
+
+    if expects_time:
+        if has_time_condition:
+            score += int(weights.get("time_condition_bonus", 4))
+        else:
+            score += int(weights.get("time_condition_missing_penalty", -6))
+            notes.append("missing_time_condition")
+
+    if expects_sequence:
+        if has_sequence_condition:
+            score += int(weights.get("sequence_condition_bonus", 4))
+        else:
+            score += int(weights.get("sequence_condition_missing_penalty", -6))
+            notes.append("missing_sequence_condition")
+
+    if expects_frequency and not simple_mode:
+        if has_frequency_condition:
+            score += int(weights.get("frequency_condition_bonus", 4))
+        else:
+            score += int(weights.get("frequency_condition_missing_penalty", -6))
+            notes.append("missing_frequency_condition")
+
+    if expects_approval:
+        if has_approval_condition:
+            score += int(weights.get("approval_condition_bonus", 4))
+        else:
+            score += int(weights.get("approval_condition_missing_penalty", -8))
+            notes.append("missing_approval_condition")
 
     # Action node presence (Notion/Slack/Gmail/HTTP)
     action_nodes = [t for t in node_types if any(x in t for x in ["notion", "slack", "gmail", "http"])]
@@ -299,6 +455,17 @@ def main() -> None:
             score += penalty
             notes.append("intent_tool_mismatch")
 
+    # Template hint alignment
+    recommended = _recommended_template(llm_input)
+    if recommended:
+        note = _meta_note(data)
+        source = (data.get("meta") or {}).get("source") if isinstance(data, dict) else ""
+        if note and recommended in note:
+            score += int(weights.get("template_match_bonus", 4))
+        elif source == "template":
+            score += int(weights.get("template_mismatch_penalty", -6))
+            notes.append("template_hint_mismatch")
+
     # Sequence usage when sequence hints exist
     if _expects_sequence(llm_input):
         if _has_sequence_usage(nodes):
@@ -314,6 +481,18 @@ def main() -> None:
     if node_count > 1 and not connections:
         score += int(weights.get("empty_connections_penalty", -10))
         notes.append("missing_connections")
+
+    # Import validation (node/connection integrity)
+    valid_connections, conn_issues = _validate_connections(data)
+    if node_count > 1 and not connections:
+        valid_connections = False
+        conn_issues.append("missing_connections")
+    if valid_connections:
+        score += int(weights.get("import_valid_bonus", 6))
+    else:
+        score += int(weights.get("import_invalid_penalty", -12))
+        for issue in conn_issues:
+            notes.append(f"invalid_connection:{issue}")
 
     # Safety: allow_actions enforcement (no penalty if not provided)
     safety = profile.get("safety") if isinstance(profile, dict) else {}

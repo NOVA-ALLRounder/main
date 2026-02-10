@@ -16,7 +16,7 @@ from collector.store import SQLiteStore
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run retention on summary DB only")
-    parser.add_argument("--config", default="configs/config_run4.yaml")
+    parser.add_argument("--config", default="configs/config.yaml")
     return parser.parse_args()
 
 

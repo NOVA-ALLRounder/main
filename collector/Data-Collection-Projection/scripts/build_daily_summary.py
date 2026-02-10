@@ -83,11 +83,14 @@ def main() -> None:
     end_utc = end_local.astimezone(timezone.utc)
 
     summary_db_path = config.summary_db_path or config.db_path
-    conn = sqlite3.connect(str(summary_db_path))
-    cur = conn.cursor()
-    _ensure_summary_tables(cur)
+    source_db_path = config.db_path or summary_db_path
+    read_conn = sqlite3.connect(str(source_db_path))
+    read_cur = read_conn.cursor()
+    write_conn = sqlite3.connect(str(summary_db_path))
+    write_cur = write_conn.cursor()
+    _ensure_summary_tables(write_cur)
 
-    events = cur.execute(
+    events = read_cur.execute(
         "SELECT ts, app, event_type, payload_json, priority FROM events WHERE ts >= ? AND ts <= ?",
         (start_utc.isoformat().replace("+00:00", "Z"), end_utc.isoformat().replace("+00:00", "Z")),
     ).fetchall()
@@ -190,8 +193,8 @@ def main() -> None:
             for app, sec in top
         ]
 
-    if _table_exists(conn, "activity_details"):
-        rows = cur.execute(
+    if _table_exists(read_conn, "activity_details"):
+        rows = read_cur.execute(
             "SELECT app, title_hint, total_duration_sec, last_seen_ts FROM activity_details WHERE last_seen_ts >= ? AND last_seen_ts <= ?",
             (summary["window"]["start_utc"], summary["window"]["end_utc"]),
         ).fetchall()
@@ -219,7 +222,7 @@ def main() -> None:
     if args.store_db:
         payload_json = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
         created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        cur.execute(
+        write_cur.execute(
             """
             INSERT INTO daily_summaries (date_local, start_utc, end_utc, payload_json, created_at)
             VALUES (?, ?, ?, ?, ?)
@@ -237,9 +240,10 @@ def main() -> None:
                 created_at,
             ),
         )
-        conn.commit()
+        write_conn.commit()
 
-    conn.close()
+    read_conn.close()
+    write_conn.close()
 
     if args.output:
         out_path = Path(args.output)

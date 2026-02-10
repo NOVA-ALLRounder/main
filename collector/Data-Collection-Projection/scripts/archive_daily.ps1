@@ -1,6 +1,6 @@
 param(
   [string]$RepoPath = (Resolve-Path "$PSScriptRoot\..").Path,
-  [string]$ConfigPath = "configs\\config_run4.yaml",
+  [string]$ConfigPath = "configs\\config.yaml",
   [string]$ArchiveDir = "archive\\raw",
   [int]$Days = 1,
   [switch]$DeleteAfter,

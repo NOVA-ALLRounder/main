@@ -45,6 +45,51 @@ def _load_json(path: str) -> dict:
         return {}
 
 
+def _load_env_key(var_name: str) -> None:
+    if os.getenv(var_name):
+        return
+    try:
+        for parent in Path(__file__).resolve().parents:
+            env_path = parent / ".env"
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if not line or line.strip().startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() == var_name:
+                    os.environ[var_name] = value.strip()
+                    return
+    except Exception:
+        return
+
+
+def _extract_responses_text(parsed: dict) -> str:
+    if not isinstance(parsed, dict):
+        return ""
+    output = parsed.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") in {"output_text", "text"}:
+                text = part.get("text") or part.get("content")
+                if isinstance(text, str) and text:
+                    return text
+    return ""
+
+
 def main() -> None:
     args = parse_args()
     data = _load_json(args.input)
@@ -120,7 +165,7 @@ def _build_recommendations(data: dict, min_conf: float | None) -> dict:
                         "confidence": 0.55,
                         "action": {
                             "type": "create_file",
-                            "target": str(Path("logs/run4/auto") / filename),
+                            "target": str(Path("logs/auto") / filename),
                             "app": top_app,
                         },
                         "reason": "create_file_suggestion",
@@ -175,7 +220,7 @@ def _build_recommendations(data: dict, min_conf: float | None) -> dict:
                         "confidence": confidence,
                         "action": {
                             "type": "create_file",
-                            "target": str(Path("logs/run4/auto") / filename),
+                            "target": str(Path("logs/auto") / filename),
                             "app": seq_list[0],
                         },
                         "reason": "sequence_create_file",
@@ -232,7 +277,11 @@ def _to_markdown(payload: dict) -> list[str]:
 def _call_llm(llm_config, llm_input: dict, fallback: dict) -> dict:
     api_key = ""
     if llm_config.api_key_env:
+        _load_env_key(llm_config.api_key_env)
         api_key = os.getenv(llm_config.api_key_env, "")
+    if not api_key and llm_config.api_key_env:
+        print(f"llm_missing_api_key env={llm_config.api_key_env}")
+        return {}
 
     schema_path = PROJECT_ROOT / "schemas" / "recommendations.schema.json"
     schema_text = ""
@@ -259,11 +308,25 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict) -> dict:
         "fallback": fallback,
     }
 
-    body = {
-        "model": llm_config.model,
-        "input": prompt,
-        "max_tokens": llm_config.max_tokens,
-    }
+    endpoint = str(llm_config.endpoint or "")
+    if "responses" in endpoint:
+        body = {
+            "model": llm_config.model,
+            "input": prompt,
+            "max_output_tokens": llm_config.max_tokens,
+        }
+    else:
+        messages = [
+            {"role": "system", "content": "You are a strict JSON generator."},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ]
+        body = {
+            "model": llm_config.model,
+            "messages": messages,
+            "max_tokens": llm_config.max_tokens,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -299,6 +362,8 @@ def _call_llm(llm_config, llm_input: dict, fallback: dict) -> dict:
                 content = str(message.get("content") or "")
             else:
                 content = str(choices[0].get("text") or "")
+        elif "output" in parsed:
+            content = _extract_responses_text(parsed)
     if content:
         try:
             parsed_content = json.loads(content)

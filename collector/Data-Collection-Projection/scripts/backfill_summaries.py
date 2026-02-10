@@ -18,8 +18,8 @@ from collector.config import load_config
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backfill summaries into summary DB")
-    parser.add_argument("--config", default="configs/config_run4.yaml")
-    parser.add_argument("--summaries-dir", default="logs/run4")
+    parser.add_argument("--config", default="configs/config.yaml")
+    parser.add_argument("--summaries-dir", default="logs")
     parser.add_argument("--daily-glob", default="daily_summary_*.json")
     parser.add_argument("--pattern", default="pattern_summary.json")
     parser.add_argument("--llm-input", default="llm_input.json")

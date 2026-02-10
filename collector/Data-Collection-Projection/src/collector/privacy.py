@@ -40,6 +40,9 @@ class PrivacyRules:
     allowlist_apps: Set[str] = field(default_factory=set)
     denylist_apps: Set[str] = field(default_factory=set)
     denylist_action: str = "drop"
+    denylist_domains: Set[str] = field(default_factory=set)
+    denylist_domain_keywords: Set[str] = field(default_factory=set)
+    denylist_domain_action: str = "strip"
 
 
 class PrivacyGuard:
@@ -75,6 +78,24 @@ class PrivacyGuard:
             return None
 
         redactions = list(envelope.privacy.redaction)
+
+        domain = _extract_domain_from_payload(envelope.payload)
+        if domain and _domain_matches(domain, self._rules.denylist_domains, self._rules.denylist_domain_keywords):
+            action = self._rules.denylist_domain_action
+            if action == "drop":
+                if self._metrics:
+                    self._metrics.record_privacy_denied()
+                return None
+            if action == "strip":
+                for key in ("url", "page_url", "domain", "content", "content_summary"):
+                    if key in envelope.payload:
+                        envelope.payload.pop(key, None)
+                        redactions.append(f"domain_stripped:{key}")
+            elif action == "domain_only":
+                if "url" in envelope.payload:
+                    envelope.payload["url"] = domain
+                    redactions.append("domain_only:url")
+            redactions.append("domain_denylist")
 
         if envelope.window_id:
             envelope.window_id = _hash_value(str(envelope.window_id), self._hash_salt)
@@ -156,6 +177,9 @@ def load_privacy_rules(path: str | Path) -> PrivacyRules:
     allowlist_apps = _lower_set(raw.get("allowlist_apps"))
     denylist_apps = _lower_set(raw.get("denylist_apps"))
     denylist_action = str(raw.get("denylist_action", "drop")).lower()
+    denylist_domains = _lower_set(raw.get("denylist_domains"))
+    denylist_domain_keywords = _lower_set(raw.get("denylist_domain_keywords"))
+    denylist_domain_action = str(raw.get("denylist_domain_action", "strip")).lower()
 
     length_limits = {
         str(k).lower(): int(v)
@@ -185,6 +209,9 @@ def load_privacy_rules(path: str | Path) -> PrivacyRules:
         allowlist_apps=allowlist_apps,
         denylist_apps=denylist_apps,
         denylist_action=denylist_action,
+        denylist_domains=denylist_domains,
+        denylist_domain_keywords=denylist_domain_keywords,
+        denylist_domain_action=denylist_domain_action,
     )
 
 
@@ -229,7 +256,7 @@ def _summarize_recipients(value: Any) -> Dict[str, Any]:
         summary: Dict[str, Any] = {"count": len(emails)}
         if domain_stats:
             summary["domain_stats"] = domain_stats
-        return summary
+    return summary
 
     count = _coerce_recipient_count(value)
     if count is None:
@@ -272,3 +299,35 @@ def _coerce_recipient_count(value: Any) -> Optional[int]:
     if isinstance(value, (list, tuple, set)):
         return len(value)
     return None
+
+
+def _extract_domain_from_payload(payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    domain = payload.get("domain")
+    if isinstance(domain, str) and domain.strip():
+        return domain.strip().lower()
+    url = payload.get("url") or payload.get("page_url")
+    if not isinstance(url, str) or not url.strip():
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url if "://" in url else f"http://{url}")
+        return (parsed.netloc or "").lower()
+    except Exception:
+        return ""
+
+
+def _domain_matches(domain: str, denylist: Set[str], keywords: Set[str]) -> bool:
+    if not domain:
+        return False
+    domain = domain.lower()
+    if denylist:
+        for item in denylist:
+            if domain == item or domain.endswith(f".{item}"):
+                return True
+    if keywords:
+        for keyword in keywords:
+            if keyword and keyword in domain:
+                return True
+    return False

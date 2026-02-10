@@ -117,6 +117,7 @@ def _build_payload(
         title = str(item.get("title_hint") or "").strip()
         if not title:
             continue
+        title = _normalize_title(str(item.get("app") or ""), title)
         if redact_sensitive and _contains_sensitive(title):
             continue
         title = _trim_title(title, max_title_len)
@@ -179,12 +180,30 @@ def _build_payload(
             workflow_hints["required_tools"] = ["slack"]
         workflow_hints["sequence_based"] = True
 
+    task_units = _infer_task_units(top_apps, top_titles, key_event_tokens)
+    task_summary = (
+        {
+            "primary_task": task_units[0]["unit_id"],
+            "label": task_units[0]["label"],
+            "confidence": task_units[0]["confidence"],
+        }
+        if task_units
+        else {}
+    )
+
+    repetition = _pattern_repetition(sequence_patterns, transition_patterns)
+    auto_approve = bool(repetition.get("sequence_support", 0) >= 2 or repetition.get("transition_support", 0) >= 2)
+    if auto_approve:
+        workflow_hints = dict(workflow_hints or {})
+        workflow_hints["auto_approve"] = True
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "date_local": daily.get("date_local"),
         "counts": counts,
         "top_apps": top_apps,
         "top_titles": top_titles,
+        "time_context": _time_context(daily.get("date_local"), hourly_patterns),
         "key_events": daily.get("key_events", {}),
         "key_event_tokens": key_event_tokens,
         "app_transitions": top_transitions,
@@ -200,6 +219,10 @@ def _build_payload(
         ),
         "workflow_hints": workflow_hints,
         "sequence_signature": _sequence_signature_from_transitions(top_transitions),
+        "task_units": task_units,
+        "task_summary": task_summary,
+        "pattern_repetition": repetition,
+        "auto_approve": auto_approve,
         "hourly_patterns": hourly_patterns,
         "weekday_patterns": weekday_patterns,
         "sequence_patterns": sequence_patterns,
@@ -294,6 +317,116 @@ def _unique_limited(values: list[str], limit: int) -> list[str]:
 
 def _normalize_app_name(name: str) -> str:
     return str(name or "").strip().lower()
+
+
+def _normalize_title(app: str, title: str) -> str:
+    app_key = (app or "").lower()
+    value = title.strip()
+    suffix_map = {
+        "chrome.exe": [" - Google Chrome", " - Chrome"],
+        "msedge.exe": [" - Microsoft Edge", " - Edge"],
+        "whale.exe": [" - Whale", " - Naver Whale"],
+        "notion.exe": [" - Notion"],
+        "code.exe": [
+            " - Visual Studio Code",
+            " - Visual Studio Code Insiders",
+            " - Code",
+        ],
+    }
+    for suffix in suffix_map.get(app_key, []):
+        if value.endswith(suffix):
+            value = value[: -len(suffix)].strip()
+            break
+    return value
+
+
+def _infer_task_units(
+    top_apps: list[dict],
+    top_titles: list[dict],
+    key_event_tokens: list[str],
+) -> list[dict]:
+    app_names = {_normalize_app_name(item.get("app")) for item in top_apps if item.get("app")}
+    title_blob = " ".join([str(item.get("title_hint", "")).lower() for item in top_titles if item.get("title_hint")])
+
+    def add_unit(units: list[dict], unit_id: str, label: str, evidence: list[str], base: float = 0.6) -> None:
+        confidence = min(0.95, base + 0.1 * len(evidence))
+        units.append(
+            {
+                "unit_id": unit_id,
+                "label": label,
+                "confidence": round(confidence, 2),
+                "evidence": evidence,
+            }
+        )
+
+    units: list[dict] = []
+    tokens = [t.lower() for t in key_event_tokens]
+
+    evidence = []
+    if any(app in app_names for app in {"notion.exe"}):
+        evidence.append("app:notion")
+    if "doc" in title_blob or "note" in title_blob:
+        evidence.append("title:doc")
+    if evidence:
+        add_unit(units, "doc_write", "Writing/Documentation", evidence)
+
+    evidence = []
+    if any(app in app_names for app in {"code.exe", "pycharm.exe", "idea.exe"}):
+        evidence.append("app:code")
+    if evidence:
+        add_unit(units, "coding", "Coding/Development", evidence)
+
+    evidence = []
+    if any(app in app_names for app in {"slack.exe", "kakaotalk.exe"}):
+        evidence.append("app:chat")
+    if "message" in tokens or "chat" in tokens:
+        evidence.append("event:message")
+    if evidence:
+        add_unit(units, "communication", "Communication", evidence)
+
+    evidence = []
+    if "email" in tokens or "mail" in tokens:
+        evidence.append("event:mail")
+    if evidence:
+        add_unit(units, "email", "Email/Follow-up", evidence)
+
+    evidence = []
+    if "task" in tokens or "jira" in tokens:
+        evidence.append("event:task")
+    if evidence:
+        add_unit(units, "task_management", "Task Management", evidence)
+
+    units.sort(key=lambda item: item.get("confidence", 0), reverse=True)
+    return units[:4]
+
+
+def _time_context(date_local: str | None, hourly_patterns: list[dict]) -> dict:
+    weekday = ""
+    if date_local:
+        try:
+            weekday = datetime.strptime(date_local, "%Y-%m-%d").strftime("%a")
+        except Exception:
+            weekday = ""
+    dominant_hour = ""
+    if hourly_patterns:
+        dominant_hour = str(hourly_patterns[0].get("hour", ""))
+    return {"weekday_local": weekday, "dominant_hour": dominant_hour}
+
+
+def _pattern_repetition(sequence_patterns: list[dict], transition_patterns: list[dict]) -> dict:
+    seq_support = 0
+    seq_conf = 0.0
+    if sequence_patterns:
+        seq_support = int(sequence_patterns[0].get("support", 0))
+        seq_conf = float(sequence_patterns[0].get("confidence", 0.0))
+    trans_support = 0
+    if transition_patterns:
+        trans_support = int(transition_patterns[0].get("support", 0))
+    return {
+        "sequence_support": seq_support,
+        "sequence_confidence": round(seq_conf, 2),
+        "transition_support": trans_support,
+    }
 
 
 def _infer_intents(

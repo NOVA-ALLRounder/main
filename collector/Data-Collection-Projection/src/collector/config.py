@@ -92,6 +92,7 @@ class LoggingConfig:
     backup_count: int = 10
     json: bool = True
     to_console: bool = True
+    activity_to_console: bool = False
     activity_detail_file: str = ""
     activity_detail_max_mb: int = 20
     activity_detail_backup_count: int = 10
@@ -315,6 +316,7 @@ def load_config(path: str | Path) -> Config:
         backup_count=int(logging_raw.get("backup_count", 10)),
         json=bool(logging_raw.get("json", True)),
         to_console=bool(logging_raw.get("to_console", True)),
+        activity_to_console=bool(logging_raw.get("activity_to_console", False)),
         activity_detail_file=str(logging_raw.get("activity_detail_file", "")),
         activity_detail_max_mb=int(logging_raw.get("activity_detail_max_mb", 20)),
         activity_detail_backup_count=int(

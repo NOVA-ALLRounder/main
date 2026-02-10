@@ -1,7 +1,7 @@
 param(
   [string]$TaskName = "DataCollectorArchive",
   [string]$RepoPath = (Resolve-Path "$PSScriptRoot\..").Path,
-  [string]$ConfigPath = "configs\\config_run4.yaml",
+  [string]$ConfigPath = "configs\\config.yaml",
   [string]$ArchiveDir = "archive\\raw",
   [string]$Time = "03:00",
   [int]$Days = 1,

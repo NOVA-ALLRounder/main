@@ -18,7 +18,7 @@ from collector.utils.time import parse_ts
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Archive raw events to jsonl.gz")
-    parser.add_argument("--config", default="configs/config_run4.yaml")
+    parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--date", default="", help="YYYY-MM-DD (local)")
     parser.add_argument("--days", type=int, default=1, help="number of days to archive")
     parser.add_argument("--output-dir", default="archive/raw")

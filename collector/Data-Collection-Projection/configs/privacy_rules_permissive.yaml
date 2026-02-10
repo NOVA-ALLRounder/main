@@ -1,6 +1,3 @@
-# NOTE: This file is managed by scripts/set_privacy_level.ps1
-# Available profiles: strict | balanced | permissive
-
 mask_keys:
   - window_title
   - url
@@ -28,8 +25,8 @@ length_limits:
   content_summary: 2048
 
 url_policy:
-  allow_full_url: false
-  keep_domain_only: true
+  allow_full_url: true
+  keep_domain_only: false
 
 redaction_patterns:
   - name: email
@@ -40,16 +37,6 @@ redaction_patterns:
     regex: '\b\d{12,}\b'
 
 drop_payload_keys:
-  - window_title
-  - title
-  - document_title
-  - tab_title
-  - page_title
-  - url
-  - page_url
-  - query
-  - search_query
-  - content_summary
   - content
   - body
   - text
@@ -91,4 +78,4 @@ denylist_domain_keywords:
   - wallet
   - pay
 
-denylist_domain_action: drop
+denylist_domain_action: strip

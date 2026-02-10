@@ -57,6 +57,14 @@ def main() -> None:
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, args.since_days))
     summaries = []
+    summary_dates: set[str] = set()
+    window_start = None
+    window_end = None
+    total_events = 0
+    total_focus_blocks = 0
+    total_idle_start = 0
+    total_idle_end = 0
+    total_app_switches = 0
     for path in summaries_dir.glob("daily_summary_*.json"):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -72,6 +80,36 @@ def main() -> None:
         if start_dt < cutoff:
             continue
         summaries.append(raw)
+        if raw.get("date_local"):
+            summary_dates.add(str(raw.get("date_local")))
+        window = raw.get("window") or {}
+        start_val = _parse_utc(window.get("start_utc") or "")
+        end_val = _parse_utc(window.get("end_utc") or "")
+        if start_val and (window_start is None or start_val < window_start):
+            window_start = start_val
+        if end_val and (window_end is None or end_val > window_end):
+            window_end = end_val
+        counts = raw.get("counts") or {}
+        try:
+            total_events += int(counts.get("events_total") or 0)
+        except Exception:
+            pass
+        try:
+            total_focus_blocks += int(counts.get("focus_blocks") or 0)
+        except Exception:
+            pass
+        try:
+            total_idle_start += int(counts.get("idle_start") or 0)
+        except Exception:
+            pass
+        try:
+            total_idle_end += int(counts.get("idle_end") or 0)
+        except Exception:
+            pass
+        try:
+            total_app_switches += int(raw.get("app_switches") or 0)
+        except Exception:
+            pass
 
     hourly_votes = defaultdict(Counter)
     hourly_minutes = defaultdict(Counter)
@@ -158,14 +196,55 @@ def main() -> None:
             args, include_apps, include_hours
         )
 
+    avg_confidence = 0.0
+    if patterns:
+        confidences = [item.get("confidence", 0.0) for item in patterns]
+        avg_confidence = round(sum(confidences) / max(1, len(confidences)), 3)
+
+    weekday_confidence = {}
+    for weekday, items in weekday_patterns.items():
+        if not items:
+            weekday_confidence[weekday] = 0.0
+            continue
+        confidences = [item.get("confidence", 0.0) for item in items]
+        weekday_confidence[weekday] = round(sum(confidences) / max(1, len(confidences)), 3)
+
+    time_bucket_patterns = _build_time_bucket_patterns(summaries)
+
     payload = {
+        "schema_version": "1.1",
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "window_days": int(args.since_days),
+        "window": {
+            "start_utc": _format_ts(window_start),
+            "end_utc": _format_ts(window_end),
+        },
+        "coverage": {
+            "summary_count": len(summaries),
+            "unique_days": len(summary_dates),
+            "start_utc": _format_ts(window_start),
+            "end_utc": _format_ts(window_end),
+            "total_events": total_events,
+            "focus_blocks": total_focus_blocks,
+            "idle_start": total_idle_start,
+            "idle_end": total_idle_end,
+            "app_switches": total_app_switches,
+        },
+        "pattern_metrics": {
+            "hourly_pattern_count": len(patterns),
+            "weekday_pattern_count": sum(len(items) for items in weekday_patterns.values()),
+            "weekday_pattern_days": len(weekday_patterns),
+            "sequence_pattern_count": len(sequence_patterns),
+            "transition_pattern_count": len(transition_patterns),
+            "time_bucket_count": len(time_bucket_patterns),
+            "avg_hourly_confidence": avg_confidence,
+            "avg_weekday_confidence": weekday_confidence,
+        },
         "patterns": patterns,
         "weekday_patterns": weekday_patterns,
         "sequence_patterns": sequence_patterns,
         "transition_patterns": transition_patterns,
-        "time_bucket_patterns": _build_time_bucket_patterns(summaries),
+        "time_bucket_patterns": time_bucket_patterns,
         "focus_block_stats": _aggregate_focus_stats(focus_stats),
         "top_apps": [
             {"app": app, "minutes": int(sec // 60), "seconds": int(sec)}
@@ -214,6 +293,21 @@ def _confidence(days: int, total_days: int, minutes: int) -> float:
     day_ratio = min(1.0, days / max(1, total_days))
     minutes_ratio = min(1.0, minutes / 30.0)
     return round(day_ratio * 0.7 + minutes_ratio * 0.3, 3)
+
+
+def _format_ts(value: datetime | None) -> str:
+    if not value:
+        return ""
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_utc(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def _build_sequences(

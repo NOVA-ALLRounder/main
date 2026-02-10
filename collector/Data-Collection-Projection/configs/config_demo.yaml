@@ -11,11 +11,11 @@ queue:
 ingest:
   enabled: true
   host: 127.0.0.1
-  port: 8080
+  port: 8081
   token: ''
 privacy:
   hash_salt: dev-salt
-  url_mode: full
+  url_mode: domain
 store:
   busy_timeout_ms: 5000
   insert_batch_size: 100
@@ -62,15 +62,13 @@ observability:
   activity_top_n: 3
   activity_min_duration_sec: 5
   activity_include_title: false
-  activity_title_apps:
-  - chrome.exe
+  activity_title_apps: []
   activity_title_max_len: 128
 activity_detail:
-  enabled: true
+  enabled: false
   min_duration_sec: 5
   store_hint: true
-  full_title_apps:
-  - chrome.exe
+  full_title_apps: []
   max_title_len: 512
 sensors:
   auto_start: false
@@ -112,6 +110,7 @@ logging:
   backup_count: 10
   json: true
   to_console: true
+  activity_to_console: false
   activity_detail_file: activity_detail.log
   activity_detail_max_mb: 20
   activity_detail_backup_count: 10

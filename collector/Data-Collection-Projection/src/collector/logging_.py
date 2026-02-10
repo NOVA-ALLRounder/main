@@ -62,6 +62,7 @@ def setup_logging(
     backup_count: int = 10,
     use_json: bool = True,
     to_console: bool = True,
+    activity_to_console: bool = False,
     activity_detail_file: Optional[str] = None,
     activity_detail_max_mb: int = 20,
     activity_detail_backup_count: int = 10,
@@ -100,7 +101,7 @@ def setup_logging(
         if activity_detail_file:
             activity_logger = logging.getLogger("collector.activity")
             activity_logger.setLevel(root.level)
-            activity_logger.propagate = True
+            activity_logger.propagate = bool(activity_to_console)
             for handler in list(activity_logger.handlers):
                 activity_logger.removeHandler(handler)
             activity_log_path = log_dir / activity_detail_file
@@ -116,7 +117,7 @@ def setup_logging(
         if activity_detail_text_file:
             activity_text_logger = logging.getLogger("collector.activity_text")
             activity_text_logger.setLevel(root.level)
-            activity_text_logger.propagate = True
+            activity_text_logger.propagate = bool(activity_to_console)
             for handler in list(activity_text_logger.handlers):
                 activity_text_logger.removeHandler(handler)
             text_log_path = log_dir / activity_detail_text_file

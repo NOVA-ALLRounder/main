@@ -5,7 +5,8 @@
     "VSCode",
     "Notion",
     "Slack",
-    "Gmail"
+    "Gmail",
+    "Google Calendar"
   ],
   "goals": [
     "Summarize work sessions and create follow-up tasks",
@@ -30,6 +31,10 @@
     {
       "tool": "Gmail",
       "goal": "Draft follow-up email"
+    },
+    {
+      "tool": "Google Calendar",
+      "goal": "Create focus block event"
     }
   ],
   "api_endpoints": [],
@@ -42,7 +47,8 @@
     "allow_actions": [
       "notion",
       "slack",
-      "gmail"
+      "gmail",
+      "googlecalendar"
     ],
     "require_approval": true,
     "redact_sensitive": true

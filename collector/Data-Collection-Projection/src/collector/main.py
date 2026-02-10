@@ -181,6 +181,7 @@ def run() -> None:
         backup_count=config.logging.backup_count,
         use_json=config.logging.json,
         to_console=config.logging.to_console,
+        activity_to_console=config.logging.activity_to_console,
         activity_detail_file=config.logging.activity_detail_file,
         activity_detail_max_mb=config.logging.activity_detail_max_mb,
         activity_detail_backup_count=config.logging.activity_detail_backup_count,

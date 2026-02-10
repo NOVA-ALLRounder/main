@@ -3,7 +3,21 @@ const CONTENT_MAX = 4000;
 const HEADINGS_MAX = 5;
 
 const DOMAIN_ALLOWLIST = ["*"]; // Example: ["notion.so"] to limit capture.
-const BLOCKLIST = ["accounts.google.com", "bank", "login"];
+const BLOCKLIST = [
+  "accounts.google.com",
+  "login.microsoftonline.com",
+  "1password.com",
+  "lastpass.com",
+  "bitwarden.com",
+  "paypal.com",
+  "login",
+  "signin",
+  "auth",
+  "password",
+  "bank",
+  "wallet",
+  "pay",
+];
 
 function isHttpUrl(url) {
   return typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"));

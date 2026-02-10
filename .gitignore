@@ -19,9 +19,11 @@ apps/core/.env
 *.log
 **/*.log
 behavior_test_output.txt
+logs/
 collector/**/logs/
 collector/**/archive/
 collector/**/secrets/
+collector/**/profile_learned.json
 
 # Database
 *.db
@@ -51,3 +53,7 @@ venv/
 node_modules/
 dist/
 build/
+
+# Local runtime data
+n8n_data/
+configs/profile_learned.json

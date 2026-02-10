@@ -7,14 +7,16 @@ param(
   [switch]$SelectAllowlist,
   [string]$SelectionPath = "configs\\allowlist_selection.yaml",
   [switch]$IncludeInstalled,
-  [switch]$IncludeRunning
+  [switch]$IncludeRunning,
+  [switch]$TailLogs,
+  [int]$TailLines = 50
 )
 
 $ErrorActionPreference = "Stop"
-$env:PYTHONPATH = "src"
 Set-Location $RepoPath
 
 $dcpRoot = Join-Path $RepoPath "collector\\Data-Collection-Projection"
+$env:PYTHONPATH = (Join-Path $dcpRoot "src")
 $resolvedConfig = $ConfigPath
 if (-not (Test-Path $resolvedConfig)) {
   $resolvedConfig = Join-Path $dcpRoot $ConfigPath
@@ -32,6 +34,17 @@ if (-not $env:DATA_COLLECTOR_ENC_KEY) {
       if ($line) {
         $env:DATA_COLLECTOR_ENC_KEY = ($line -split '=',2)[1].Trim()
       }
+    }
+  }
+}
+
+# Load OPENAI_API_KEY from .env if missing
+if (-not $env:OPENAI_API_KEY) {
+  $envPath = Join-Path $RepoPath ".env"
+  if (Test-Path $envPath) {
+    $line = Get-Content $envPath | Where-Object { $_ -match '^OPENAI_API_KEY=' } | Select-Object -First 1
+    if ($line) {
+      $env:OPENAI_API_KEY = ($line -split '=',2)[1].Trim()
     }
   }
 }
@@ -70,3 +83,11 @@ Start-Process -FilePath "conda" -ArgumentList @("run","-n","DATA_C","python","-m
 Start-Process -FilePath "conda" -ArgumentList @("run","-n","DATA_C","python","-m","sensors.os.file_watcher","--ingest-url","http://127.0.0.1:8080/events","--paths",$WatchPath) -WorkingDirectory $dcpRoot
 
 Write-Host "? DCP + sensors started"
+
+if ($TailLogs) {
+  $logPath = Join-Path $dcpRoot "logs\\collector.log"
+  while (-not (Test-Path $logPath)) {
+    Start-Sleep -Seconds 1
+  }
+  Get-Content -Path $logPath -Wait -Tail $TailLines
+}
