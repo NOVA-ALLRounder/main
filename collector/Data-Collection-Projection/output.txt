@@ -1,0 +1,3 @@
+Reading last events from c:/os_final/collector/Data-Collection-Projection/collector.db...
+
+

@@ -1,0 +1,1 @@
+{"rustc":6817557220965521185,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[7794301842215351014,"build_script_build",false,3112859194100180216]],"local":[{"RerunIfChanged":{"output":"release\\build\\lance-encoding-c454d7f1c231173c\\output","paths":["protos"]}}],"rustflags":[],"config":0,"compile_kind":0}
