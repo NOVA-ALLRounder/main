@@ -1,1 +1,35 @@
+
+# Environment
 .env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+build/
+.output/
+
+# Rust
+target/
+Cargo.lock
+
+# Logs and Data
+logs/
+*.log
+*.db
+*.sqlite
+n8n_data/
+collector_summary.db
+collector.db
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

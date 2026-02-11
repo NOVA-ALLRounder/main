@@ -1,0 +1,11 @@
+C:\os_test\apps\core\target\release\deps\aws_smithy_xml-1c75daf65c793fcb.d: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\decode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\encode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\escape.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\unescape.rs
+
+C:\os_test\apps\core\target\release\deps\libaws_smithy_xml-1c75daf65c793fcb.rlib: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\decode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\encode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\escape.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\unescape.rs
+
+C:\os_test\apps\core\target\release\deps\libaws_smithy_xml-1c75daf65c793fcb.rmeta: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\decode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\encode.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\escape.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\unescape.rs
+
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\lib.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\decode.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\encode.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\escape.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\aws-smithy-xml-0.56.1\src\unescape.rs:

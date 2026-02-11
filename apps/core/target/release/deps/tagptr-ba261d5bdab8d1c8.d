@@ -1,0 +1,12 @@
+C:\os_test\apps\core\target\release\deps\tagptr-ba261d5bdab8d1c8.d: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros\doc.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\atomic.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\non_null.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\ptr.rs
+
+C:\os_test\apps\core\target\release\deps\libtagptr-ba261d5bdab8d1c8.rlib: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros\doc.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\atomic.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\non_null.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\ptr.rs
+
+C:\os_test\apps\core\target\release\deps\libtagptr-ba261d5bdab8d1c8.rmeta: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros\doc.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\atomic.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\non_null.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\ptr.rs
+
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\lib.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\macros\doc.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\atomic.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\non_null.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tagptr-0.2.0\src\imp\ptr.rs:

@@ -1,0 +1,15 @@
+C:\os_test\apps\core\target\release\deps\chrono_tz-27dca4ca11e338c3.d: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\binary_search.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\directory.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezone_impl.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezones.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/directory.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/timezones.rs
+
+C:\os_test\apps\core\target\release\deps\libchrono_tz-27dca4ca11e338c3.rlib: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\binary_search.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\directory.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezone_impl.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezones.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/directory.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/timezones.rs
+
+C:\os_test\apps\core\target\release\deps\libchrono_tz-27dca4ca11e338c3.rmeta: C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\lib.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\binary_search.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\directory.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezone_impl.rs C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezones.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/directory.rs C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/timezones.rs
+
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\lib.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\binary_search.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\directory.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezone_impl.rs:
+C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\chrono-tz-0.8.6\src\timezones.rs:
+C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/directory.rs:
+C:\os_test\apps\core\target\release\build\chrono-tz-6ed8a483bccd7de1\out/timezones.rs:
+
+# env-dep:OUT_DIR=C:\\os_test\\apps\\core\\target\\release\\build\\chrono-tz-6ed8a483bccd7de1\\out
