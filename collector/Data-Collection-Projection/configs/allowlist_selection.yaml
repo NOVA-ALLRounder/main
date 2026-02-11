@@ -1,0 +1,1231 @@
+generated_at: '2026-01-27T07:59:29.003448Z'
+window:
+  start_ts: '2026-01-24T07:59:28.322309Z'
+  end_ts: null
+criteria:
+  min_minutes: 10.0
+  min_blocks: 3
+existing:
+  allowlist_count: 69
+  denylist_count: 6
+recommended_allow: []
+candidates:
+- app: notion.exe
+  sources:
+  - installed
+  - observed
+  - running
+  focus_minutes: 109.08
+  blocks: 49
+  last_seen_ts: '2026-01-27T07:58:11.927229Z'
+- app: code.exe
+  sources:
+  - installed
+  - observed
+  - running
+  focus_minutes: 104.65
+  blocks: 128
+  last_seen_ts: '2026-01-27T07:58:21.963921Z'
+- app: whale.exe
+  sources:
+  - installed
+  - observed
+  - running
+  focus_minutes: 65.12
+  blocks: 61
+  last_seen_ts: '2026-01-27T07:58:27.983027Z'
+- app: kakaotalk.exe
+  sources:
+  - installed
+  - observed
+  - running
+  focus_minutes: 64.93
+  blocks: 141
+  last_seen_ts: '2026-01-27T07:57:57.887887Z'
+- app: chrome.exe
+  sources:
+  - installed
+  - observed
+  focus_minutes: 50.02
+  blocks: 106
+  last_seen_ts: '2026-01-27T07:55:15.627466Z'
+- app: windowsterminal.exe
+  sources:
+  - observed
+  - running
+  focus_minutes: 7.53
+  blocks: 29
+  last_seen_ts: '2026-01-27T07:20:13.840286Z'
+- app: discord.exe
+  sources:
+  - observed
+  - running
+  focus_minutes: 6.15
+  blocks: 18
+  last_seen_ts: '2026-01-27T07:48:57.604812Z'
+- app: zoom.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wudfhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wslservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wpmsvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wmiregistrationservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wmiprvse.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wlanext.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: winsdksetup.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: winlogon.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: wininit.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: windowsmcfcore.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: windowsdesktop-runtime-8.0.16-win-x64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: windowsdesktop-runtime-6.0.8-win-x64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: widgetservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: widgets.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vrol.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vrlsupervisor.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vmcompute.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: veraportmain20.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: veraport-x64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vcredist_x86.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vcredist_x64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vc_redist.x86.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: vc_redist.x64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: v3medic.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: useroobebroker.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: usbipd.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: update.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: unwise.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: unity.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: unity hub.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstallcrossexlocal.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstall.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstall-anaconda3.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstall unity hub.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstall notion.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninstall notion calendar.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: uninst.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: unins001.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: unins000.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ulasupervisor.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ula.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: tuctlsystem.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: textinputhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: tekla.warehouse.windowsservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: tasklist.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: taskhostw.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: systemsettings.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: systemplatformengine.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: system idle process
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: system
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: svchost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: suusermodeworker.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: suservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: suengine.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: studiomodesvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: studio.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: stsess32.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: stsess.exe
+  sources:
+  - installed
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: startmenuexperiencehost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: starplayeragent64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sserviceloopbacksvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sservicekeymonitor.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sserviceagentlaunchersvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sqlwriter.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: spoolsv.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: smss.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: smartthings.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: smartthings.avplayer.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: smartscreen.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: smartacpa.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sketchuppro-2022-0-354-126 (1).exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sketchup.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sihost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: shellhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: shellexperiencehost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: setupiss.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: setupchipset.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: setup.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: services.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: securityhealthsystray.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: securityhealthservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: secure system
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: secondscreendesktop.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: secondscreen.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: searchprotocolhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: searchindexer.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: searchhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sdxhelper.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: sdbinst.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: saservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungwifi_uhb_setting_service.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungsystemsupportservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungsystemsupportengine.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungsettingshost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungnotessystray.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungmulticontrolservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsungcolorengineservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: samsunganalyticsservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: runtimebroker.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: rundll32.exe
+  sources:
+  - installed
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: rtlupd64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: rtkauduservice64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: revitaccelerator.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: revit.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: reportxsvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: removeaccess.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: registry
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: qvwindowsservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: quickshareservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: quicksharecore.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: quickshare.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: quicksearchservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: python.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: python-3.13.7-amd64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: python-3.10.11-amd64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: pycharm64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: presentmonservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: powershell.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: phoneexperiencehost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: pet.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: osgeo4w-setup.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: openconsole.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: onedrivesetup.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: onedrive.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: officeclicktorun.exe
+  sources:
+  - installed
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: obcrossexservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: nprotectuninstaller.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: notion calendar.exe
+  sources:
+  - installed
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: nossvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: nosstarter.npe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: nmuninst18.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: nissrv.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ngciso.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: mwbm.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: mstsc.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: msmpeng.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: msiexec.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: msedgewebview2.exe
+  sources:
+  - installed
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: msedge.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: mpdefendercoreservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: microsoft.notes.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: microsoft.codeanalysis.languageserver.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: memory compression
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: maximserviceshell64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: maximaudioservice64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: mathworksservicehost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: mathworksservicehost-monitor.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: m365copilot.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: lsass.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: lsaiso.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: loopbackexemptionmanager.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: livewallpaperwindowsservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: launcherprereqsetup_x64.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: kollussvr.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: kollusagent.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: kclep.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: jhi_service.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ipfsvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ipf_uf.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ipf_helper.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelgraphicssoftware.service.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelcphdcpsvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelconnectservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelconnectivitynetworkservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelconnect.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelaudioservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intelanalyticsservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: intel_pie_service.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: installer.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: install_ui.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: install.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: innorixet.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: innorixes.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: innorixem.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: imgsf50svc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: imgsf50start_x86.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: imgsf50start_x64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: idbwmservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: idbwm.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: i3gsvcmanager.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: i3gproc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: i3gmainsvc.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: hncupdatetray.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: hncupdateservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: hnctt.exe
+  sources:
+  - installed
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: genuineservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: gamingservicesnet.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: gamingservices.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: fontdrvhost.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: fnplicensingservice64.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: fnplicensingservice.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+- app: ezpdfwslauncher.exe
+  sources:
+  - running
+  focus_minutes: 0.0
+  blocks: 0
+  last_seen_ts: null
+selection:
+  allow: []
+  deny: []
