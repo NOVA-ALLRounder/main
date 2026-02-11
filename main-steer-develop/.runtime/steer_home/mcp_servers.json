@@ -1,0 +1,52 @@
+{
+  "brave-search": {
+    "args": [
+      "-y",
+      "@anthropic-ai/claude-mcp-server-brave"
+    ],
+    "command": "npx",
+    "enabled": false,
+    "env": {
+      "BRAVE_API_KEY": ""
+    }
+  },
+  "filesystem": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "C:\\Users\\Admin"
+    ],
+    "command": "npx",
+    "enabled": false,
+    "env": {}
+  },
+  "google-calendar": {
+    "args": [
+      "-y",
+      "@anthropic-ai/claude-mcp-server-google-calendar"
+    ],
+    "command": "npx",
+    "enabled": false,
+    "env": {}
+  },
+  "memory": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-memory"
+    ],
+    "command": "npx",
+    "enabled": false,
+    "env": {}
+  },
+  "slack": {
+    "args": [
+      "-y",
+      "@anthropic-ai/claude-mcp-server-slack"
+    ],
+    "command": "npx",
+    "enabled": false,
+    "env": {
+      "SLACK_BOT_TOKEN": ""
+    }
+  }
+}

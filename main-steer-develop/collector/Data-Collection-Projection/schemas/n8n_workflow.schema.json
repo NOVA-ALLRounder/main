@@ -1,0 +1,20 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/n8n_workflow.schema.json",
+  "title": "N8nWorkflow",
+  "type": "object",
+  "required": ["name", "nodes", "connections"],
+  "properties": {
+    "name": {"type": "string"},
+    "active": {"type": "boolean"},
+    "settings": {"type": "object"},
+    "nodes": {
+      "type": "array",
+      "items": {"type": "object"},
+      "minItems": 1
+    },
+    "connections": {"type": "object"},
+    "meta": {"type": "object"}
+  },
+  "additionalProperties": true
+}
