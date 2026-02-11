@@ -1,0 +1,53 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Swift
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Secrets & Config
+apps/core/credentials.json
+apps/core/.env
+.env
+*.env
+
+# Logs
+*.log
+**/*.log
+behavior_test_output.txt
+collector/**/logs/
+collector/**/archive/
+collector/**/secrets/
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+apps/core/steer.db
+apps/core/steer_mem/
+collector/**/collector*.db
+collector/**/collector_summary*.db
+collector/**/summary*.db
+collector/**/database.sqlite
+collector/**/archive/**/*.jsonl.gz
+collector/**/archive/**/manifest.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local data artifacts
+*.lance
+
+# Dependencies
+node_modules/
+dist/
+build/

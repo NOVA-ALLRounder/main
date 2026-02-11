@@ -1386,7 +1386,7 @@ function VerificationActionsCard() {
     const backendBuildState = runtimeResult?.backend_build_ok;
     const frontendBuildState = runtimeResult?.frontend_build_ok;
     const e2eState = runtimeResult?.e2e_passed;
-    const buildLabel = (value?: boolean) => (value === undefined ? "—" : value ? "OK" : "Fail");
+    const buildLabel = (value?: boolean | null) => (value == null ? "—" : value ? "OK" : "Fail");
 
     return (
         <Card className="h-auto mb-4 border-white/10 bg-white/5">
@@ -2492,7 +2492,7 @@ function RoutineRunHistory() {
             <div className="space-y-1">
                 {runs.slice(0, 3).map(run => (
                     <div key={run.id} className="flex justify-between text-[10px] bg-white/5 p-1 rounded">
-                        <span className="text-purple-200">{run.routine_name}</span>
+                        <span className="text-purple-200">Routine #{run.routine_id}</span>
                         <div className="flex gap-2">
                             <span className={run.status === "success" ? "text-emerald-300" : "text-rose-300"}>
                                 {run.status.toUpperCase()}
@@ -2517,11 +2517,8 @@ function VerificationRunHistory() {
             <div className="space-y-1">
                 {runs.slice(0, 3).map(run => (
                     <div key={run.id} className="flex justify-between text-[10px] bg-white/5 p-1 rounded">
-                        <span className={
-                            run.status === "success" ? "text-emerald-300" :
-                                run.status === "failure" ? "text-rose-300" : "text-amber-300"
-                        }>
-                            {run.mode.toUpperCase()}
+                        <span className={run.ok ? "text-emerald-300" : "text-rose-300"}>
+                            {run.kind.toUpperCase()}
                         </span>
                         <span className="text-muted-foreground">
                             {format(new Date(run.created_at), "MM/dd HH:mm")}

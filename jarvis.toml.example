@@ -1,0 +1,47 @@
+# JARVIS Configuration Example
+# Copy to ~/.config/steer/jarvis.toml and customize
+
+[jarvis]
+# Privacy mode: "basic", "full", or "none"
+privacy_mode = "basic"
+
+# Maximum cost per hour (in USD)
+max_cost_per_hour = 1.0
+
+# Enable autonomous mode
+enable_autonomous = false
+
+[channels.telegram]
+enabled = true
+rate_limit_per_min = 10
+# Allowed Telegram user IDs (leave empty to allow all)
+allowed_users = []
+
+[channels.web]
+enabled = true
+rate_limit_per_min = 30
+allowed_users = []
+
+[channels.voice]
+enabled = false
+rate_limit_per_min = 20
+allowed_users = []
+
+[skills.computer_use]
+enabled = false  # Disabled by default (risky)
+max_steps = 50
+
+[skills.email]
+enabled = true
+
+[skills.telegram]
+enabled = true
+
+[autonomous]
+enabled = false
+check_interval_secs = 30
+# Paths to monitor for autonomous actions
+observe_paths = [
+    # "C:\\Users\\Admin\\Downloads",
+    # "C:\\Users\\Admin\\Documents"
+]

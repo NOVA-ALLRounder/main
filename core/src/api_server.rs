@@ -1,13 +1,13 @@
 use axum::{
     extract::{State, Query, Path},
-    http::{StatusCode, HeaderValue},
+    http::{StatusCode, HeaderValue, Method, header},
     routing::{get, post},
     response::IntoResponse,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 use crate::{consistency_check, db, llm_gateway, monitor, pattern_detector, feedback_collector, integrations, n8n_api, chat_sanitize, context_pruning, project_scanner, runtime_verification, quality_scorer, visual_verification, semantic_verification, performance_verification, judgment, release_gate, tool_result_guard, intent_router, slot_filler, plan_builder, execution_controller, verification_engine, approval_gate, nl_store};
 use sysinfo::System;
@@ -279,9 +279,17 @@ async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
     let api_key = std::env::var("STEER_API_KEY").unwrap_or_default();
-    
-    // If no key configured, allow all (Localhost Dev Mode)
+    let env_name = std::env::var("STEER_ENV").unwrap_or_default().to_lowercase();
+    let require_api_key = std::env::var("STEER_REQUIRE_API_KEY")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+        || env_name == "production";
+
+    // If key is missing, only allow permissive local mode when explicitly not required.
     if api_key.is_empty() {
+        if require_api_key {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
         return Ok(next.run(req).await);
     }
 
@@ -311,12 +319,26 @@ pub async fn start_api_server(llm_client: Option<llm_gateway::LLMClient>) -> any
         "tauri://localhost".parse::<HeaderValue>().expect("Invalid CORS origin"),
         "http://127.0.0.1:5173".parse::<HeaderValue>().expect("Invalid CORS origin"),
         "http://127.0.0.1:5174".parse::<HeaderValue>().expect("Invalid CORS origin"),
+        "http://127.0.0.1:5680".parse::<HeaderValue>().expect("Invalid CORS origin"),
     ];
     
     let cors = CorsLayer::new()
         .allow_origin(allowed_origins)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
+    if std::env::var("STEER_API_KEY").unwrap_or_default().is_empty() {
+        log::warn!(
+            "STEER_API_KEY is not set; API is running in local permissive mode. \
+Set STEER_REQUIRE_API_KEY=1 (or STEER_ENV=production) to enforce authentication."
+        );
+    }
 
     let app = Router::new()
         .route("/", get(root_handler))

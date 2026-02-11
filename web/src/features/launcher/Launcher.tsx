@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, Zap, Activity, Terminal, Pin } from "lucide-react"; // Added Pin icon
-import { sendChatMessage, approveRecommendation, agentIntent, agentPlan, agentExecute, agentVerify, agentApprove } from "@/lib/api";
+import { Search, Zap, Activity, Terminal, Pin, Settings, HelpCircle, X } from "lucide-react"; // Added Settings, HelpCircle, X icons
+import { sendJarvisCommand, approveRecommendation, agentIntent, agentPlan, agentExecute, agentVerify, agentApprove } from "@/lib/api";
 import { useRecommendations } from "@/lib/hooks";
 import { emit } from "@tauri-apps/api/event"; // Added emit
 import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window"; // Added getAllWindows
+import { exit } from "@tauri-apps/plugin-process"; // Added exit for close button
 import ReactMarkdown, { type Components } from "react-markdown"; // Added ReactMarkdown
 
 type LauncherResult = {
@@ -27,10 +28,11 @@ type ApprovalContext = {
 };
 
 const markdownComponents: Components = {
-    code({ inline, children, ...props }) {
-        return !inline ? (
+    code({ className, children, ...props }) {
+        const isBlock = Boolean(className);
+        return isBlock ? (
             <div className="bg-black/50 p-2 rounded-md my-2 overflow-x-auto font-mono text-xs border border-white/10">
-                <code {...props}>{children}</code>
+                <code className={className} {...props}>{children}</code>
             </div>
         ) : (
             <code className="bg-white/10 px-1 py-0.5 rounded font-mono text-xs" {...props}>
@@ -39,6 +41,10 @@ const markdownComponents: Components = {
         );
     },
 };
+
+type NavigableItem =
+    | { type: "result"; data: LauncherResult; id: string }
+    | { type: "recommendation"; data: { id: number }; id: string };
 
 export default function Launcher() {
     const [input, setInput] = useState("");
@@ -100,9 +106,9 @@ export default function Launcher() {
 
     // Combine all navigable items
     const pendingRecs = recs?.filter(r => r.status === 'pending') ?? [];
-    const navigableItems = [
-        ...results.map((r, i) => ({ type: 'result', data: r, id: `res-${i}` })),
-        ...pendingRecs.map(r => ({ type: 'recommendation', data: r, id: `rec-${r.id}` }))
+    const navigableItems: NavigableItem[] = [
+        ...results.map((r, i) => ({ type: 'result' as const, data: r, id: `res-${i}` })),
+        ...pendingRecs.map(r => ({ type: 'recommendation' as const, data: r, id: `rec-${r.id}` }))
     ];
 
     // Reset selection when items change
@@ -132,7 +138,7 @@ export default function Launcher() {
         // [Phase 6.3] Performance Test Command
         if (input.trim() === "test_perf") {
             const start = performance.now();
-            const dummyItems = Array.from({ length: 1000 }, (_, i) => ({
+            const dummyItems: LauncherResult[] = Array.from({ length: 1000 }, (_, i) => ({
                 type: 'response',
                 content: `**Perf Item #${i + 1}**: This is a dummy item to test rendering performance. ${Math.random()}`
             }));
@@ -146,75 +152,84 @@ export default function Launcher() {
         }
 
         try {
-            const intentRes = await agentIntent(input);
-            if (intentRes.missing_slots && intentRes.missing_slots.length > 0) {
-                const followUp = intentRes.follow_up || "추가 정보가 필요합니다.";
-                setResults([{
-                    type: 'response',
-                    content: `**추가 입력 필요**\n- Missing: ${intentRes.missing_slots.join(", ")}\n- ${followUp}`
-                }]);
-                setLoading(false);
-                return;
+            // JARVIS is the default handler for all inputs
+            const jarvisRes = await sendJarvisCommand(input);
+
+            if (jarvisRes.success) {
+                setResults([{ type: 'response', content: `🤖 JARVIS: ${jarvisRes.message}` }]);
+                triggerSuccess();
+            } else {
+                setResults([{ type: 'error', content: `❌ ${jarvisRes.message}` }]);
+                triggerError();
             }
-
-            const planRes = await agentPlan(intentRes.session_id);
-            setLastPlanId(planRes.plan_id);
-            if (planRes.missing_slots?.length) {
-                setResults([{
-                    type: 'response',
-                    content: `**추가 입력 필요**\n- Missing: ${planRes.missing_slots.join(", ")}`
-                }]);
-                setLoading(false);
-                return;
-            }
-            const execRes = await agentExecute(planRes.plan_id);
-            setLastStatus(execRes.status);
-            const verifyRes = await agentVerify(planRes.plan_id);
-
-            const summaryLines = [
-                `**Intent**: ${intentRes.intent} (${Math.round(intentRes.confidence * 100)}%)`,
-                `**Status**: ${execRes.status}`,
-                `**Verify**: ${verifyRes.ok ? "ok" : "issues"}`,
-                execRes.resume_from != null ? `**Next Step**: ${execRes.resume_from + 1}` : "",
-            ];
-            const logLines = execRes.logs?.slice(0, 10).map(line => `- ${line}`) ?? [];
-            const verifyLines = verifyRes.issues?.length ? verifyRes.issues.map(i => `- ${i}`) : [];
-            const manualLines = execRes.manual_steps?.length
-                ? execRes.manual_steps.map(step => `- ${step}`)
-                : [];
-
-            if (execRes.status === "approval_required" && execRes.approval?.action) {
-                setPendingApproval({
-                    planId: planRes.plan_id,
-                    action: execRes.approval.action,
-                    message: execRes.approval.message,
-                    riskLevel: execRes.approval.risk_level,
-                    policy: execRes.approval.policy,
-                });
-            }
-
-            setResults([{
-                type: 'response',
-                content: [
-                    summaryLines.filter(Boolean).join("\n"),
-                    logLines.length ? `\n**Logs**\n${logLines.join("\n")}` : "",
-                    verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : "",
-                    manualLines.length ? `\n**Manual Steps**\n${manualLines.join("\n")}` : "",
-                    execRes.status === "approval_required" && execRes.approval
-                        ? `\n**Approval Required**\n- Action: ${execRes.approval.action}\n- Risk: ${execRes.approval.risk_level}\n- Policy: ${execRes.approval.policy}\n- ${execRes.approval.message}`
-                        : ""
-                ].join("\n")
-            }]);
             setInput("");
-            triggerSuccess();
-        } catch (error) {
-            console.error("Launcher send failed", error);
+        } catch (chatError) {
+            console.log("Chat endpoint failed, trying agent flow...", chatError);
+            // Fallback to agent flow for automation tasks
             try {
-                const res = await sendChatMessage(input);
-                setResults([{ type: 'response', content: res.response }]);
+                const intentRes = await agentIntent(input);
+                if (intentRes.missing_slots && intentRes.missing_slots.length > 0) {
+                    const followUp = intentRes.follow_up || "추가 정보가 필요합니다.";
+                    setResults([{
+                        type: 'response',
+                        content: `**추가 입력 필요**\n- Missing: ${intentRes.missing_slots.join(", ")}\n- ${followUp}`
+                    }]);
+                    setLoading(false);
+                    return;
+                }
+
+                const planRes = await agentPlan(intentRes.session_id);
+                setLastPlanId(planRes.plan_id);
+                if (planRes.missing_slots?.length) {
+                    setResults([{
+                        type: 'response',
+                        content: `**추가 입력 필요**\n- Missing: ${planRes.missing_slots.join(", ")}`
+                    }]);
+                    setLoading(false);
+                    return;
+                }
+                const execRes = await agentExecute(planRes.plan_id);
+                setLastStatus(execRes.status);
+                const verifyRes = await agentVerify(planRes.plan_id);
+
+                const summaryLines = [
+                    `**Intent**: ${intentRes.intent} (${Math.round(intentRes.confidence * 100)}%)`,
+                    `**Status**: ${execRes.status}`,
+                    `**Verify**: ${verifyRes.ok ? "ok" : "issues"}`,
+                    execRes.resume_from != null ? `**Next Step**: ${execRes.resume_from + 1}` : "",
+                ];
+                const logLines = execRes.logs?.slice(0, 10).map(line => `- ${line}`) ?? [];
+                const verifyLines = verifyRes.issues?.length ? verifyRes.issues.map(i => `- ${i}`) : [];
+                const manualLines = execRes.manual_steps?.length
+                    ? execRes.manual_steps.map(step => `- ${step}`)
+                    : [];
+
+                if (execRes.status === "approval_required" && execRes.approval?.action) {
+                    setPendingApproval({
+                        planId: planRes.plan_id,
+                        action: execRes.approval.action,
+                        message: execRes.approval.message,
+                        riskLevel: execRes.approval.risk_level,
+                        policy: execRes.approval.policy,
+                    });
+                }
+
+                setResults([{
+                    type: 'response',
+                    content: [
+                        summaryLines.filter(Boolean).join("\n"),
+                        logLines.length ? `\n**Logs**\n${logLines.join("\n")}` : "",
+                        verifyLines.length ? `\n**Verify Issues**\n${verifyLines.join("\n")}` : "",
+                        manualLines.length ? `\n**Manual Steps**\n${manualLines.join("\n")}` : "",
+                        execRes.status === "approval_required" && execRes.approval
+                            ? `\n**Approval Required**\n- Action: ${execRes.approval.action}\n- Risk: ${execRes.approval.risk_level}\n- Policy: ${execRes.approval.policy}\n- ${execRes.approval.message}`
+                            : ""
+                    ].join("\n")
+                }]);
                 setInput("");
                 triggerSuccess();
-            } catch {
+            } catch (agentError) {
+                console.error("Both chat and agent flows failed", agentError);
                 setResults([{ type: 'error', content: "Failed to reach agent." }]);
                 triggerError();
             }
@@ -392,6 +407,16 @@ export default function Launcher() {
 
     // Keyboard Handler
     const handleKeyDown = async (e: React.KeyboardEvent) => {
+        if (e.key === "Escape") {
+            e.preventDefault();
+            try {
+                await getCurrentWindow().hide();
+            } catch (error) {
+                console.error("Failed to hide window:", error);
+            }
+            return;
+        }
+
         if (e.key === "ArrowDown") {
             e.preventDefault();
             setSelectedIndex(prev => (prev + 1) % navigableItems.length);
@@ -431,6 +456,43 @@ export default function Launcher() {
                 console.error("Failed to hide window:", error);
             }
         }
+    };
+
+    const handleClose = async () => {
+        try {
+            await exit(0);
+        } catch (error) {
+            console.error("Failed to close app:", error);
+        }
+    };
+
+    const handleSettings = () => {
+        // TODO: Open settings panel or navigate to settings page
+        setResults([{
+            type: 'response',
+            content: '**Settings**\n⚙️ 설정 기능은 개발 중입니다.\n\n사용 가능한 환경 변수:\n- `OPENAI_API_KEY`: LLM API 키\n- `STEER_API_PORT`: API 서버 포트 (기본: 5680)'
+        }]);
+    };
+
+    const handleHelp = () => {
+        setResults([{
+            type: 'response',
+            content: `**Help**
+📚 사용 가능한 명령:
+- "인터넷 켜줘" - 브라우저 열기
+- "이메일 보여줘" - Gmail 확인
+- "오늘 일정 뭐야?" - 캘린더 확인
+- "매일 아침 9시 뉴스 요약해줘" - 루틴 생성
+- "/capture" - 화면 분석
+- "화면 클릭해줘" - 자동화 실행
+
+⌨️ 단축키:
+- **Esc**: 창 숨기기
+- **Enter**: 명령 실행 / 추천 승인
+- **↑/↓**: 항목 탐색
+
+🔗 [GitHub](https://github.com/NOVA-ALLRounder/main)`
+        }]);
     };
 
     return (
@@ -669,9 +731,31 @@ export default function Launcher() {
                         <div className="w-2 h-2 rounded-full bg-green-500 shadow-lg shadow-green-500/50"></div>
                         <span className="text-xs text-gray-500">Engine Active</span>
                     </div>
-                    <div className="flex gap-4 text-xs text-gray-600">
-                        <span className="hover:text-gray-400 cursor-pointer">Settings</span>
-                        <span className="hover:text-gray-400 cursor-pointer">Help</span>
+                    <div className="flex items-center gap-3 text-xs text-gray-600">
+                        <button
+                            onClick={handleSettings}
+                            className="flex items-center gap-1 hover:text-gray-400 cursor-pointer transition-colors"
+                            title="Settings"
+                        >
+                            <Settings className="w-3.5 h-3.5" />
+                            <span>Settings</span>
+                        </button>
+                        <button
+                            onClick={handleHelp}
+                            className="flex items-center gap-1 hover:text-gray-400 cursor-pointer transition-colors"
+                            title="Help"
+                        >
+                            <HelpCircle className="w-3.5 h-3.5" />
+                            <span>Help</span>
+                        </button>
+                        <button
+                            onClick={handleClose}
+                            className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors ml-2"
+                            title="Exit Application"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Exit</span>
+                        </button>
                     </div>
                 </div>
             </motion.div>

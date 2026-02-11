@@ -1,0 +1,14 @@
+# Core
+PyYAML>=6.0
+cryptography>=42.0.0
+
+# Sensors / OS automation (Windows)
+uiautomation>=2.0.0
+pynput>=1.7.0
+pywin32>=306
+
+# LLM
+openai>=1.0.0
+
+# Optional env helper
+python-dotenv>=1.0.0

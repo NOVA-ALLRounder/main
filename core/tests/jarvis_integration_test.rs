@@ -25,7 +25,7 @@ async fn test_full_workflow() {
     let count = registry.count().await;
     assert_eq!(count, 3, "Should have 3 skills registered");
 
-    println!("✅ Full workflow test: Skills registered successfully");
+    println!("??Full workflow test: Skills registered successfully");
 }
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn test_skill_registration() {
     assert!(telegram_eligibility.eligible || !telegram_eligibility.eligible,
             "Telegram skill eligibility check should complete");
 
-    println!("✅ Skill registration test: All skills registered with correct metadata");
+    println!("??Skill registration test: All skills registered with correct metadata");
 }
 
 #[tokio::test]
@@ -91,7 +91,7 @@ async fn test_parallel_execution() {
 
     // Note: Actual parallel execution testing requires more complex setup
     // This test verifies the infrastructure is in place
-    println!("✅ Parallel execution test: Infrastructure verified");
+    println!("??Parallel execution test: Infrastructure verified");
 }
 
 #[tokio::test]
@@ -117,13 +117,13 @@ async fn test_skill_execution_computer_use() {
 
     let result = skill.execute(ctx).await;
     // May fail if no display available, but should not panic
-    assert!(result.success || !result.success,
-            "Screenshot execution should complete without panic");
+    assert!(!result.message.is_empty(),
+            "Screenshot execution should return a diagnostic message");
 
     if !result.success {
         println!("Expected result (may fail without display): {}", result.message);
     } else {
-        println!("✅ Screenshot executed successfully");
+        println!("??Screenshot executed successfully");
     }
 }
 
@@ -152,14 +152,14 @@ async fn test_skill_execution_email() {
 
     let result = skill.execute(ctx).await;
     // Should handle missing credentials gracefully
-    assert!(result.success || !result.success,
-            "Email execution should complete without panic");
+    assert!(!result.message.is_empty(),
+            "Email execution should return success/error details");
 
     if !result.success {
         println!("Expected result (missing credentials): {}", result.message);
     }
 
-    println!("✅ Email skill handles missing credentials gracefully");
+    println!("??Email skill handles missing credentials gracefully");
 }
 
 #[tokio::test]
@@ -186,14 +186,14 @@ async fn test_skill_execution_telegram() {
 
     let result = skill.execute(ctx).await;
     // Should handle missing credentials gracefully
-    assert!(result.success || !result.success,
-            "Telegram execution should complete without panic");
+    assert!(!result.message.is_empty(),
+            "Telegram execution should return success/error details");
 
     if !result.success {
         println!("Expected result (missing credentials): {}", result.message);
     }
 
-    println!("✅ Telegram skill handles missing credentials gracefully");
+    println!("??Telegram skill handles missing credentials gracefully");
 }
 
 #[tokio::test]
@@ -218,7 +218,7 @@ async fn test_error_recovery() {
     let result = registry.execute("computer_use", ctx).await;
     // Should handle error gracefully
     assert!(!result.success, "Invalid action should return error");
-    println!("✅ Error recovery test: Invalid action handled gracefully");
+    println!("??Error recovery test: Invalid action handled gracefully");
 }
 
 #[tokio::test]
@@ -251,7 +251,7 @@ async fn test_skill_metadata() {
     assert!(telegram_actions.contains(&"send_message"), "Should have send_message action");
     assert!(telegram_actions.contains(&"send_photo"), "Should have send_photo action");
 
-    println!("✅ Skill metadata test: All skills have complete metadata");
+    println!("??Skill metadata test: All skills have complete metadata");
 }
 
 #[tokio::test]
@@ -283,7 +283,7 @@ async fn test_eligibility_checks() {
         println!("Telegram not eligible: {}", telegram_eligibility.reason.unwrap());
     }
 
-    println!("✅ Eligibility checks test: All skills checked successfully");
+    println!("??Eligibility checks test: All skills checked successfully");
 }
 
 #[tokio::test]
@@ -314,7 +314,7 @@ async fn test_skill_registry_operations() {
     let nonexistent_skill = registry.get("nonexistent").await;
     assert!(nonexistent_skill.is_none(), "Should not find nonexistent skill");
 
-    println!("✅ Registry operations test: All operations working correctly");
+    println!("??Registry operations test: All operations working correctly");
 }
 
 #[tokio::test]
@@ -359,7 +359,7 @@ async fn test_concurrent_skill_execution() {
     assert!(result1.success || !result1.success, "First execution should complete");
     assert!(result2.success || !result2.success, "Second execution should complete");
 
-    println!("✅ Concurrent execution test: Multiple skills can execute in parallel");
+    println!("??Concurrent execution test: Multiple skills can execute in parallel");
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn test_skill_result_creation() {
     assert_eq!(error.message, "Something went wrong");
     assert!(error.data.is_none());
 
-    println!("✅ SkillResult creation test: All result types created correctly");
+    println!("??SkillResult creation test: All result types created correctly");
 }
 
 #[test]
@@ -400,5 +400,5 @@ fn test_user_context_creation() {
     assert_eq!(context.recent_apps.len(), 1);
     assert_eq!(context.recent_sites.len(), 1);
 
-    println!("✅ UserContext creation test: Context created successfully");
+    println!("??UserContext creation test: Context created successfully");
 }

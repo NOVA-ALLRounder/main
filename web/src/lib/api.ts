@@ -66,10 +66,16 @@ export const API_BASE_URL =
     import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
     "http://localhost:5680/api";
 
+const API_KEY = import.meta.env.VITE_STEER_API_KEY?.trim();
+
 const api = axios.create({
     baseURL: API_BASE_URL,
     timeout: 5000,
 });
+
+if (API_KEY) {
+    api.defaults.headers.common.Authorization = `Bearer ${API_KEY}`;
+}
 
 // Paranoid: Validate all responses with Zod
 export async function fetchSystemStatus(): Promise<SystemStatus> {
@@ -376,5 +382,118 @@ export async function sendChatMessage(message: string): Promise<{ response: stri
             return { response: "❌ Network or Server Error. Check console logs." };
         }
         return { response: "❌ Unknown Error" };
+    }
+}
+
+export async function sendJarvisCommand(text: string): Promise<{ success: boolean; message: string; data?: unknown }> {
+    try {
+        const { data } = await api.post("/jarvis", { text });
+        return data;
+    } catch (e) {
+        if (axios.isAxiosError(e)) {
+            console.error("JARVIS Error:", e.response?.data || e.message);
+            return { success: false, message: "❌ Network or Server Error. Check console logs." };
+        }
+        return { success: false, message: "❌ Unknown Error" };
+    }
+}
+
+// ============================================================================
+// JARVIS Multi-Channel API (Phase 1-5 Integration)
+// ============================================================================
+
+export interface JarvisMessage {
+    text: string;
+    session_key?: string;
+    metadata?: Record<string, string>;
+}
+
+export interface JarvisResponse {
+    success: boolean;
+    message: string;
+    data?: unknown;
+}
+
+export interface JarvisSkill {
+    name: string;
+    description: string;
+    version: string;
+    actions: string[];
+    eligible: boolean;
+    reason?: string;
+    platform?: string;
+    tags: string[];
+}
+
+export interface JarvisSession {
+    session_key: string;
+    state: string;
+    created_at: number;
+    last_activity: number;
+}
+
+export async function sendJarvisWebMessage(message: JarvisMessage): Promise<JarvisResponse> {
+    try {
+        const { data } = await api.post("/jarvis/channels/web/message", message);
+        return data;
+    } catch (e) {
+        if (axios.isAxiosError(e)) {
+            console.error("JARVIS Web Channel Error:", e.response?.data || e.message);
+            return { success: false, message: "❌ Failed to send message through web channel" };
+        }
+        return { success: false, message: "❌ Unknown Error" };
+    }
+}
+
+export async function fetchJarvisSkills(): Promise<JarvisSkill[]> {
+    try {
+        const { data } = await api.get("/jarvis/skills");
+        return data.skills || [];
+    } catch (e) {
+        console.error("Failed to fetch JARVIS skills:", e);
+        return [];
+    }
+}
+
+export async function executeJarvisSkill(
+    skillName: string,
+    action: string,
+    params: Record<string, unknown>
+): Promise<JarvisResponse> {
+    try {
+        const { data } = await api.post(`/jarvis/skills/${skillName}/execute`, {
+            action,
+            params
+        });
+        return data;
+    } catch (e) {
+        if (axios.isAxiosError(e)) {
+            console.error("JARVIS Skill Execution Error:", e.response?.data || e.message);
+            return { success: false, message: `❌ Failed to execute ${skillName}.${action}` };
+        }
+        return { success: false, message: "❌ Unknown Error" };
+    }
+}
+
+export async function fetchJarvisSessions(): Promise<JarvisSession[]> {
+    try {
+        const { data } = await api.get("/jarvis/sessions");
+        return data.sessions || [];
+    } catch (e) {
+        console.error("Failed to fetch JARVIS sessions:", e);
+        return [];
+    }
+}
+
+export async function startJarvisAutonomous(): Promise<JarvisResponse> {
+    try {
+        const { data } = await api.post("/jarvis/autonomous/start");
+        return data;
+    } catch (e) {
+        if (axios.isAxiosError(e)) {
+            console.error("JARVIS Autonomous Start Error:", e.response?.data || e.message);
+            return { success: false, message: "❌ Failed to start autonomous mode" };
+        }
+        return { success: false, message: "❌ Unknown Error" };
     }
 }

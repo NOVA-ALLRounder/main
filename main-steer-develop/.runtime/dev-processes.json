@@ -1,0 +1,17 @@
+﻿{
+    "saved_at":  "2026-02-10T10:51:59",
+    "core":  {
+                 "out_log":  null,
+                 "pid":  28948,
+                 "err_log":  null,
+                 "started_at":  "2026-02-10T10:51:59"
+             },
+    "core_url":  "http://127.0.0.1:5680/api/health",
+    "web":  {
+                "out_log":  null,
+                "pid":  34340,
+                "err_log":  null,
+                "started_at":  "2026-02-10T10:51:59"
+            },
+    "web_url":  "http://127.0.0.1:5173"
+}

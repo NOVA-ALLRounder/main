@@ -60,6 +60,13 @@ lettre = { version = "0.11.19", features = ["tokio1-native-tls", "builder"] }
 teloxide = { version = "0.17.0", features = ["macros"] }
 tokio-util = { version = "0.7.18", features = ["compat"] }
 
+# Observability - OpenTelemetry
+opentelemetry = "0.22"
+opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.15", features = ["tokio"] }
+opentelemetry-semantic-conventions = "0.14"
+prometheus = "0.13"
+
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

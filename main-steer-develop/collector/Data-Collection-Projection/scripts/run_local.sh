@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PYTHONPATH="${PYTHONPATH:-}:src"
+
+python -m collector.main --config configs/config.yaml
