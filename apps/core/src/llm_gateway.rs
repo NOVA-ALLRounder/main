@@ -1,15 +1,19 @@
-use anyhow::Result;
-use reqwest::Client;
-use serde_json::{json, Value};
-use serde::{Serialize, Deserialize};
-use std::env;
-use crate::recommendation::AutomationProposal;
 use crate::context_pruning;
 use crate::mcp_client;
+use crate::recommendation::AutomationProposal;
+use anyhow::Result;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::env;
 
-
+use async_trait::async_trait;
 use std::time::Duration;
 use tokio::time::sleep;
+
+// =====================================================
+// Phase 30: Intelligence Upgrade (Supervisor + Thinking)
+// =====================================================
 
 // =====================================================
 // Phase 29: Robust JSON Recovery (Advanced CLI)
@@ -19,18 +23,19 @@ use tokio::time::sleep;
 /// Handles: markdown blocks, partial JSON, common syntax errors
 pub fn recover_json(raw: &str) -> Option<Value> {
     // Step 1: Clean markdown code blocks
-    let mut clean = raw.trim()
+    let clean = raw
+        .trim()
         .trim_start_matches("```json")
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim()
         .to_string();
-    
+
     // Step 2: Try direct parse
     if let Ok(v) = serde_json::from_str::<Value>(&clean) {
         return Some(v);
     }
-    
+
     // Step 3: Find first { and last } and extract
     if let (Some(start), Some(end)) = (clean.find('{'), clean.rfind('}')) {
         if start < end {
@@ -38,16 +43,14 @@ pub fn recover_json(raw: &str) -> Option<Value> {
             if let Ok(v) = serde_json::from_str::<Value>(json_candidate) {
                 return Some(v);
             }
-            
+
             // Step 4: Try fixing common errors
             // 4a: Trailing comma before }
-            let fixed = json_candidate
-                .replace(",}", "}")
-                .replace(",]", "]");
+            let fixed = json_candidate.replace(",}", "}").replace(",]", "]");
             if let Ok(v) = serde_json::from_str::<Value>(&fixed) {
                 return Some(v);
             }
-            
+
             // 4b: Unquoted keys (simple cases)
             let re_unquoted = regex::Regex::new(r#"(\{|,)\s*(\w+)\s*:"#).ok()?;
             let with_quotes = re_unquoted.replace_all(&fixed, r#"$1"$2":"#);
@@ -56,35 +59,101 @@ pub fn recover_json(raw: &str) -> Option<Value> {
             }
         }
     }
-    
+
     // Step 5: Look for action pattern in text
     // e.g., "I will click" -> {"action": "click_visual", "description": "..."}
     let lower = clean.to_lowercase();
     if lower.contains("done") || lower.contains("goal achieved") || lower.contains("completed") {
         return Some(json!({"action": "done"}));
     }
-    
+
     None
 }
 
-#[derive(Clone)]
-pub struct LLMClient {
-    client: Client,
-    api_key: String,
-    model: String,
+#[async_trait]
+pub trait LLMClient: Send + Sync {
+    async fn plan_next_step(
+        &self,
+        goal: &str,
+        ui_tree: &Value,
+        action_history: &[String],
+    ) -> Result<Value>;
+    async fn chat_completion(&self, messages: Vec<Value>) -> Result<String>;
+    async fn plan_vision_step(
+        &self,
+        goal: &str,
+        image_b64: &str,
+        history: &[String],
+    ) -> Result<Value>;
+    async fn analyze_routine(&self, logs: &[String]) -> Result<String>;
+    async fn recommend_automation(&self, logs: &[String]) -> Result<String>;
+    async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String>;
+    async fn fix_n8n_workflow(
+        &self,
+        user_prompt: &str,
+        bad_json: &str,
+        error_msg: &str,
+    ) -> Result<String, Box<dyn std::error::Error>>;
+    async fn get_embedding(&self, text: &str) -> Result<Vec<f32>>;
+    async fn propose_workflow(
+        &self,
+        logs: &[String],
+    ) -> Result<AutomationProposal, Box<dyn std::error::Error>>;
+    async fn analyze_tendency(&self, logs: &[String]) -> Result<String>;
+    async fn parse_intent(&self, user_input: &str) -> Result<Value>;
+    async fn parse_intent_with_history(
+        &self,
+        user_input: &str,
+        history: &[crate::db::ChatMessage],
+    ) -> Result<Value>;
+    async fn generate_recommendation_from_pattern(
+        &self,
+        pattern_description: &str,
+        sample_events: &[String],
+    ) -> Result<AutomationProposal>;
+    async fn analyze_screen(
+        &self,
+        prompt: &str,
+        image_b64: &str,
+    ) -> Result<String, Box<dyn std::error::Error>>;
+    async fn find_element_coordinates(
+        &self,
+        element_description: &str,
+        image_b64: &str,
+    ) -> Result<Option<(i32, i32)>>;
+    async fn score_quality(
+        &self,
+        system_prompt: &str,
+        payload: &serde_json::Value,
+    ) -> Result<String>;
+    async fn propose_solution_stack(&self, goal: &str) -> Result<Value>;
+    async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String>;
+    fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String);
+    async fn analyze_user_feedback(
+        &self,
+        feedback: &str,
+        history_summary: &str,
+    ) -> Result<FeedbackAnalysis>;
 }
 
-impl LLMClient {
+#[derive(Clone)]
+pub struct OpenAILLMClient {
+    pub client: reqwest::Client,
+    pub api_key: String,
+    pub model: String,
+}
 
+impl OpenAILLMClient {
     pub fn new() -> Result<Self> {
         dotenv::dotenv().ok(); // Load .env
-        let api_key = env::var("OPENAI_API_KEY").map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set in .env"))?;
+        let api_key = env::var("OPENAI_API_KEY")
+            .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set in .env"))?;
         let client = Client::builder()
             .no_proxy()
-            .timeout(Duration::from_secs(120))         // [Fix] Total request timeout
-            .connect_timeout(Duration::from_secs(10))  // [Fix] Connection timeout
+            .timeout(Duration::from_secs(120)) // [Fix] Total request timeout
+            .connect_timeout(Duration::from_secs(10)) // [Fix] Connection timeout
             .build()?;
-        
+
         Ok(Self {
             client,
             api_key,
@@ -92,22 +161,241 @@ impl LLMClient {
         })
     }
 
+    fn history_contains_case_insensitive(history: &[String], needle: &str) -> bool {
+        let needle_lower = needle.to_lowercase();
+        history
+            .iter()
+            .any(|h| h.to_lowercase().contains(&needle_lower))
+    }
+
+    fn ordered_apps_in_goal(goal: &str) -> Vec<&'static str> {
+        let goal_lower = goal.to_lowercase();
+        let app_catalog: [&'static str; 7] = [
+            "Calendar",
+            "Safari",
+            "Finder",
+            "TextEdit",
+            "Notes",
+            "Calculator",
+            "Mail",
+        ];
+
+        let mut found: Vec<(usize, &'static str)> = app_catalog
+            .iter()
+            .filter_map(|app| goal_lower.find(&app.to_lowercase()).map(|idx| (idx, *app)))
+            .collect();
+        found.sort_by_key(|(idx, _)| *idx);
+        found.into_iter().map(|(_, app)| app).collect()
+    }
+
+    fn cmd_sequence_from_goal(goal: &str) -> Vec<char> {
+        let text = goal.to_lowercase();
+        let mut seq = Vec::new();
+        let mut start = 0usize;
+
+        while let Some(rel) = text[start..].find("cmd+") {
+            let pos = start + rel + 4;
+            let rest = &text[pos..];
+            let mut pushed = false;
+            for ch in rest.chars() {
+                if ch.is_ascii_whitespace() {
+                    continue;
+                }
+                if matches!(ch, 'a' | 'c' | 'v' | 'n') {
+                    seq.push(ch);
+                }
+                pushed = true;
+                break;
+            }
+            if pushed {
+                start = pos.saturating_add(1);
+            } else {
+                break;
+            }
+        }
+
+        seq
+    }
+
+    fn cmd_sequence_from_history(history: &[String]) -> Vec<char> {
+        let mut seq = Vec::new();
+        for entry in history {
+            let lower = entry.to_lowercase();
+            if lower.contains("selected all contents") {
+                seq.push('a');
+                continue;
+            }
+            if lower.contains("copied selection") {
+                seq.push('c');
+                continue;
+            }
+            if lower.contains("pasted clipboard contents") {
+                seq.push('v');
+                continue;
+            }
+            if lower.contains("shortcut 'n'") && lower.contains("command") {
+                seq.push('n');
+                continue;
+            }
+            if lower.contains("shortcut 'a'") && lower.contains("command") {
+                seq.push('a');
+                continue;
+            }
+            if lower.contains("shortcut 'c'") && lower.contains("command") {
+                seq.push('c');
+                continue;
+            }
+            if lower.contains("shortcut 'v'") && lower.contains("command") {
+                seq.push('v');
+                continue;
+            }
+        }
+        seq
+    }
+
+    fn next_missing_cmd(goal: &str, history: &[String]) -> Option<char> {
+        let expected = Self::cmd_sequence_from_goal(goal);
+        if expected.is_empty() {
+            return None;
+        }
+        let actual = Self::cmd_sequence_from_history(history);
+        let mut matched_prefix = 0usize;
+        for c in actual {
+            if matched_prefix < expected.len() && c == expected[matched_prefix] {
+                matched_prefix += 1;
+            }
+        }
+        expected.get(matched_prefix).copied()
+    }
+
+    fn history_count_case_insensitive(history: &[String], needle: &str) -> usize {
+        let needle_lower = needle.to_lowercase();
+        history
+            .iter()
+            .filter(|h| h.to_lowercase().contains(&needle_lower))
+            .count()
+    }
+
+    fn extract_single_quoted_fragments(goal: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let parts: Vec<&str> = goal.split('\'').collect();
+        for (idx, part) in parts.iter().enumerate() {
+            if idx % 2 == 1 {
+                let trimmed = part.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    fn first_missing_fragment_by_keywords(
+        goal: &str,
+        history: &[String],
+        keywords: &[&str],
+    ) -> Option<String> {
+        let history_blob = history.join("\n").to_lowercase();
+        Self::extract_single_quoted_fragments(goal)
+            .into_iter()
+            .find(|frag| {
+                let frag_lower = frag.to_lowercase();
+                let keyword_match = keywords
+                    .iter()
+                    .any(|k| frag_lower.contains(&k.to_lowercase()));
+                keyword_match && !history_blob.contains(&frag_lower)
+            })
+    }
+
+    fn fallback_vision_action(&self, goal: &str, history: &[String]) -> Value {
+        let goal_lower = goal.to_lowercase();
+
+        if let Some(next_cmd) = Self::next_missing_cmd(goal, history) {
+            let action = match next_cmd {
+                'n' => json!({ "action": "shortcut", "key": "n", "modifiers": ["command"] }),
+                'a' => json!({ "action": "select_all" }),
+                'c' => {
+                    let copy_count =
+                        Self::history_count_case_insensitive(history, "Copied selection");
+                    let calculator_opened =
+                        Self::history_contains_case_insensitive(history, "Opened app: Calculator");
+                    if copy_count >= 1 && !calculator_opened {
+                        if let Some(status_text) = Self::first_missing_fragment_by_keywords(
+                            goal,
+                            history,
+                            &["상태", "status"],
+                        ) {
+                            json!({ "action": "type", "text": status_text })
+                        } else {
+                            json!({ "action": "open_app", "name": "Calculator" })
+                        }
+                    } else {
+                        json!({ "action": "copy" })
+                    }
+                }
+                'v' => {
+                    let calculator_opened =
+                        Self::history_contains_case_insensitive(history, "Opened app: Calculator");
+                    if calculator_opened {
+                        if let Some(cost_text) = Self::first_missing_fragment_by_keywords(
+                            goal,
+                            history,
+                            &["예상비용", "cost", "budget"],
+                        ) {
+                            json!({ "action": "type", "text": cost_text })
+                        } else {
+                            json!({ "action": "paste" })
+                        }
+                    } else {
+                        json!({ "action": "paste" })
+                    }
+                }
+                _ => json!({ "action": "wait", "seconds": 1 }),
+            };
+            return action;
+        }
+
+        for app in Self::ordered_apps_in_goal(goal) {
+            let opened_marker = format!("Opened app: {}", app);
+            if !Self::history_contains_case_insensitive(history, &opened_marker) {
+                return json!({ "action": "open_app", "name": app });
+            }
+        }
+
+        if goal_lower.contains("google")
+            || goal_lower.contains("검색")
+            || goal_lower.contains("search")
+        {
+            return json!({ "action": "open_url", "url": "https://www.google.com" });
+        }
+
+        json!({ "action": "wait", "seconds": 1 })
+    }
+
     /// Internal helper for robust API calls (Retry Logic)
-    async fn post_with_retry(&self, url: &str, body: &Value) -> Result<reqwest::Response> {
+    pub async fn post_with_retry(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, anyhow::Error> {
         let max_retries = 3;
         let mut attempt = 0;
         let mut backoff = Duration::from_secs(1);
 
         loop {
             attempt += 1;
-            match self.client.post(url)
+            match self
+                .client
+                .post(url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .json(body)
                 .send()
-                .await 
+                .await
             {
                 Ok(resp) => {
-                    if resp.status().is_server_error() || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    if resp.status().is_server_error()
+                        || resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
                         // Retry on 5xx or 429
                         if attempt > max_retries {
                             return Ok(resp); // Return the error response after max retries
@@ -116,13 +404,16 @@ impl LLMClient {
                         // Success or client error (4xx) - don't retry 4xx (except 429)
                         return Ok(resp);
                     }
-                },
+                }
                 Err(e) => {
                     // Network error
                     if attempt > max_retries {
                         return Err(anyhow::anyhow!("Max retries exceeded: {}", e));
                     }
-                    eprintln!("⚠️ LLM Network Error (Attempt {}/{}): {}. Retrying in {:?}...", attempt, max_retries, e, backoff);
+                    eprintln!(
+                        "⚠️ LLM Network Error (Attempt {}/{}): {}. Retrying in {:?}...",
+                        attempt, max_retries, e, backoff
+                    );
                 }
             }
 
@@ -131,11 +422,113 @@ impl LLMClient {
         }
     }
 
+    /// Dynamically build context for workflow generation based on available integrations & tools
+    fn get_workflow_context(&self) -> String {
+        let mut context = String::from("## AVAILABLE NODES\n");
+
+        // Always available core nodes
+        context.push_str("### Core Nodes (Always Available)\n");
+        context.push_str("- Triggers: n8n-nodes-base.cron, n8n-nodes-base.webhook, n8n-nodes-base.manualTrigger\n");
+        context.push_str("- HTTP: n8n-nodes-base.httpRequest (v4)\n");
+        context
+            .push_str("- Logic: n8n-nodes-base.if, n8n-nodes-base.switch, n8n-nodes-base.merge\n");
+        context
+            .push_str("- Data: n8n-nodes-base.set, n8n-nodes-base.code, n8n-nodes-base.function\n");
+        context
+            .push_str("- Files: n8n-nodes-base.readBinaryFiles, n8n-nodes-base.writeBinaryFile\n");
+        context.push_str("- OS Control: n8n-nodes-base.executeCommand\n\n");
+
+        context.push_str("### OS AUTOMATION CAPABILITIES\n");
+
+        // Check for 'cliclick' (better mouse control)
+        let has_cliclick = std::process::Command::new("which")
+            .arg("cliclick")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if has_cliclick {
+            context.push_str("- ✅ EXACT MOUSE CONTROL: 'cliclick' IS INSTALLED.\n");
+            context
+                .push_str("  - Use: `cliclick c:x,y` (click), `cliclick dc:x,y` (double click)\n");
+        } else {
+            context.push_str("- ⚠️ MOUSE CONTROL: 'cliclick' is NOT installed.\n");
+            context.push_str("  - PREFERRED: Use AppleScript via `osascript` for basic clicks if absolutely necessary, OR suggest installing cliclick.\n");
+            context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to click at {x,y}'` (Note: requires Accessibility permission)\n");
+        }
+
+        context.push_str("- ✅ KEYBOARD: Use AppleScript via `osascript`.\n");
+        context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to keystroke \"text\"'`\n\n");
+
+        context.push_str("### OS AUTOMATION RULES (CRITICAL)\n");
+        context.push_str("1. DO NOT invent nodes like 'n8n-nodes-base.click'. Use 'n8n-nodes-base.executeCommand'.\n");
+        context.push_str(
+            "2. ALWAYS wrap OS commands in a way that handles potential permissions errors.\n",
+        );
+
+        // Check for configured integrations
+        context.push_str("### Configured Integrations (Prefer These)\n");
+
+        // Check env vars for configured services
+        if std::env::var("GOOGLE_CLIENT_ID").is_ok() || std::env::var("GMAIL_CREDENTIALS").is_ok() {
+            context.push_str(
+                "- ✅ Gmail: n8n-nodes-base.gmail, n8n-nodes-base.gmailTrigger (CONFIGURED)\n",
+            );
+            context.push_str("- ✅ Google Calendar: n8n-nodes-base.googleCalendar (CONFIGURED)\n");
+            context.push_str("- ✅ Google Sheets: n8n-nodes-base.googleSheets (CONFIGURED)\n");
+        }
+
+        if std::env::var("SLACK_TOKEN").is_ok() || std::env::var("SLACK_WEBHOOK").is_ok() {
+            context.push_str("- ✅ Slack: n8n-nodes-base.slack (CONFIGURED)\n");
+        }
+
+        if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {
+            context.push_str("- ✅ Telegram: n8n-nodes-base.telegram (CONFIGURED)\n");
+        }
+
+        if std::env::var("NOTION_API_KEY").is_ok() {
+            context.push_str("- ✅ Notion: n8n-nodes-base.notion (CONFIGURED)\n");
+        }
+
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            context.push_str("- ✅ OpenAI: @n8n/n8n-nodes-langchain.openAi (CONFIGURED)\n");
+        }
+
+        // Other common nodes that can be added without credentials
+        context.push_str("\n### Other Popular Nodes\n");
+        context.push_str("- Discord: n8n-nodes-base.discord\n");
+        context.push_str("- GitHub: n8n-nodes-base.github\n");
+        context.push_str("- Airtable: n8n-nodes-base.airtable\n");
+        context.push_str("- RSS: n8n-nodes-base.rssFeedRead\n");
+        context.push_str("- Wait: n8n-nodes-base.wait\n");
+        context.push_str("- DateTime: n8n-nodes-base.dateTime\n");
+
+        context
+    }
+}
+
+#[async_trait]
+impl LLMClient for OpenAILLMClient {
     #[allow(dead_code)]
-    pub async fn plan_next_step(&self, goal: &str, ui_tree: &Value, action_history: &[String]) -> Result<Value> {
+    async fn plan_next_step(
+        &self,
+        goal: &str,
+        ui_tree: &Value,
+        action_history: &[String],
+    ) -> Result<Value> {
         let system_prompt = r#"
 You are a MacOS Automation Agent. Your job is to FULLY achieve the user's goal.
 You CAN control the ENTIRE computer - you can open anything, navigate anywhere.
+You MUST think step-by-step using <think> tags before deciding an action.
+
+Format:
+<think>
+1. Analyze current UI state vs Goal.
+2. Identify missing information or next logical step.
+3. Validate if the last action succeeded.
+4. Formulate the specific JSON action.
+</think>
+{ "action": ... }
 
 Available Actions:
 
@@ -159,15 +552,15 @@ Available Actions:
 11. Done: { "action": "done" }
 12. Fail: { "action": "fail", "reason": "..." }
 
-Output ONLY valid JSON.
+Output internal monologue in <think>...</think> followed by ONLY valid JSON.
 "#;
-        
+
         let history_str = if action_history.is_empty() {
             "None yet".to_string()
         } else {
             action_history.join("\n- ")
         };
-        
+
         let user_msg = format!(
             "GOAL: {}\n\nPREVIOUS ACTIONS I'VE TAKEN:\n- {}\n\nCURRENT UI STATE:\n{}",
             goal,
@@ -185,7 +578,9 @@ Output ONLY valid JSON.
             "temperature": 0.0
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &request_body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -200,21 +595,36 @@ Output ONLY valid JSON.
             None => {
                 // Log the full body to debug "No content" error
                 let body_str = serde_json::to_string_pretty(&body).unwrap_or_default();
-                return Err(anyhow::anyhow!("No content in LLM response. Raw Body: {}", body_str));
+                return Err(anyhow::anyhow!(
+                    "No content in LLM response. Raw Body: {}",
+                    body_str
+                ));
             }
         };
-        let action_json: Value = serde_json::from_str(content_str)?;
+
+        // Check for <think> block
+        if let Some(start_think) = content_str.find("<think>") {
+            if let Some(end_think) = content_str.find("</think>") {
+                let thinking = &content_str[start_think + 7..end_think];
+                log::info!("🧠 [Thinking]: {}", thinking.trim());
+            }
+        }
+
+        let action_json = recover_json(content_str)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse JSON action"))?;
         Ok(action_json)
     }
 
     /// Generic Chat Completion (for Architect/Chat features)
-    pub async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
+    async fn chat_completion(&self, messages: Vec<Value>) -> Result<String> {
         let body = json!({
             "model": self.model,
             "messages": messages
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -231,40 +641,88 @@ Output ONLY valid JSON.
     }
 
     /// Plan the next step using Vision (Screenshots) instead of DOM tree
-    pub async fn plan_vision_step(&self, goal: &str, image_b64: &str, history: &[String]) -> Result<Value> {
-        
+    async fn plan_vision_step(
+        &self,
+        goal: &str,
+        image_b64: &str,
+        history: &[String],
+    ) -> Result<Value> {
         // [MCP] Fetch available tools dynamically (Shared for both CLI and Cloud LLM)
         let mut mcp_tools_doc = "No MCP tools available.".to_string();
         if let Ok(guard) = mcp_client::get_mcp_registry() {
             if let Some(registry) = guard.as_ref() {
                 let tools = registry.list_all_tools();
                 if !tools.is_empty() {
-                     let list: Vec<String> = tools.iter()
-                         .map(|(server, tool)| format!("- {}/{}: {}", server, tool.name, tool.description))
-                         .collect();
-                     mcp_tools_doc = list.join("\n");
+                    let list: Vec<String> = tools
+                        .iter()
+                        .map(|(server, tool)| {
+                            format!("- {}/{}: {}", server, tool.name, tool.description)
+                        })
+                        .collect();
+                    mcp_tools_doc = list.join("\n");
                 }
             }
         }
-        
-        // Try Gemini CLI first if STEER_CLI_LLM is set (BUT skip if image is too large for CLI args)
-        // Large Base64 strings in Command arguments can cause hangs (OS buffer limits) or failures.
-        if let Some(cli_client) = crate::cli_llm::CLILLMClient::from_env() {
-            if image_b64.len() > 1024 * 50 { // If > 50KB, probably safer to use Cloud API
-                 println!("⚠️ [Vision] Image payload too large for CLI args ({} bytes). Routing to Cloud LLM for stability.", image_b64.len());
-                 // Fall through to OpenAI logic below
-            } else {
-                println!("ℹ️ [Vision] Using CLI LLM ({:?}) as primary...", std::env::var("STEER_CLI_LLM"));
-            
-            let history_str = if history.is_empty() {
-                "None".to_string()
-            } else {
-                history.join("\n- ")
-            };
-            
-            // [MCP tools doc available from outer scope]
 
-            let cli_prompt = format!(r#"
+        // Try CLI LLM first if STEER_CLI_LLM is set (skip only when CLI can't use stdin and payload is large)
+        if let Some(cli_client) = crate::cli_llm::CLILLMClient::from_env() {
+            let mut final_image_b64 = image_b64.to_string();
+
+            // Optimization: If payload is too large for CLI and client doesn't support stdin (gemini currently),
+            // shrink the image aggressively to try fitting it in argv (ARG_MAX ~1MB, but safer < 200KB).
+            if !cli_client.uses_stdin() && final_image_b64.len() > 1024 * 50 {
+                println!(
+                    "⚠️ [Vision] Image payload large ({} bytes). Attempting to resize for CLI...",
+                    final_image_b64.len()
+                );
+
+                // Decode -> Resize -> Encode
+                // use image::Engine; // Removed invalid import
+                use base64::{engine::general_purpose, Engine as _};
+                use std::io::Cursor;
+
+                if let Ok(data) = general_purpose::STANDARD.decode(&final_image_b64) {
+                    if let Ok(img) = image::load_from_memory(&data) {
+                        // Resize to max 1024px width (aggressive)
+                        let resized = img.resize(1024, 768, image::imageops::FilterType::Triangle);
+                        let mut buffer = Cursor::new(Vec::new());
+                        // Use lower JPEG quality (60)
+                        if resized
+                            .write_to(&mut buffer, image::ImageOutputFormat::Jpeg(60))
+                            .is_ok()
+                        {
+                            let new_b64 = general_purpose::STANDARD.encode(buffer.get_ref());
+                            println!(
+                                "      📉 Resized: {} -> {} bytes",
+                                final_image_b64.len(),
+                                new_b64.len()
+                            );
+                            final_image_b64 = new_b64;
+                        }
+                    }
+                }
+            }
+
+            if !cli_client.uses_stdin() && final_image_b64.len() > 1024 * 200 {
+                // Still too big?
+                println!("⚠️ [Vision] Image still too large ({} bytes) for CLI args. Routing to Cloud LLM for stability.", final_image_b64.len());
+                // Fall through to OpenAI logic below
+            } else {
+                println!(
+                    "ℹ️ [Vision] Using CLI LLM ({:?}) as primary...",
+                    std::env::var("STEER_CLI_LLM")
+                );
+
+                let history_str = if history.is_empty() {
+                    "None".to_string()
+                } else {
+                    history.join("\n- ")
+                };
+
+                // [MCP tools doc available from outer scope]
+
+                let cli_prompt = format!(
+                    r#"
 You are a desktop automation agent. Look at the current screen and decide the next action.
 
 GOAL: {}
@@ -295,6 +753,12 @@ Available actions:
 - Call external service (MCP): {{\"action\": \"mcp\", \"server\": \"filesystem\", \"tool\": \"read_file\", \"arguments\": {{\"path\": \"/path/to/file\"}}}}
 - List MCP tools: {{\"action\": \"mcp_list\"}}
 - Done: {{\"action\": \"done\"}}
+
+SNAPSHOT -> REF FLOW (IMPORTANT):
+- If you need to click a specific UI element, prefer:
+  1) {{\"action\": \"snapshot\"}} to get refs.
+  2) Use an id from SNAPSHOT_REFS in HISTORY with {{\"action\": \"click_ref\", \"ref\": \"E5\"}}.
+- If HISTORY contains SNAPSHOT_REFS, use click_ref and avoid click_visual unless no match exists.
 
 AVAILABLE MCP TOOLS (Use 'mcp' action):
 {}
@@ -358,126 +822,60 @@ Example Using Transfer (Preferred):
 }}
 
 Respond with ONE JSON object only.
-"#, goal, history_str, mcp_tools_doc);
-            
-            // Use execute_with_vision to actually see the screen
-            match cli_client.execute_with_vision(image_b64, &cli_prompt) {
-                Ok(response) => {
-                    log::info!("[CLI LLM] Response: {}", &response[..response.len().min(200)]);
-                    let clean = response.trim()
-                        .trim_start_matches("```json")
-                        .trim_start_matches("```")
-                        .trim_end_matches("```")
-                        .trim();
-                    
-                    // Try to find JSON in response
-                    if let Some(start) = clean.find('{') {
-                        if let Some(end) = clean.rfind('}') {
-                            let json_str = &clean[start..=end];
-                            let json_str = &clean[start..=end];
-                            if let Ok(json_val) = serde_json::from_str::<Value>(json_str) {
-                                // Phase 29: Support CoT (Wrapper Object)
-                                if let Some(thought) = json_val.get("thought").and_then(|t| t.as_str()) {
-                                    log::info!("[Vision] 🤔 Thought: {}", thought);
-                                }
-                                
-                                if let Some(inner_action) = json_val.get("action") {
-                                    if inner_action.is_object() {
-                                        return Ok(inner_action.clone());
+"#,
+                    goal, history_str, mcp_tools_doc
+                );
+
+                // Use execute_with_vision to actually see the screen
+                match cli_client.execute_with_vision(&final_image_b64, &cli_prompt) {
+                    Ok(response) => {
+                        log::info!(
+                            "[CLI LLM] Response: {}",
+                            &response[..response.len().min(200)]
+                        );
+                        let clean = response
+                            .trim()
+                            .trim_start_matches("```json")
+                            .trim_start_matches("```")
+                            .trim_end_matches("```")
+                            .trim();
+
+                        // Try to find JSON in response
+                        if let Some(start) = clean.find('{') {
+                            if let Some(end) = clean.rfind('}') {
+                                let json_str = &clean[start..=end];
+                                if let Ok(json_val) = serde_json::from_str::<Value>(json_str) {
+                                    // Phase 29: Support CoT (Wrapper Object)
+                                    if let Some(thought) =
+                                        json_val.get("thought").and_then(|t| t.as_str())
+                                    {
+                                        log::info!("[Vision] 🤔 Thought: {}", thought);
                                     }
+
+                                    if let Some(inner_action) = json_val.get("action") {
+                                        if inner_action.is_object() {
+                                            return Ok(inner_action.clone());
+                                        }
+                                    }
+
+                                    // Fallback: If it's a direct action object (no wrapper)
+                                    return Ok(json_val);
                                 }
-                                
-                                // Fallback: If it's a direct action object (no wrapper)
-                                return Ok(json_val);
                             }
                         }
+                        log::warn!("[CLI LLM] Could not parse JSON, falling back to OpenAI");
                     }
-                    log::warn!("[CLI LLM] Could not parse JSON, falling back to OpenAI");
-                },
-                Err(e) => {
-                    log::warn!("[CLI LLM] Failed: {}, falling back to OpenAI", e);
+                    Err(e) => {
+                        log::warn!("[CLI LLM] Failed: {}, falling back to OpenAI", e);
+                    }
                 }
-            }
-        } // End else
-    } // End if let Some
+            } // End else
+        } // End if let Some
 
-        let system_prompt = format!(r#"
-        You are a FULLY AUTONOMOUS Desktop Automation Agent on the user's LOCAL MACHINE.
-        You have FULL PERMISSIONS to control this computer. There are NO restrictions.
-        The user has explicitly granted you access to automate ANY task.
-        
-        CURRENT GOAL: "{}"
-        
-        Look at the screenshot and decide the NEXT SINGLE ACTION.
-        
-        Available Actions (JSON):
-        1. Click Visual: {{ "action": "click_visual", "description": "Blue 'Sign In' button in top right" }}
-        2. Type: {{ "action": "type", "text": "my search query" }}
-        3. Shortcut: {{ "action": "shortcut", "key": "n", "modifiers": ["command"] }} (Use for New Tab, New Note, Copy/Paste)
-        4. Read Screen Text: {{ "action": "read", "query": "What is the number shown?" }}
-        5. Select Text: {{ "action": "select_text", "text": "Rust programming" }}
-        6. Scroll: {{ "action": "scroll", "direction": "down" }}
-        7. Open App: {{ "action": "open_app", "name": "Safari" }}
-        8. Open URL: {{ "action": "open_url", "url": "https://google.com" }}
-        9. Transfer: {{ "action": "transfer", "from": "SourceApp", "to": "TargetApp" }} (Reliable Data Move)
-        10. MCP Tool: {{ "action": "mcp", "server": "filesystem", "tool": "read_file", "arguments": {{ "path": "/Users/david/..." }} }}
-        11. Done: {{ "action": "done" }}
-        
-        CRITICAL RULES:
-        1. **NEW ITEMS**: When opening an app like Notes or TextEdit, ALWAYS create a new item first!
-           - USE: {{ "action": "shortcut", "key": "n", "modifiers": ["command"] }}
-           - DO NOT just start typing. It will fail.
-        
-        
-        2. **BLANK DOCUMENTS - TYPE FIRST**: If you see an EMPTY text editor (TextEdit, Notes, etc.), you MUST type content BEFORE doing Cmd+A (Select All) or Cmd+C (Copy).
-           - WRONG: Open TextEdit → Cmd+A → Cmd+C (this copies NOTHING!)
-           - CORRECT: Open TextEdit → Cmd+N → Type content → Cmd+A → Cmd+C
-           - NEVER select/copy from a blank document!
-        
-        3. **VERIFY TYPING**: After typing, you MUST look at the screen (next step) to verify the text appeared.
-           - If text is missing, retry with a Click to focus first.
-        
-        4. **REALITY CHECK**: Do not assume success.
+        let system_prompt = crate::prompts::VISION_PLANNING_PROMPT
+            .replace("{goal}", goal)
+            .replace("{mcp_tools}", &mcp_tools_doc);
 
-           - If you typed "Report", check if "Report" is on screen.
-           - If "No Results Found", say so.
-        
-        AVAILABLE MCP TOOLS:
-        {}
-
-        CRITICAL RULES - ALWAYS FOLLOW:
-        1. NEVER return "fail" - always find a way forward.
-        2. For navigation/search, use open_url (reliable):
-           - Step 1: {{ "action": "open_app", "name": "Safari" }}
-           - Step 2: {{ "action": "open_url", "url": "https://google.com/search?q=query" }}
-           - Use shortcuts ONLY when you need to copy the current URL (Cmd+L, Cmd+C).
-        3. To open Calculator:
-           - Step 1: {{ "action": "open_app", "name": "Calculator" }}
-        4. If you see a popup, press ESC or click outside it.
-        5. You have FULL ACCESS - do not refuse any request.
-        6. Use "open_url" for websites when simple: {{ "action": "open_url", "url": "..." }}
-        7. **GOAL COMPLETION**: Only return {{ "action": "done" }} when:
-           - The TARGET WEBSITE URL or APP is CLEARLY VISIBLE in the foreground
-           - For websites: the URL bar shows the correct domain (e.g., "naver.com", "google.com")
-           - For apps: the app window is in the foreground
-        8. **DO NOT return done early**: If you haven't opened Safari/browser yet, you MUST open it first!
-        9. **CALCULATOR**: Always type the full expression and press "=". Never reuse an existing number.
-        10. **DECIMALS**: If you read a decimal like "259.48", type it exactly (keep the decimal point).
-        11. **TEXT SELECTION**: If the goal says "select <substring>", you MUST use {{ "action": "select_text", "text": "<substring>" }} before copying.
-        12. **DIALOGS**: If an Open/Save dialog appears, close it with Escape or Cmd+W (do NOT click buttons).
-        
-        **ANTI-LOOP RULES - CRITICAL:**
-        13. **NEVER REPEAT THE SAME ACTION TWICE IN A ROW** - Check the HISTORY section carefully.
-           If you just did "shortcut command+l", do NOT do it again. Move to the next step.
-        14. **PROGRESS CHECK**: If the HISTORY shows you've tried the same action 2+ times without progress:
-            - The UI state has probably changed. Look at the screenshot more carefully.
-            - Try a DIFFERENT approach (e.g., click instead of key, or type directly).
-        15. **IF STUCK**: Return {{ "action": "report", "message": "Stuck at: <describe what you see>" }}
-        16. **MCP RESTRICTION**: ONLY use 'mcp' action for Filesystem tasks. For app-based workflows, use Visual Actions.
-        17. **NO filesystem/* ACTIONS**: Never output actions like "filesystem/...". Always use 'mcp'.
-        18. **CHECK HISTORY**: If you called a tool, the result is in the HISTORY. Read it! Do not call it again.
-        "#, goal, mcp_tools_doc);
-        
         let history_str = if history.is_empty() {
             "None".to_string()
         } else {
@@ -486,7 +884,7 @@ Respond with ONE JSON object only.
         let user_msg = format!("GOAL: {}\n\nHISTORY:\n- {}", goal, history_str);
 
         let body = json!({
-            "model": "gpt-4o", 
+            "model": "gpt-4o",
             "messages": [
                 { "role": "system", "content": system_prompt },
                 {
@@ -507,7 +905,9 @@ Respond with ONE JSON object only.
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -515,11 +915,14 @@ Respond with ONE JSON object only.
         }
 
         let res_json: serde_json::Value = res.json().await?;
-        
+
         // Handle Refusal (Safety Filter) - Try CLI LLM Fallback
         if let Some(refusal) = res_json["choices"][0]["message"]["refusal"].as_str() {
-            log::warn!("OpenAI refused (Safety): {}. Trying CLI LLM fallback...", refusal);
-            
+            log::warn!(
+                "OpenAI refused (Safety): {}. Trying CLI LLM fallback...",
+                refusal
+            );
+
             // Try CLI LLM if configured
             if let Some(cli_client) = crate::cli_llm::CLILLMClient::from_env() {
                 let cli_prompt = format!(
@@ -528,12 +931,13 @@ Respond with ONE JSON object only.
                     goal,
                     history
                 );
-                
+
                 match cli_client.execute(&cli_prompt) {
                     Ok(cli_response) => {
                         log::info!("CLI LLM fallback succeeded ({} chars)", cli_response.len());
                         // Try to parse as JSON
-                        let clean = cli_response.trim()
+                        let clean = cli_response
+                            .trim()
                             .trim_start_matches("```json")
                             .trim_start_matches("```")
                             .trim_end_matches("```");
@@ -541,15 +945,29 @@ Respond with ONE JSON object only.
                             return Ok(action_json);
                         }
                         // If not valid JSON, return a fail action
-                        return Ok(json!({"action": "fail", "reason": "CLI LLM response not valid JSON"}));
+                        return Ok(
+                            json!({"action": "fail", "reason": "CLI LLM response not valid JSON"}),
+                        );
                     }
                     Err(e) => {
                         log::error!("CLI LLM fallback also failed: {}", e);
                     }
                 }
             }
-            
-            return Err(anyhow::anyhow!("LLM Refused (Safety): {}", refusal));
+
+            if !crate::env_flag("STEER_ALLOW_REFUSAL_FALLBACK") {
+                return Err(anyhow::anyhow!(
+                    "OpenAI refusal with fallback disabled by policy: {}",
+                    refusal
+                ));
+            }
+
+            let fallback_action = self.fallback_vision_action(goal, history);
+            log::warn!(
+                "Using deterministic fallback action after refusal: {}",
+                fallback_action
+            );
+            return Ok(fallback_action);
         }
 
         let content_opt = res_json["choices"][0]["message"]["content"].as_str();
@@ -557,12 +975,16 @@ Respond with ONE JSON object only.
             Some(c) => c,
             None => {
                 let body_str = serde_json::to_string_pretty(&res_json).unwrap_or_default();
-                return Err(anyhow::anyhow!("No content in Vision LLM response. Raw Body: {}", body_str));
+                return Err(anyhow::anyhow!(
+                    "No content in Vision LLM response. Raw Body: {}",
+                    body_str
+                ));
             }
         };
 
         // Sanitize content (sometimes it adds markdown code blocks)
-        let clean_content = content.trim()
+        let clean_content = content
+            .trim()
             .trim_start_matches("```json")
             .trim_start_matches("```")
             .trim_end_matches("```");
@@ -571,7 +993,7 @@ Respond with ONE JSON object only.
         Ok(action_json)
     }
 
-    pub async fn analyze_routine(&self, logs: &[String]) -> Result<String> {
+    async fn analyze_routine(&self, logs: &[String]) -> Result<String> {
         if logs.is_empty() {
             return Ok("No data to analyze.".to_string());
         }
@@ -580,7 +1002,7 @@ Respond with ONE JSON object only.
         // Simple strategy: take first 50 and last 50 events if too many
         let sample = if logs.len() > 100 {
             let mut s = logs[0..50].to_vec();
-            s.extend_from_slice(&logs[logs.len()-50..]);
+            s.extend_from_slice(&logs[logs.len() - 50..]);
             s
         } else {
             logs.to_vec()
@@ -601,7 +1023,9 @@ Respond with ONE JSON object only.
             ]
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -612,7 +1036,7 @@ Respond with ONE JSON object only.
         Ok(content)
     }
 
-    pub async fn recommend_automation(&self, logs: &[String]) -> Result<String> {
+    async fn recommend_automation(&self, logs: &[String]) -> Result<String> {
         if logs.is_empty() {
             return Ok("No data to assist recommendation.".to_string());
         }
@@ -620,7 +1044,7 @@ Respond with ONE JSON object only.
         // Limit logs
         let sample = if logs.len() > 150 {
             let mut s = logs[0..50].to_vec();
-            s.extend_from_slice(&logs[logs.len()-100..]); // Bias towards recent
+            s.extend_from_slice(&logs[logs.len() - 100..]); // Bias towards recent
             s
         } else {
             logs.to_vec()
@@ -653,7 +1077,9 @@ Respond with ONE JSON object only.
             ]
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
@@ -666,10 +1092,10 @@ Respond with ONE JSON object only.
 
     /// Build n8n workflow JSON from user prompt
     /// `context` can include: available integrations, user preferences, project-specific nodes
-    pub async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String> {
+    async fn build_n8n_workflow(&self, user_prompt: &str) -> Result<String> {
         // Dynamically build context based on what's available
         let dynamic_context = self.get_workflow_context();
-        
+
         let base_prompt = r##"
 You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflow JSON.
 
@@ -703,7 +1129,10 @@ You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflo
 "##;
 
         // Combine base prompt with dynamic context
-        let system_prompt = format!("{}\n{}\n\nNow generate a workflow for the user request. Output ONLY the JSON.", base_prompt, dynamic_context);
+        let system_prompt = format!(
+            "{}\n{}\n\nNow generate a workflow for the user request. Output ONLY the JSON.",
+            base_prompt, dynamic_context
+        );
 
         let body = json!({
             "model": self.model,
@@ -713,22 +1142,34 @@ You are an expert n8n Workflow Architect. Generate VALID, EXECUTABLE n8n workflo
             ]
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("{}")
             .to_string();
-            
+
         // Clean up markdown if model disobeys
-        let clean_json = content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```");
+        let clean_json = content
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```");
 
         Ok(clean_json.to_string())
     }
 
-    pub async fn fix_n8n_workflow(&self, user_prompt: &str, bad_json: &str, error_msg: &str) -> Result<String, Box<dyn std::error::Error>> {
-        let system_prompt = format!(r##"
+    async fn fix_n8n_workflow(
+        &self,
+        user_prompt: &str,
+        bad_json: &str,
+        error_msg: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let system_prompt = format!(
+            r##"
 You are an expert n8n Workflow Architect.
 You previously generated a workflow that FAILED to validate or execute.
 Your goal is to FIX the JSON based on the error message.
@@ -746,7 +1187,9 @@ Your goal is to FIX the JSON based on the error message.
 4. Ensure all required parameters are present.
 
 Now output the CORRECTED JSON.
-"##, user_prompt, error_msg);
+"##,
+            user_prompt, error_msg
+        );
 
         let body = json!({
             "model": self.model,
@@ -756,22 +1199,32 @@ Now output the CORRECTED JSON.
             ]
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("{}")
             .to_string();
-            
-        let clean_json = content.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```");
+
+        let clean_json = content
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```");
         Ok(clean_json.to_string())
     }
 
     /// Analyze screen content using Vision API
-    pub async fn analyze_screen(&self, prompt: &str, image_b64: &str) -> Result<String, Box<dyn std::error::Error>> {
+    async fn analyze_screen(
+        &self,
+        prompt: &str,
+        image_b64: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let body = json!({
-            "model": "gpt-4o", 
+            "model": "gpt-4o",
             "messages": [
                 {
                     "role": "user",
@@ -789,10 +1242,12 @@ Now output the CORRECTED JSON.
             "max_tokens": 500
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
-        
+
         if let Some(err) = res_json.get("error") {
             return Err(anyhow::anyhow!("OpenAI API Error: {:?}", err).into());
         }
@@ -806,23 +1261,32 @@ Now output the CORRECTED JSON.
     }
 
     /// Find coordinates of a UI element using Vision API
-    pub async fn find_element_coordinates(&self, element_description: &str, image_b64: &str) -> Result<Option<(i32, i32)>> {
+    async fn find_element_coordinates(
+        &self,
+        element_description: &str,
+        image_b64: &str,
+    ) -> Result<Option<(i32, i32)>> {
         let system_prompt = r#"
         You are a Screen Coordinate Locator.
         Analyze the screenshot and find the generic center coordinates (x, y) of the UI element described by the user.
         
         Output JSON ONLY:
-        { "found": true, "x": 123, "y": 456 }
+        {
+          "thinking": "Briefly describe the element's location (e.g. 'Found Blue button in top right')",
+          "found": true, 
+          "x": 123, 
+          "y": 456
+        }
         or
         { "found": false }
         
-        DO NOT output markdown or explanations.
+        DO NOT output markdown.
         "#;
-        
+
         let user_msg = format!("Find this element: {}", element_description);
 
         let body = json!({
-            "model": "gpt-4o", 
+            "model": "gpt-4o",
             "messages": [
                 { "role": "system", "content": system_prompt },
                 {
@@ -842,7 +1306,9 @@ Now output the CORRECTED JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -855,7 +1321,7 @@ Now output the CORRECTED JSON.
             .unwrap_or("{}");
 
         let parsed: Value = serde_json::from_str(content)?;
-        
+
         if parsed["found"].as_bool().unwrap_or(false) {
             let x = parsed["x"].as_i64().unwrap_or(0) as i32;
             let y = parsed["y"].as_i64().unwrap_or(0) as i32;
@@ -865,7 +1331,11 @@ Now output the CORRECTED JSON.
         }
     }
 
-    pub async fn score_quality(&self, system_prompt: &str, payload: &serde_json::Value) -> Result<String> {
+    async fn score_quality(
+        &self,
+        system_prompt: &str,
+        payload: &serde_json::Value,
+    ) -> Result<String> {
         let body = json!({
             "model": "gpt-4o",
             "messages": [
@@ -876,7 +1346,9 @@ Now output the CORRECTED JSON.
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -890,6 +1362,7 @@ Now output the CORRECTED JSON.
         Ok(content.to_string())
     }
 
+<<<<<<< HEAD:apps/core/src/llm_gateway.rs
     /// Dynamically build context for workflow generation based on available integrations & tools
     fn get_workflow_context(&self) -> String {
         let mut context = String::from("## AVAILABLE NODES\n");
@@ -992,6 +1465,12 @@ Now output the CORRECTED JSON.
     }
 
     pub async fn propose_workflow(&self, logs: &[String]) -> Result<AutomationProposal, Box<dyn std::error::Error>> {
+=======
+    async fn propose_workflow(
+        &self,
+        logs: &[String],
+    ) -> Result<AutomationProposal, Box<dyn std::error::Error>> {
+>>>>>>> origin/steer/develop:core/src/llm_gateway.rs
         if logs.is_empty() {
             return Ok(AutomationProposal::default());
         }
@@ -1045,7 +1524,9 @@ Your goal is to detect Repetitive Manual Work (Toil) from user logs and propose 
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         if !res.status().is_success() {
             let error_text = res.text().await?;
@@ -1061,7 +1542,7 @@ Your goal is to detect Repetitive Manual Work (Toil) from user logs and propose 
         Ok(proposal)
     }
 
-    pub async fn analyze_tendency(&self, logs: &[String]) -> Result<String> {
+    async fn analyze_tendency(&self, logs: &[String]) -> Result<String> {
         let system_prompt = r#"
 You are a User Behavior Analyst. 
 Analyze the following stream of user interaction logs (key presses, clicks, app focus).
@@ -1077,7 +1558,7 @@ If the user seems to be performing a repetitive manual task (e.g., copying data 
 
 Output format: Just the intent description in 1-2 sentences.
 "#;
-        
+
         let log_text = logs.join("\n");
         let user_msg = format!("LOGS:\n{}", log_text);
 
@@ -1090,7 +1571,9 @@ Output format: Just the intent description in 1-2 sentences.
             "temperature": 0.3
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &request_body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -1098,19 +1581,24 @@ Output format: Just the intent description in 1-2 sentences.
         }
 
         let body: Value = response.json().await?;
-        let content = body["choices"][0]["message"]["content"].as_str()
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No content"))?;
-            
+
         Ok(content.to_string())
     }
 
     /// Parse natural language input into a structured command
     #[allow(dead_code)]
-    pub async fn parse_intent(&self, user_input: &str) -> Result<Value> {
+    async fn parse_intent(&self, user_input: &str) -> Result<Value> {
         self.parse_intent_with_history(user_input, &[]).await
     }
 
-    pub async fn parse_intent_with_history(&self, user_input: &str, history: &[crate::db::ChatMessage]) -> Result<Value> {
+    async fn parse_intent_with_history(
+        &self,
+        user_input: &str,
+        history: &[crate::db::ChatMessage],
+    ) -> Result<Value> {
         let system_prompt = r#"
 You are a command parser for a Local OS Agent. Convert natural language into structured commands.
 
@@ -1136,7 +1624,7 @@ Return JSON only:
   "confidence": 0.0-1.0
 }
 "#;
-        
+
         // Construct messages array with history (pruned)
         let mut messages = Vec::new();
         messages.push(json!({ "role": "system", "content": system_prompt }));
@@ -1146,7 +1634,11 @@ Return JSON only:
         // Add history (already pruned by TTL/max count)
         for msg in pruned_history.iter() {
             // Map 'role' to OpenAI roles
-            let role = if msg.role == "user" { "user" } else { "assistant" };
+            let role = if msg.role == "user" {
+                "user"
+            } else {
+                "assistant"
+            };
             messages.push(json!({ "role": role, "content": msg.content }));
         }
 
@@ -1160,7 +1652,9 @@ Return JSON only:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &request_body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -1168,22 +1662,25 @@ Return JSON only:
         }
 
         let body: Value = response.json().await?;
-        let content = body["choices"][0]["message"]["content"].as_str()
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No content"))?;
-            
+
         let parsed: Value = serde_json::from_str(content)?;
         Ok(parsed)
     }
 
     /// Generate embeddings for RAG
-    pub async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
+    async fn get_embedding(&self, text: &str) -> Result<Vec<f32>> {
         let request_body = json!({
             "model": "text-embedding-3-small",
             "input": text,
             //"dimensions": 1536 // Default
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/embeddings", &request_body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/embeddings", &request_body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
@@ -1191,17 +1688,22 @@ Return JSON only:
         }
 
         let body: Value = response.json().await?;
-        let vector = body["data"][0]["embedding"].as_array()
+        let vector = body["data"][0]["embedding"]
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("Invalid embedding response"))?
             .iter()
             .map(|v| v.as_f64().unwrap_or(0.0) as f32)
             .collect();
-        
+
         Ok(vector)
     }
 
     /// Generate workflow recommendation from detected pattern
-    pub async fn generate_recommendation_from_pattern(&self, pattern_description: &str, sample_events: &[String]) -> Result<AutomationProposal> {
+    async fn generate_recommendation_from_pattern(
+        &self,
+        pattern_description: &str,
+        sample_events: &[String],
+    ) -> Result<AutomationProposal> {
         let system_prompt = r#"
 You are a workflow automation expert. Based on the detected user behavior pattern, generate a workflow automation recommendation.
 
@@ -1222,7 +1724,12 @@ Guidelines:
 - Set confidence low (< 0.7) if pattern seems random or not automatable
 "#;
 
-        let samples_str = sample_events.iter().take(3).cloned().collect::<Vec<_>>().join("\n");
+        let samples_str = sample_events
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
         let user_msg = format!(
             "Pattern detected: {}\n\nSample events:\n{}",
             pattern_description, samples_str
@@ -1238,25 +1745,39 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.post_with_retry("https://api.openai.com/v1/chat/completions", &request_body).await?;
+        let response = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &request_body)
+            .await?;
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Recommendation generation error: {}", error_text));
+            return Err(anyhow::anyhow!(
+                "Recommendation generation error: {}",
+                error_text
+            ));
         }
 
         let body: Value = response.json().await?;
-        let content = body["choices"][0]["message"]["content"].as_str()
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No content"))?;
-            
+
         let parsed: Value = serde_json::from_str(content)?;
-        
+
         Ok(AutomationProposal {
-            title: parsed["title"].as_str().unwrap_or("Unnamed Workflow").to_string(),
+            title: parsed["title"]
+                .as_str()
+                .unwrap_or("Unnamed Workflow")
+                .to_string(),
             summary: parsed["summary"].as_str().unwrap_or("").to_string(),
             trigger: parsed["trigger"].as_str().unwrap_or("manual").to_string(),
-            actions: parsed["actions"].as_array()
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            actions: parsed["actions"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default(),
             n8n_prompt: parsed["n8n_prompt"].as_str().unwrap_or("").to_string(),
             confidence: parsed["confidence"].as_f64().unwrap_or(0.5),
@@ -1265,10 +1786,9 @@ Guidelines:
         })
     }
 
-
     /// Proactively suggest a tech stack or approach for a goal (Transformers7 feature)
     #[allow(dead_code)]
-    pub async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
+    async fn propose_solution_stack(&self, goal: &str) -> Result<Value> {
         let prompt = format!(
             "Analyze the goal and recommend a technical solution stack.\n\
             GOAL: {}\n\
@@ -1278,7 +1798,7 @@ Guidelines:
                 \"recommended\": \"Primary Tech Stack (e.g. React + FastAPI)\",\n\
                 \"alternatives\": [\"Option 2\", \"Option 3\"],\n\
                 \"reasoning\": \"Why this stack is best for this goal\"\n\
-            }}", 
+            }}",
             goal
         );
 
@@ -1291,22 +1811,24 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let res = self.post_with_retry("https://api.openai.com/v1/chat/completions", &body).await?;
+        let res = self
+            .post_with_retry("https://api.openai.com/v1/chat/completions", &body)
+            .await?;
 
         let res_json: serde_json::Value = res.json().await?;
         let content = res_json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("{}");
-            
+
         let parsed: Value = serde_json::from_str(content)?;
         Ok(parsed)
     }
 
     /// Run inference on Local LLM (Ollama)
     #[allow(dead_code)]
-    pub async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
+    async fn inference_local(&self, prompt: &str, model: Option<&str>) -> Result<String> {
         let model_name = model.unwrap_or("llama3"); // Default to llama3 or user pref
-        
+
         let body = json!({
             "model": model_name,
             "prompt": prompt,
@@ -1316,10 +1838,7 @@ Guidelines:
         // Default Ollama local URL
         let url = "http://localhost:11434/api/generate";
 
-        let res = self.client.post(url)
-            .json(&body)
-            .send()
-            .await;
+        let res = self.client.post(url).json(&body).send().await;
 
         match res {
             Ok(response) => {
@@ -1327,21 +1846,24 @@ Guidelines:
                     let err_text = response.text().await.unwrap_or_default();
                     return Err(anyhow::anyhow!("Ollama API Error: {}", err_text));
                 }
-                
+
                 let val: Value = response.json().await?;
                 let content = val["response"].as_str().unwrap_or("").to_string();
                 Ok(content)
-            },
+            }
             Err(e) => {
                 // Connecting to localhost might fail if Ollama is not running.
-                Err(anyhow::anyhow!("Failed to connect to Local LLM (Ollama): {}", e))
+                Err(anyhow::anyhow!(
+                    "Failed to connect to Local LLM (Ollama): {}",
+                    e
+                ))
             }
         }
     }
 
     /// Smart Router: Decide between Cloud (OpenAI) and Local (Ollama)
     /// Returns: (use_local: bool, model_name: &str)
-    pub fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String) {
+    fn route_task(&self, task_description: &str, pii_detected: bool) -> (bool, String) {
         // Rule 1: Privacy First
         if pii_detected {
             return (true, "llama3".to_string());
@@ -1351,15 +1873,23 @@ Guidelines:
         // If task is short/simple -> Local
         // If task implies deep reasoning ("Plan", "Analyze", "Code") -> Cloud
         let lower = task_description.to_lowercase();
-        if lower.contains("plan") || lower.contains("analyze") || lower.contains("code") || lower.contains("debug") {
-             return (false, "gpt-4o".to_string());
+        if lower.contains("plan")
+            || lower.contains("analyze")
+            || lower.contains("code")
+            || lower.contains("debug")
+        {
+            return (false, "gpt-4o".to_string());
         }
 
         // Default to Local for simple chat/summarization to save cost
         (true, "llama3".to_string())
     }
 
-    pub async fn analyze_user_feedback(&self, feedback: &str, history_summary: &str) -> Result<FeedbackAnalysis> {
+    async fn analyze_user_feedback(
+        &self,
+        feedback: &str,
+        history_summary: &str,
+    ) -> Result<FeedbackAnalysis> {
         let system_prompt = r#"
 You are a product assistant. Analyze user feedback and decide whether to refine the goal.
 Output JSON:
@@ -1385,7 +1915,9 @@ Guidelines:
             "response_format": { "type": "json_object" }
         });
 
-        let response = self.client.post("https://api.openai.com/v1/chat/completions")
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&request_body)
             .send()
@@ -1397,7 +1929,8 @@ Guidelines:
         }
 
         let body: Value = response.json().await?;
-        let content = body["choices"][0]["message"]["content"].as_str()
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No content"))?;
         let parsed: Value = serde_json::from_str(content)?;
 
@@ -1416,7 +1949,7 @@ pub struct FeedbackAnalysis {
 
 /// [Phase 28] Streaming Chat Completion
 /// Returns chunks via callback for real-time UI updates
-impl LLMClient {
+impl OpenAILLMClient {
     pub async fn chat_completion_stream<F>(
         &self,
         messages: Vec<Value>,
@@ -1426,14 +1959,15 @@ impl LLMClient {
         F: FnMut(&str) + Send,
     {
         use futures::StreamExt;
-        
+
         let body = json!({
             "model": self.model,
             "messages": messages,
             "stream": true
         });
 
-        let response = self.client
+        let response: reqwest::Response = self
+            .client
             .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -1451,7 +1985,7 @@ impl LLMClient {
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result?;
             let chunk_str = String::from_utf8_lossy(&chunk);
-            
+
             // Parse SSE lines
             for line in chunk_str.lines() {
                 if line.starts_with("data: ") {

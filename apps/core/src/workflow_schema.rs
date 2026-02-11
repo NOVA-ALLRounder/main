@@ -8,8 +8,6 @@ pub enum RecommendationStatus {
     Pending,
     Approved,
     Rejected,
-    Executed,
-    Failed,
 }
 
 impl RecommendationStatus {
@@ -18,8 +16,6 @@ impl RecommendationStatus {
             Self::Pending => "pending",
             Self::Approved => "approved",
             Self::Rejected => "rejected",
-            Self::Executed => "executed",
-            Self::Failed => "failed",
         }
     }
 
@@ -27,8 +23,6 @@ impl RecommendationStatus {
         match s {
             "approved" => Self::Approved,
             "rejected" => Self::Rejected,
-            "executed" => Self::Executed,
-            "failed" => Self::Failed,
             _ => Self::Pending,
         }
     }
@@ -37,7 +31,7 @@ impl RecommendationStatus {
 /// Trigger specification for a workflow
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerSpec {
-    pub trigger_type: String,  // gmail, schedule, webhook, file_watch
+    pub trigger_type: String,   // gmail, schedule, webhook, file_watch
     pub filter: Option<String>, // e.g., "subject:미팅"
     pub params: serde_json::Value,
 }
@@ -45,7 +39,7 @@ pub struct TriggerSpec {
 /// Action specification for a workflow
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionSpec {
-    pub action_type: String,  // calendar_add, telegram_notify, notion_create, etc.
+    pub action_type: String, // calendar_add, telegram_notify, notion_create, etc.
     pub params: serde_json::Value,
     pub on_error: Option<String>, // continue, stop, retry
 }
@@ -111,12 +105,12 @@ impl WorkflowRecommendation {
     }
 
     pub fn mark_executed(&mut self, workflow_id: String) {
-        self.status = RecommendationStatus::Executed;
+        // Execution success does not change review state.
         self.n8n_workflow_id = Some(workflow_id);
     }
 
     pub fn mark_failed(&mut self, error: String) {
-        self.status = RecommendationStatus::Failed;
+        // Execution failure is captured in feedback, not as a review-state transition.
         self.feedback = Some(FeedbackData {
             success: false,
             error_message: Some(error),
@@ -130,7 +124,7 @@ impl WorkflowRecommendation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedPattern {
     pub pattern_id: String,
-    pub pattern_type: String,  // app_sequence, keyword, file_pattern
+    pub pattern_type: String, // app_sequence, keyword, file_pattern
     pub occurrences: u32,
     pub similarity_score: f64,
     pub sample_events: Vec<String>,
@@ -161,7 +155,7 @@ mod tests {
             params: json!({}),
             on_error: None,
         };
-        
+
         let mut rec = WorkflowRecommendation::new(
             "Test Workflow".to_string(),
             "Summary".to_string(),
@@ -179,13 +173,16 @@ mod tests {
         assert!(rec.approved_at.is_some());
 
         rec.mark_executed("workflow-123".to_string());
-        assert_eq!(rec.status, RecommendationStatus::Executed);
+        assert_eq!(rec.status, RecommendationStatus::Approved);
         assert_eq!(rec.n8n_workflow_id, Some("workflow-123".to_string()));
 
         rec.mark_failed("API Error".to_string());
-        assert_eq!(rec.status, RecommendationStatus::Failed);
+        assert_eq!(rec.status, RecommendationStatus::Approved);
         assert!(rec.feedback.is_some());
-        assert_eq!(rec.feedback.unwrap().error_message, Some("API Error".to_string()));
+        assert_eq!(
+            rec.feedback.unwrap().error_message,
+            Some("API Error".to_string())
+        );
     }
 
     #[test]
@@ -193,7 +190,7 @@ mod tests {
         let status = RecommendationStatus::Approved;
         let json = serde_json::to_string(&status).unwrap();
         assert_eq!(json, "\"Approved\"");
-        
+
         let deserialized: RecommendationStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, status);
     }

@@ -1,12 +1,12 @@
 #![allow(dead_code)] // Allow unused library functions for future use
 use rusqlite::{params, Connection, Result};
 
-use std::sync::Mutex;
-use lazy_static::lazy_static;
-use crate::recommendation::AutomationProposal;
-use crate::quality_scorer::QualityScore;
 use crate::privacy::PrivacyGuard;
-use std::str::FromStr; // Added
+use crate::quality_scorer::QualityScore;
+use crate::recommendation::AutomationProposal;
+use lazy_static::lazy_static;
+use std::str::FromStr;
+use std::sync::Mutex; // Added
 
 // Global DB connection (for MVP simplicity)
 // In production, we should pass a connection pool or handle.
@@ -72,8 +72,15 @@ pub fn init() -> anyhow::Result<()> {
         }
     }
 
-    // [Paranoid Audit] Use Stable ID Path
-    let db_path = if let Some(mut path) = dirs::data_local_dir() {
+    // [Paranoid Audit] Use stable path, with explicit override for pipeline integration.
+    let db_path = if let Ok(override_path) = std::env::var("STEER_DB_PATH") {
+        let trimmed = override_path.trim();
+        if trimmed.is_empty() {
+            std::path::PathBuf::from("steer.db")
+        } else {
+            std::path::PathBuf::from(trimmed)
+        }
+    } else if let Some(mut path) = dirs::data_local_dir() {
         path.push("steer");
         std::fs::create_dir_all(&path)?; // Ensure ~/.local/share/steer exists
         path.push("steer.db");
@@ -81,14 +88,20 @@ pub fn init() -> anyhow::Result<()> {
     } else {
         std::path::PathBuf::from("steer.db") // Fallback
     };
-    
+
+    if let Some(parent) = db_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
     // Open (or create) steer.db
     let conn = Connection::open(&db_path)?;
     println!("📦 Database initialized at: {:?}", db_path);
-    
+
     // [Paranoid Audit] Set Busy Timeout to 5s to handle concurrency (Analyzer + API + Main)
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    
+
     // Legacy simple events table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS events (
@@ -219,14 +232,22 @@ pub fn init() -> anyhow::Result<()> {
         )",
         [],
     )?;
-    
+
     // [Paranoid Audit] Performance Indexes - ADDED MISSING INDICES
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)", [])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_history(created_at)", [])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_recs_created ON recommendations(created_at)", [])?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_history(created_at)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recs_created ON recommendations(created_at)",
+        [],
+    )?;
     // V2 Indices moved to init_v2 to ensure table exists
 
-    
     conn.execute(
         "CREATE TABLE IF NOT EXISTS judgment_states (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -278,18 +299,71 @@ pub fn init() -> anyhow::Result<()> {
         )",
         [],
     )?;
-    
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS task_runs (
+            run_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            intent TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            planner_complete INTEGER NOT NULL DEFAULT 0,
+            execution_complete INTEGER NOT NULL DEFAULT 0,
+            business_complete INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            summary TEXT,
+            details TEXT
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS task_stage_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            stage_order INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            details TEXT
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS task_stage_assertions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            stage_name TEXT NOT NULL,
+            assertion_key TEXT NOT NULL,
+            expected TEXT NOT NULL,
+            actual TEXT NOT NULL,
+            passed INTEGER NOT NULL,
+            evidence TEXT,
+            created_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_stage_runs_run_id
+         ON task_stage_runs(run_id, stage_order)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_stage_assertions_run_id
+         ON task_stage_assertions(run_id, stage_name)",
+        [],
+    )?;
+
     // Store connection
     {
         let mut lock = get_db_lock();
         *lock = Some(conn);
     } // Lock is dropped here
-    
+
     println!("📦 Database 'steer.db' initialized.");
-    
+
     // Init V2 Schema
     {
-        // Must release lock before calling init_v2 if it grabs lock? 
+        // Must release lock before calling init_v2 if it grabs lock?
         // Actually init_v2 grabs lock. But here we already dropped the lock scope in line 79.
     }
     if let Err(e) = init_v2() {
@@ -303,7 +377,7 @@ pub fn init() -> anyhow::Result<()> {
     if let Err(e) = seed_advanced_examples() {
         eprintln!("Failed to seed templates: {}", e);
     }
-    
+
     // [Migration] Ensure 'evidence' column exists
     if let Some(conn) = get_db_lock().as_mut() {
         ensure_column(
@@ -319,7 +393,19 @@ pub fn init() -> anyhow::Result<()> {
         ensure_column(conn, "recommendations", "pattern_id", "TEXT");
         ensure_column(conn, "recommendations", "last_error", "TEXT");
         ensure_column(conn, "exec_approvals", "decision", "TEXT");
-        
+        // Keep recommendation status model strict: pending/approved/rejected only.
+        let _ = conn.execute(
+            "UPDATE recommendations
+             SET status = CASE
+                 WHEN LOWER(status) IN ('pending', 'approved', 'rejected') THEN LOWER(status)
+                 ELSE 'pending'
+             END
+             WHERE status IS NULL
+                OR LOWER(status) NOT IN ('pending', 'approved', 'rejected')
+                OR status != LOWER(status)",
+            [],
+        );
+
         // 1-2. Routine Candidates Table
         if let Err(e) = conn.execute(
             "CREATE TABLE IF NOT EXISTS routine_candidates (
@@ -356,13 +442,16 @@ pub fn create_routine(name: &str, cron: &str, prompt: &str) -> Result<i64> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let created_at = chrono::Utc::now().to_rfc3339();
-        
+
         // Calculate initial next_run
         let next_run = match cron::Schedule::from_str(cron) {
-            Ok(s) => s.upcoming(chrono::Utc).next().map(|d: chrono::DateTime<chrono::Utc>| d.to_rfc3339()),
+            Ok(s) => s
+                .upcoming(chrono::Utc)
+                .next()
+                .map(|d: chrono::DateTime<chrono::Utc>| d.to_rfc3339()),
             Err(_) => None, // Invalid cron, will never run (validation should happen before)
         };
-        
+
         conn.execute(
             "INSERT INTO routines (name, cron_expression, prompt, created_at, next_run) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![name, cron, prompt, created_at, next_run],
@@ -514,7 +603,10 @@ pub struct RecommendationMetrics {
     pub rejected: i64,
     pub failed: i64,
     pub pending: i64,
+    /// Backward-compatible counter kept for older dashboard cards.
     pub later: i64,
+    /// Count of records outside pending/approved/rejected (legacy data).
+    pub legacy_other: i64,
     pub last_created_at: Option<String>,
 }
 
@@ -606,6 +698,46 @@ pub struct NLRun {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskRunRecord {
+    pub run_id: String,
+    pub created_at: String,
+    pub finished_at: Option<String>,
+    pub intent: String,
+    pub prompt: String,
+    pub planner_complete: bool,
+    pub execution_complete: bool,
+    pub business_complete: bool,
+    pub status: String,
+    pub summary: Option<String>,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskStageRunRecord {
+    pub id: i64,
+    pub run_id: String,
+    pub stage_name: String,
+    pub stage_order: i64,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub details: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskStageAssertionRecord {
+    pub id: i64,
+    pub run_id: String,
+    pub stage_name: String,
+    pub assertion_key: String,
+    pub expected: String,
+    pub actual: String,
+    pub passed: bool,
+    pub evidence: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NLRunMetrics {
     pub total: i64,
     pub completed: i64,
@@ -629,7 +761,8 @@ pub fn insert_recommendation(proposal: &AutomationProposal) -> Result<bool> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let created_at = chrono::Utc::now().to_rfc3339();
-        let actions_json = serde_json::to_string(&proposal.actions).unwrap_or_else(|_| "[]".to_string());
+        let actions_json =
+            serde_json::to_string(&proposal.actions).unwrap_or_else(|_| "[]".to_string());
         let fingerprint = proposal.fingerprint();
 
         let rows = conn.execute(
@@ -679,11 +812,12 @@ pub fn get_recommendation_metrics() -> Result<RecommendationMetrics> {
                 COUNT(*) as total,
                 COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0) as approved,
                 COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) as rejected,
-                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+                COALESCE(SUM(CASE WHEN last_error IS NOT NULL AND TRIM(last_error) != '' THEN 1 ELSE 0 END), 0) as failed,
                 COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending,
-                COALESCE(SUM(CASE WHEN status = 'later' THEN 1 ELSE 0 END), 0) as later,
+                0 as later,
+                COALESCE(SUM(CASE WHEN status NOT IN ('pending','approved','rejected') THEN 1 ELSE 0 END), 0) as legacy_other,
                 MAX(created_at) as last_created_at
-             FROM recommendations"
+             FROM recommendations",
         )?;
 
         let metrics = stmt.query_row([], |row| {
@@ -694,7 +828,8 @@ pub fn get_recommendation_metrics() -> Result<RecommendationMetrics> {
                 failed: row.get(3)?,
                 pending: row.get(4)?,
                 later: row.get(5)?,
-                last_created_at: row.get(6).ok(),
+                legacy_other: row.get(6)?,
+                last_created_at: row.get(7).ok(),
             })
         })?;
 
@@ -707,11 +842,16 @@ pub fn get_recommendation_metrics() -> Result<RecommendationMetrics> {
         failed: 0,
         pending: 0,
         later: 0,
+        legacy_other: 0,
         last_created_at: None,
     })
 }
 
-pub fn create_exec_approval(command: &str, cwd: Option<&str>, expires_in_secs: i64) -> Result<ExecApproval> {
+pub fn create_exec_approval(
+    command: &str,
+    cwd: Option<&str>,
+    expires_in_secs: i64,
+) -> Result<ExecApproval> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let now = chrono::Utc::now();
@@ -750,7 +890,12 @@ pub fn create_exec_approval(command: &str, cwd: Option<&str>, expires_in_secs: i
     })
 }
 
-pub fn resolve_exec_approval(id: &str, status: &str, resolved_by: Option<&str>, decision: Option<&str>) -> Result<()> {
+pub fn resolve_exec_approval(
+    id: &str,
+    status: &str,
+    resolved_by: Option<&str>,
+    decision: Option<&str>,
+) -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let resolved_at = chrono::Utc::now().to_rfc3339();
@@ -762,6 +907,19 @@ pub fn resolve_exec_approval(id: &str, status: &str, resolved_by: Option<&str>, 
         )?;
     }
     Ok(())
+}
+
+pub fn get_exec_approval_status(id: &str) -> Result<String> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let status: String = conn.query_row(
+            "SELECT status FROM exec_approvals WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        return Ok(status);
+    }
+    Err(rusqlite::Error::QueryReturnedNoRows)
 }
 
 pub fn list_exec_approvals(status_filter: Option<&str>, limit: i64) -> Result<Vec<ExecApproval>> {
@@ -906,9 +1064,8 @@ pub fn delete_approval_policy(policy_key: &str) -> Result<()> {
 pub fn get_approval_policy_decision(policy_key: &str) -> Result<Option<String>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT decision FROM nl_approval_policies WHERE policy_key = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT decision FROM nl_approval_policies WHERE policy_key = ?1")?;
         let mut rows = stmt.query(params![policy_key])?;
         if let Some(row) = rows.next()? {
             return Ok(Some(row.get(0)?));
@@ -1022,7 +1179,12 @@ pub fn create_exec_result(command: &str, cwd: Option<&str>) -> Result<ExecResult
     })
 }
 
-pub fn update_exec_result(id: &str, status: &str, output: Option<&str>, error: Option<&str>) -> Result<()> {
+pub fn update_exec_result(
+    id: &str,
+    status: &str,
+    output: Option<&str>,
+    error: Option<&str>,
+) -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let updated_at = chrono::Utc::now().to_rfc3339();
@@ -1153,7 +1315,8 @@ pub fn get_latest_quality_score() -> Result<Option<QualityScoreRecord>> {
             Ok(QualityScoreRecord {
                 created_at: row.get(0)?,
                 overall: row.get(1)?,
-                breakdown: serde_json::from_str(&breakdown_str).unwrap_or_else(|_| serde_json::json!({})),
+                breakdown: serde_json::from_str(&breakdown_str)
+                    .unwrap_or_else(|_| serde_json::json!({})),
                 issues: serde_json::from_str(&issues_str).unwrap_or_else(|_| Vec::new()),
                 strengths: serde_json::from_str(&strengths_str).unwrap_or_else(|_| Vec::new()),
                 recommendation: row.get(5)?,
@@ -1310,6 +1473,280 @@ pub fn insert_nl_run(
     Ok(())
 }
 
+pub fn create_task_run(run_id: &str, intent: &str, prompt: &str, status: &str) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT OR REPLACE INTO task_runs (
+                run_id, created_at, finished_at, intent, prompt,
+                planner_complete, execution_complete, business_complete,
+                status, summary, details
+             ) VALUES (?1, ?2, NULL, ?3, ?4, 0, 0, 0, ?5, NULL, NULL)",
+            params![run_id, created_at, intent, prompt, status],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn record_task_stage_run(
+    run_id: &str,
+    stage_name: &str,
+    stage_order: i64,
+    status: &str,
+    details: Option<&str>,
+) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO task_stage_runs (
+                run_id, stage_name, stage_order, status, started_at, finished_at, details
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![run_id, stage_name, stage_order, status, now, now, details],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn record_task_stage_assertion(
+    run_id: &str,
+    stage_name: &str,
+    assertion_key: &str,
+    expected: &str,
+    actual: &str,
+    passed: bool,
+    evidence: Option<&str>,
+) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO task_stage_assertions (
+                run_id, stage_name, assertion_key, expected, actual, passed, evidence, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                run_id,
+                stage_name,
+                assertion_key,
+                expected,
+                actual,
+                passed as i64,
+                evidence,
+                created_at
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn update_task_run_outcome(
+    run_id: &str,
+    planner_complete: bool,
+    execution_complete: bool,
+    business_complete: bool,
+    status: &str,
+    summary: Option<&str>,
+    details: Option<&str>,
+) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let finished_at = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE task_runs
+             SET finished_at = ?1,
+                 planner_complete = ?2,
+                 execution_complete = ?3,
+                 business_complete = ?4,
+                 status = ?5,
+                 summary = ?6,
+                 details = ?7
+             WHERE run_id = ?8",
+            params![
+                finished_at,
+                planner_complete as i64,
+                execution_complete as i64,
+                business_complete as i64,
+                status,
+                summary,
+                details,
+                run_id
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn get_task_run(run_id: &str) -> Result<Option<TaskRunRecord>> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let mut stmt = conn.prepare(
+            "SELECT run_id, created_at, finished_at, intent, prompt,
+                    planner_complete, execution_complete, business_complete,
+                    status, summary, details
+             FROM task_runs
+             WHERE run_id = ?1
+             LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query(params![run_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(TaskRunRecord {
+                run_id: row.get(0)?,
+                created_at: row.get(1)?,
+                finished_at: row.get(2).ok(),
+                intent: row.get(3)?,
+                prompt: row.get(4)?,
+                planner_complete: row.get::<_, i64>(5)? != 0,
+                execution_complete: row.get::<_, i64>(6)? != 0,
+                business_complete: row.get::<_, i64>(7)? != 0,
+                status: row.get(8)?,
+                summary: row.get(9).ok(),
+                details: row.get(10).ok(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
+pub fn list_task_runs(limit: i64, status: Option<&str>) -> Result<Vec<TaskRunRecord>> {
+    let bounded_limit = limit.clamp(1, 500);
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let normalized_status = status.map(|s| s.trim()).filter(|s| !s.is_empty());
+        let mut out = Vec::new();
+
+        if let Some(status_filter) = normalized_status {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, created_at, finished_at, intent, prompt,
+                        planner_complete, execution_complete, business_complete,
+                        status, summary, details
+                 FROM task_runs
+                 WHERE status = ?1
+                 ORDER BY created_at DESC
+                 LIMIT ?2",
+            )?;
+
+            let rows = stmt.query_map(params![status_filter, bounded_limit], |row| {
+                Ok(TaskRunRecord {
+                    run_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    finished_at: row.get(2).ok(),
+                    intent: row.get(3)?,
+                    prompt: row.get(4)?,
+                    planner_complete: row.get::<_, i64>(5)? != 0,
+                    execution_complete: row.get::<_, i64>(6)? != 0,
+                    business_complete: row.get::<_, i64>(7)? != 0,
+                    status: row.get(8)?,
+                    summary: row.get(9).ok(),
+                    details: row.get(10).ok(),
+                })
+            })?;
+
+            for row in rows {
+                out.push(row?);
+            }
+            return Ok(out);
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT run_id, created_at, finished_at, intent, prompt,
+                    planner_complete, execution_complete, business_complete,
+                    status, summary, details
+             FROM task_runs
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![bounded_limit], |row| {
+            Ok(TaskRunRecord {
+                run_id: row.get(0)?,
+                created_at: row.get(1)?,
+                finished_at: row.get(2).ok(),
+                intent: row.get(3)?,
+                prompt: row.get(4)?,
+                planner_complete: row.get::<_, i64>(5)? != 0,
+                execution_complete: row.get::<_, i64>(6)? != 0,
+                business_complete: row.get::<_, i64>(7)? != 0,
+                status: row.get(8)?,
+                summary: row.get(9).ok(),
+                details: row.get(10).ok(),
+            })
+        })?;
+
+        for row in rows {
+            out.push(row?);
+        }
+        return Ok(out);
+    }
+    Ok(Vec::new())
+}
+
+pub fn list_task_stage_runs(run_id: &str) -> Result<Vec<TaskStageRunRecord>> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let mut stmt = conn.prepare(
+            "SELECT id, run_id, stage_name, stage_order, status, started_at, finished_at, details
+             FROM task_stage_runs
+             WHERE run_id = ?1
+             ORDER BY stage_order ASC, id ASC",
+        )?;
+
+        let rows = stmt.query_map(params![run_id], |row| {
+            Ok(TaskStageRunRecord {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                stage_name: row.get(2)?,
+                stage_order: row.get(3)?,
+                status: row.get(4)?,
+                started_at: row.get(5)?,
+                finished_at: row.get(6)?,
+                details: row.get(7).ok(),
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        return Ok(out);
+    }
+    Ok(Vec::new())
+}
+
+pub fn list_task_stage_assertions(run_id: &str) -> Result<Vec<TaskStageAssertionRecord>> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let mut stmt = conn.prepare(
+            "SELECT id, run_id, stage_name, assertion_key, expected, actual, passed, evidence, created_at
+             FROM task_stage_assertions
+             WHERE run_id = ?1
+             ORDER BY id ASC",
+        )?;
+
+        let rows = stmt.query_map(params![run_id], |row| {
+            Ok(TaskStageAssertionRecord {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                stage_name: row.get(2)?,
+                assertion_key: row.get(3)?,
+                expected: row.get(4)?,
+                actual: row.get(5)?,
+                passed: row.get::<_, i64>(6)? != 0,
+                evidence: row.get(7).ok(),
+                created_at: row.get(8)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        return Ok(out);
+    }
+    Ok(Vec::new())
+}
+
 pub fn list_nl_runs(limit: i64) -> Result<Vec<NLRun>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
@@ -1395,9 +1832,8 @@ pub fn get_nl_run_metrics(limit: i64) -> Result<NLRunMetrics> {
 pub fn is_exec_allowlisted(command: &str, cwd: Option<&str>) -> Result<bool> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT id, pattern, cwd FROM exec_allowlist ORDER BY created_at DESC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, pattern, cwd FROM exec_allowlist ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
             let cwd: Option<String> = row.get(2)?;
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, cwd))
@@ -1518,9 +1954,7 @@ pub fn list_routine_runs(limit: i64) -> Result<Vec<RoutineRun>> {
     Ok(Vec::new())
 }
 
-pub fn insert_routine_candidate(
-    pattern: &crate::pattern_detector::DetectedPattern,
-) -> Result<()> {
+pub fn insert_routine_candidate(pattern: &crate::pattern_detector::DetectedPattern) -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let created_at = chrono::Utc::now().to_rfc3339();
@@ -1549,20 +1983,17 @@ pub fn seed_advanced_examples() -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         // Check if any recommendations exist
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM recommendations",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM recommendations", [], |row| row.get(0))?;
 
         if count > 0 {
             return Ok(());
         }
 
         println!("🌱 Seeding advanced workflow templates...");
-        
+
         let created_at = chrono::Utc::now().to_rfc3339();
-        
+
         // Example 1: Morning Briefing
         let briefing_json = r#"{
             "name": "Daily Morning Briefing",
@@ -1640,23 +2071,29 @@ pub fn get_recommendations_with_filter(status_filter: Option<&str>) -> Result<Ve
             Some(_) => "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error FROM recommendations WHERE status = ?1 ORDER BY created_at DESC",
             None => "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error FROM recommendations WHERE status = 'pending' ORDER BY created_at DESC"
         };
-        
+
         let mut stmt = conn.prepare(sql)?;
-        
+
         // Execute query map based on filter
         let mut recs = Vec::new();
 
         if let Some(s) = status_filter {
-            if s == "all" { 
+            if s == "all" {
                 let rows = stmt.query_map([], map_row)?;
-                for rec in rows { recs.push(rec?); }
-            } else { 
+                for rec in rows {
+                    recs.push(rec?);
+                }
+            } else {
                 let rows = stmt.query_map([s], map_row)?;
-                for rec in rows { recs.push(rec?); }
+                for rec in rows {
+                    recs.push(rec?);
+                }
             }
         } else {
-             let rows = stmt.query_map([], map_row)?;
-             for rec in rows { recs.push(rec?); }
+            let rows = stmt.query_map([], map_row)?;
+            for rec in rows {
+                recs.push(rec?);
+            }
         };
 
         Ok(recs)
@@ -1710,8 +2147,6 @@ pub fn list_recommendations(status: &str, limit: i64) -> Result<Vec<Recommendati
         )?;
 */
 
-
-
 pub fn get_recommendation(id: i64) -> Result<Option<Recommendation>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
@@ -1725,7 +2160,7 @@ pub fn get_recommendation(id: i64) -> Result<Option<Recommendation>> {
         if let Some(row) = rows.next()? {
             let actions_json: String = row.get(5)?;
             let actions: Vec<String> = serde_json::from_str(&actions_json).unwrap_or_default();
-            
+
             let evidence_json: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
             let evidence: Vec<String> = serde_json::from_str(&evidence_json).unwrap_or_default();
 
@@ -1760,12 +2195,120 @@ pub fn update_recommendation_status(id: i64, status: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn update_recommendation_review_status(id: i64, status: &str) -> Result<()> {
+    let normalized = status.trim().to_lowercase();
+    if normalized != "pending" && normalized != "approved" && normalized != "rejected" {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "invalid recommendation status '{}': only pending/approved/rejected are allowed",
+            status
+        )));
+    }
+
+    let rec = get_recommendation(id)?.ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(format!("recommendation {} not found", id))
+    })?;
+    let current = rec.status.trim().to_lowercase();
+
+    let allowed = match (current.as_str(), normalized.as_str()) {
+        ("pending", "pending") => true,
+        ("pending", "approved") => true,
+        ("pending", "rejected") => true,
+        ("approved", "approved") => true,
+        ("approved", "rejected") => true,
+        ("rejected", "rejected") => true,
+        ("rejected", "pending") => true,
+        _ => false,
+    };
+
+    if !allowed {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "invalid recommendation transition: {} -> {}",
+            current, normalized
+        )));
+    }
+
+    update_recommendation_status(id, &normalized)
+}
+
 pub fn mark_recommendation_failed(id: i64, error: &str) -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
+        // Keep review state in pending/approved/rejected model; store execution failure in last_error.
         conn.execute(
-            "UPDATE recommendations SET status = 'failed', last_error = ?1 WHERE id = ?2",
+            "UPDATE recommendations
+             SET status = CASE
+                 WHEN status IN ('approved', 'rejected') THEN status
+                 ELSE 'pending'
+             END,
+             last_error = ?1
+             WHERE id = ?2",
             params![error, id],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn claim_recommendation_provisioning(id: i64, claim_token: &str) -> Result<Option<String>> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        let mut stmt = conn.prepare(
+            "SELECT workflow_id
+             FROM recommendations
+             WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        let Some(row) = rows.next()? else {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "recommendation {} not found",
+                id
+            )));
+        };
+
+        let existing_workflow_id: Option<String> = row.get(0)?;
+        if let Some(existing) = existing_workflow_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(Some(existing.to_string()));
+        }
+
+        let changed = conn.execute(
+            "UPDATE recommendations
+             SET workflow_id = ?1
+             WHERE id = ?2
+               AND (workflow_id IS NULL OR TRIM(workflow_id) = '')",
+            params![claim_token, id],
+        )?;
+
+        if changed > 0 {
+            return Ok(None);
+        }
+
+        let mut reload_stmt = conn.prepare(
+            "SELECT workflow_id
+             FROM recommendations
+             WHERE id = ?1",
+        )?;
+        let mut reload_rows = reload_stmt.query(params![id])?;
+        if let Some(reload_row) = reload_rows.next()? {
+            let current: Option<String> = reload_row.get(0)?;
+            if let Some(current) = current.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                return Ok(Some(current.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn release_recommendation_provisioning_claim(id: i64, claim_token: &str) -> Result<()> {
+    let mut lock = get_db_lock();
+    if let Some(conn) = lock.as_mut() {
+        conn.execute(
+            "UPDATE recommendations
+             SET workflow_id = NULL
+             WHERE id = ?1 AND workflow_id = ?2",
+            params![id, claim_token],
         )?;
     }
     Ok(())
@@ -1811,11 +2354,16 @@ pub fn init_v2() -> Result<()> {
             )",
             [],
         )?;
-        
-        // [Paranoid Audit] Add Index for V2 Events
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_v2_ts ON events_v2(ts)", [])?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_v2_type ON events_v2(event_type)", [])?;
 
+        // [Paranoid Audit] Add Index for V2 Events
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_v2_ts ON events_v2(ts)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_v2_type ON events_v2(event_type)",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -1826,7 +2374,7 @@ pub fn insert_event_v2(envelope: &crate::schema::EventEnvelope) -> Result<()> {
         let payload_json = serde_json::to_string(&envelope.payload).unwrap_or_default();
         let privacy_json = serde_json::to_string(&envelope.privacy).unwrap_or_default();
         let raw_json = serde_json::to_string(&envelope.raw).unwrap_or_default();
-        
+
         let (res_type, res_id) = match &envelope.resource {
             Some(r) => (r.resource_type.clone(), r.id.clone()),
             None => ("".to_string(), "".to_string()),
@@ -1835,10 +2383,16 @@ pub fn insert_event_v2(envelope: &crate::schema::EventEnvelope) -> Result<()> {
         // Initialize PrivacyGuard (Local scope to safeguard data)
         let salt = std::env::var("PRIVACY_SALT").unwrap_or_else(|_| "default_salt".to_string());
         let guard = PrivacyGuard::new(salt);
-        
+
         // Mask specific fields
-        let window_title = envelope.window_title.as_ref().map(|t| guard.mask_sensitive_text(t));
-        let browser_url = envelope.browser_url.as_ref().map(|u| guard.mask_sensitive_text(u));
+        let window_title = envelope
+            .window_title
+            .as_ref()
+            .map(|t| guard.mask_sensitive_text(t));
+        let browser_url = envelope
+            .browser_url
+            .as_ref()
+            .map(|u| guard.mask_sensitive_text(u));
 
         conn.execute(
             "INSERT OR IGNORE INTO events_v2 (
@@ -1873,7 +2427,7 @@ pub fn init_sessions_table() -> Result<()> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         conn.execute(
-             "CREATE TABLE IF NOT EXISTS sessions_v2 (
+            "CREATE TABLE IF NOT EXISTS sessions_v2 (
                 session_id TEXT PRIMARY KEY,
                 start_ts TEXT NOT NULL,
                 end_ts TEXT NOT NULL,
@@ -1894,14 +2448,14 @@ pub fn fetch_all_events_v2(limit: i64) -> Result<Vec<crate::schema::EventEnvelop
              resource_type, resource_id, payload_json, privacy_json, pid, window_id, window_title, browser_url, raw_json
              FROM events_v2 ORDER BY ts ASC LIMIT ?1"
         )?;
-        
+
         let rows = stmt.query_map([limit], |row| {
             let payload_str: String = row.get(9)?;
             let privacy_str: String = row.get(10)?;
             let raw_str: String = row.get(15)?;
             let res_type: String = row.get(7)?;
             let res_id: String = row.get(8)?;
-            
+
             let payload = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
             let privacy = serde_json::from_str(&privacy_str).ok();
             let raw = serde_json::from_str(&raw_str).ok();
@@ -1913,7 +2467,7 @@ pub fn fetch_all_events_v2(limit: i64) -> Result<Vec<crate::schema::EventEnvelop
                     id: res_id,
                 })
             };
-            
+
             Ok(crate::schema::EventEnvelope {
                 schema_version: row.get(0)?,
                 event_id: row.get(1)?,
@@ -1950,8 +2504,14 @@ pub fn insert_session(session: &crate::session::SessionRecord) -> Result<()> {
         conn.execute(
             "INSERT INTO sessions_v2 (session_id, start_ts, end_ts, duration_sec, summary_json)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session.session_id, session.start_ts, session.end_ts, session.duration_sec, summary_json],
-        )?; 
+            params![
+                session.session_id,
+                session.start_ts,
+                session.end_ts,
+                session.duration_sec,
+                summary_json
+            ],
+        )?;
     }
     Ok(())
 }
@@ -1968,7 +2528,7 @@ pub fn insert_event(event_json: &str) -> Result<()> {
             } else {
                 timestamp_str.to_string()
             };
-            
+
             let source = value["source"].as_str().unwrap_or("unknown");
             let type_ = value["type"].as_str().unwrap_or("unknown");
             // Store full JSON in data
@@ -1978,7 +2538,6 @@ pub fn insert_event(event_json: &str) -> Result<()> {
                 "INSERT INTO events (timestamp, source, type, data) VALUES (?1, ?2, ?3, ?4)",
                 params![timestamp, source, type_, data],
             )?;
-
         }
     }
     Ok(())
@@ -2044,24 +2603,24 @@ pub fn get_recent_events(cutoff_hours: i64) -> anyhow::Result<Vec<String>> {
         let mut stmt = conn.prepare(
             "SELECT data FROM events
              WHERE timestamp >= ?1
-             ORDER BY timestamp ASC"
+             ORDER BY timestamp ASC",
         )?;
 
         let rows = stmt.query_map(params![&cutoff], |row| row.get::<_, String>(0))?;
         for event in rows {
-             if let Ok(json) = event {
-                 events.push(json);
-             }
+            if let Ok(json) = event {
+                events.push(json);
+            }
         }
-        
+
         // Sort merged events by timestamp to be safe (though usually appended logic works if legacy is old)
-        // But here we rely on the fact that legacy is old. 
-        // If we want true sort, we need to parse JSON. 
-        // For MVP harding, we assume legacy is strictly older or concurrent? 
-        // Actually, let's just append. Data from V2 is recent. 
+        // But here we rely on the fact that legacy is old.
+        // If we want true sort, we need to parse JSON.
+        // For MVP harding, we assume legacy is strictly older or concurrent?
+        // Actually, let's just append. Data from V2 is recent.
         // Wait, if V2 is empty, we get legacy. If V2 has data, we ALSO get legacy?
         // Yes, we want full history for the window.
-        
+
         return Ok(events);
     }
     Err(anyhow::anyhow!("DB not initialized").into())
@@ -2091,9 +2650,9 @@ pub fn get_recent_chat_history(limit: i64) -> Result<Vec<ChatMessage>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
         let mut stmt = conn.prepare(
-            "SELECT role, content, created_at FROM chat_history ORDER BY created_at DESC LIMIT ?1"
+            "SELECT role, content, created_at FROM chat_history ORDER BY created_at DESC LIMIT ?1",
         )?;
-        
+
         let rows = stmt.query_map([limit], |row| {
             Ok(ChatMessage {
                 role: row.get(0)?,
@@ -2144,9 +2703,11 @@ pub fn save_learned_routine(name: &str, steps_json: &str) -> Result<()> {
 pub fn get_learned_routine(name: &str) -> Result<Option<LearnedRoutine>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare("SELECT id, name, steps_json, created_at FROM learned_routines WHERE name = ?1")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, steps_json, created_at FROM learned_routines WHERE name = ?1",
+        )?;
         let mut rows = stmt.query(params![name])?;
-        
+
         if let Some(row) = rows.next()? {
             Ok(Some(LearnedRoutine {
                 id: row.get(0)?,
@@ -2167,14 +2728,14 @@ pub fn list_learned_routines() -> Result<Vec<LearnedRoutine>> {
     if let Some(conn) = lock.as_mut() {
         let mut stmt = conn.prepare("SELECT id, name, steps_json, created_at FROM learned_routines ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
-             Ok(LearnedRoutine {
+            Ok(LearnedRoutine {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 steps_json: row.get(2)?,
                 created_at: row.get(3)?, // This line was missing in the provided snippet, added for completeness based on LearnedRoutine struct
             })
         })?;
-        
+
         let mut list = Vec::new();
         for r in rows {
             list.push(r?);
@@ -2211,18 +2772,20 @@ pub fn get_dashboard_stats() -> Result<DashboardStats> {
         let (total_sessions, total_time_mins): (i64, i64) = match conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(duration_sec)/60, 0) FROM sessions_v2",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?))
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ) {
             Ok(res) => res,
-            Err(_) => (0, 0) // sessions_v2 might not exist yet
+            Err(_) => (0, 0), // sessions_v2 might not exist yet
         };
 
         // 2. Pending Recs
-        let rec_pending: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM recommendations WHERE status = 'pending'",
-            [],
-            |row| row.get(0)
-        ).unwrap_or(0);
+        let rec_pending: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recommendations WHERE status = 'pending'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
 
         // 3. Top Apps
         let mut top_apps = Vec::new();
@@ -2236,19 +2799,19 @@ pub fn get_dashboard_stats() -> Result<DashboardStats> {
                 }
             }
         }
-        
+
         Ok(DashboardStats {
             total_sessions,
             total_time_mins,
             top_apps,
-            rec_pending
+            rec_pending,
         })
     } else {
         Ok(DashboardStats {
             total_sessions: 0,
             total_time_mins: 0,
             top_apps: vec![],
-            rec_pending: 0
+            rec_pending: 0,
         })
     }
 }
@@ -2256,15 +2819,15 @@ pub fn get_dashboard_stats() -> Result<DashboardStats> {
 pub fn get_recent_recommendations(limit: i64) -> Result<Vec<Recommendation>> {
     let mut lock = get_db_lock();
     if let Some(conn) = lock.as_mut() {
-         let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(
             "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error 
              FROM recommendations 
-             WHERE status NOT IN ('dismissed', 'completed')
+             WHERE status IN ('pending', 'approved', 'rejected')
              ORDER BY created_at DESC 
              LIMIT ?1"
         )?;
         let rows = stmt.query_map(params![limit], map_row)?;
-        
+
         let mut recs = Vec::new();
         for r in rows {
             recs.push(r?);
@@ -2286,18 +2849,39 @@ pub struct PolicyConfigReport {
 
 pub fn get_active_policy_config() -> PolicyConfigReport {
     PolicyConfigReport {
-        tool_allowlist: std::env::var("TOOL_ALLOWLIST").unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        tool_denylist: std::env::var("TOOL_DENYLIST").unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        shell_allowlist: std::env::var("SHELL_ALLOWLIST").unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        shell_denylist: std::env::var("SHELL_DENYLIST").unwrap_or_default().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        tool_allowlist: std::env::var("TOOL_ALLOWLIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        tool_denylist: std::env::var("TOOL_DENYLIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        shell_allowlist: std::env::var("SHELL_ALLOWLIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        shell_denylist: std::env::var("SHELL_DENYLIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
         // Check standard env var or default
-        write_lock_default: true, 
+        write_lock_default: true,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recommendation::AutomationProposal;
 
     #[test]
     fn test_init_creates_table() {
@@ -2308,9 +2892,38 @@ mod tests {
     #[test]
     fn test_insert_event() {
         init().ok(); // Might error if already init
-        
+
         let test_event = r#"{"type":"test","source":"unit_test"}"#;
         let insert_result = insert_event(test_event);
         assert!(insert_result.is_ok());
+    }
+
+    #[test]
+    fn test_recommendation_review_status_transitions() {
+        init().ok();
+
+        let unique = format!("status-transition-test-{}", uuid::Uuid::new_v4());
+        let proposal = AutomationProposal {
+            title: unique.clone(),
+            summary: "status transition test".to_string(),
+            trigger: "unit-test".to_string(),
+            actions: vec!["noop".to_string()],
+            confidence: 0.1,
+            n8n_prompt: "noop".to_string(),
+            evidence: vec![],
+            pattern_id: None,
+        };
+        let _ = insert_recommendation(&proposal);
+
+        let rows = get_recommendations_with_filter(Some("all")).unwrap_or_default();
+        let Some(rec) = rows.into_iter().find(|r| r.title == unique) else {
+            eprintln!("skip: could not resolve inserted recommendation for transition test");
+            return;
+        };
+
+        assert!(update_recommendation_review_status(rec.id, "approved").is_ok());
+        assert!(update_recommendation_review_status(rec.id, "pending").is_err());
+        assert!(update_recommendation_review_status(rec.id, "rejected").is_ok());
+        assert!(update_recommendation_review_status(rec.id, "later").is_err());
     }
 }

@@ -41,6 +41,7 @@ export const RecommendationMetricsSchema = z.object({
     failed: z.number(),
     pending: z.number(),
     later: z.number(),
+    legacy_other: z.number().optional(),
     approval_rate: z.number(),
     last_created_at: z.string().nullable().optional(),
 });
@@ -80,6 +81,7 @@ export const ExecResultSchema = z.object({
 export const RoutineRunSchema = z.object({
     id: z.number(),
     routine_id: z.number(),
+    routine_name: z.string().optional(),
     started_at: z.string(),
     finished_at: z.string().nullable().optional(),
     status: z.string(),
@@ -190,6 +192,8 @@ export const VerificationRunSchema = z.object({
     id: z.number(),
     created_at: z.string(),
     kind: z.string(),
+    mode: z.string().optional(),
+    status: z.string().optional(),
     ok: z.boolean(),
     summary: z.string(),
     details: z.string().nullable().optional(),
@@ -232,6 +236,10 @@ export const AgentExecuteResponseSchema = z.object({
         .optional(),
     manual_steps: z.array(z.string()).optional().default([]),
     resume_from: z.number().optional().nullable(),
+    run_id: z.string().nullable().optional(),
+    planner_complete: z.boolean().optional().default(false),
+    execution_complete: z.boolean().optional().default(false),
+    business_complete: z.boolean().optional().default(false),
 });
 
 export const AgentVerifyResponseSchema = z.object({
@@ -271,6 +279,43 @@ export const NLRunSchema = z.object({
     status: z.string(),
     summary: z.string().nullable().optional(),
     details: z.string().nullable().optional(),
+});
+
+export const TaskRunSchema = z.object({
+    run_id: z.string(),
+    created_at: z.string(),
+    finished_at: z.string().nullable().optional(),
+    intent: z.string(),
+    prompt: z.string(),
+    planner_complete: z.boolean(),
+    execution_complete: z.boolean(),
+    business_complete: z.boolean(),
+    status: z.string(),
+    summary: z.string().nullable().optional(),
+    details: z.string().nullable().optional(),
+});
+
+export const TaskStageRunSchema = z.object({
+    id: z.number(),
+    run_id: z.string(),
+    stage_name: z.string(),
+    stage_order: z.number(),
+    status: z.string(),
+    started_at: z.string(),
+    finished_at: z.string(),
+    details: z.string().nullable().optional(),
+});
+
+export const TaskStageAssertionSchema = z.object({
+    id: z.number(),
+    run_id: z.string(),
+    stage_name: z.string(),
+    assertion_key: z.string(),
+    expected: z.string(),
+    actual: z.string(),
+    passed: z.boolean(),
+    evidence: z.string().nullable().optional(),
+    created_at: z.string(),
 });
 
 export const ContextSelectionSchema = z.object({
@@ -320,6 +365,9 @@ export type AgentApproveResponse = z.infer<typeof AgentApproveResponseSchema>;
 export type ApprovalPolicy = z.infer<typeof ApprovalPolicySchema>;
 export type NLRunMetrics = z.infer<typeof NLRunMetricsSchema>;
 export type NLRun = z.infer<typeof NLRunSchema>;
+export type TaskRun = z.infer<typeof TaskRunSchema>;
+export type TaskStageRun = z.infer<typeof TaskStageRunSchema>;
+export type TaskStageAssertion = z.infer<typeof TaskStageAssertionSchema>;
 export type ContextSelection = z.infer<typeof ContextSelectionSchema>;
 export type ProjectScan = z.infer<typeof ProjectScanSchema>;
 export type Judgment = z.infer<typeof JudgmentSchema>;

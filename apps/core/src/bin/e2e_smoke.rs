@@ -1,5 +1,5 @@
-use local_os_agent::{db, pattern_detector, recommendation, schema};
 use chrono::Utc;
+use local_os_agent::{db, pattern_detector, recommendation, schema};
 use recommendation::TemplateMatcher;
 use schema::{EventEnvelope, ResourceContext};
 use std::path::PathBuf;
@@ -42,9 +42,17 @@ fn main() {
     let total = recs.len();
     let latest: Vec<_> = recs.iter().take(5).collect();
 
-    println!("E2E Smoke: inserted {} recommendations (total: {})", inserted, total);
+    println!(
+        "E2E Smoke: inserted {} recommendations (total: {})",
+        inserted, total
+    );
     for r in latest {
-        println!("- [{}] {} ({:.0}%)", r.status, r.title, r.confidence * 100.0);
+        println!(
+            "- [{}] {} ({:.0}%)",
+            r.status,
+            r.title,
+            r.confidence * 100.0
+        );
     }
 }
 
