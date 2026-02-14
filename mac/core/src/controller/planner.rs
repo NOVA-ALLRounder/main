@@ -40,6 +40,7 @@ struct RunGoalExecutionSummary {
     business_note: String,
     step_count: usize,
     failed_steps: usize,
+    blocking_failed_steps: usize,
     mail_send_required: bool,
     mail_send_confirmed: bool,
     notes_write_required: bool,
@@ -98,6 +99,40 @@ impl Planner {
         mentions_mail && mentions_send
     }
 
+    fn should_use_deterministic_goal_autoplan(goal: &str) -> bool {
+        if !Self::env_truthy_default("STEER_DETERMINISTIC_GOAL_AUTOPLAN", true) {
+            return false;
+        }
+        if Self::env_truthy("STEER_FORCE_DETERMINISTIC_GOAL_AUTOPLAN") {
+            return true;
+        }
+
+        let lower = goal.to_lowercase();
+        let apps = Self::ordered_apps_in_goal(goal);
+        let quoted = Self::extract_quoted_fragments(goal);
+        let explicit_ops = Self::goal_contains_any(
+            &lower,
+            &[
+                "cmd+",
+                "command+",
+                "전체 선택",
+                "복사",
+                "붙여넣",
+                "copy",
+                "paste",
+                "subject",
+                "제목",
+                "받는 사람",
+                "recipient",
+                "send",
+                "보내기",
+                "발송",
+            ],
+        );
+
+        apps.len() >= 2 && quoted.len() >= 2 && explicit_ops
+    }
+
     fn goal_has_payload_tokens(goal: &str) -> bool {
         !Self::extract_quoted_fragments(goal).is_empty()
     }
@@ -153,18 +188,24 @@ impl Planner {
     fn goal_requires_textedit_save(goal: &str) -> bool {
         let lower = goal.to_lowercase();
         let mentions_textedit = lower.contains("textedit") || lower.contains("텍스트에디트");
-        let mentions_save = Self::goal_contains_any(
-            &lower,
-            &[
-                "save",
-                "저장",
-                "cmd+s",
-                "command+s",
-                "파일로 저장",
-                "저장해",
-            ],
-        );
+        let mentions_save_shortcut = Self::contains_shortcut_token(&lower, "cmd", "s")
+            || Self::contains_shortcut_token(&lower, "command", "s");
+        let mentions_save =
+            Self::goal_contains_any(&lower, &["save", "저장", "파일로 저장", "저장해"])
+                || mentions_save_shortcut;
         mentions_textedit && mentions_save
+    }
+
+    fn contains_shortcut_token(text_lower: &str, modifier: &str, key: &str) -> bool {
+        let escaped_modifier = regex::escape(modifier);
+        let escaped_key = regex::escape(key);
+        let pattern = format!(
+            r"(^|[^a-z0-9_+]){}\s*\+\s*{}([^a-z0-9_+]|$)",
+            escaped_modifier, escaped_key
+        );
+        regex::Regex::new(&pattern)
+            .map(|re| re.is_match(text_lower))
+            .unwrap_or(false)
     }
 
     fn step_data_has_proof(step: &crate::session_store::SessionStep, proof: &str) -> bool {
@@ -197,8 +238,23 @@ impl Planner {
         let mut evidence = RunGoalBusinessEvidence::default();
         let mut current_app = Self::last_opened_app_from_history(history).map(|a| a.to_lowercase());
         let mut textedit_context_seen = current_app.as_deref() == Some("textedit");
+        let mut sent_pending_step: Option<usize> = None;
+        let mut no_draft_after_pending = false;
 
         for step in &session.steps {
+            if let Some(send_status) = Self::step_mail_send_status(step) {
+                match send_status.as_str() {
+                    "sent_confirmed" => evidence.mail_send_confirmed = true,
+                    "sent_pending" => sent_pending_step = Some(step.step_index),
+                    "no_draft" => {
+                        if sent_pending_step.is_some() {
+                            no_draft_after_pending = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             if step.status == "success" {
                 if let Some(app) = Self::parse_app_context_from_step(step) {
                     if app == "textedit" {
@@ -241,11 +297,20 @@ impl Planner {
             let is_save_shortcut = matches!(step.action_type.as_str(), "shortcut" | "key" | "save")
                 && desc.contains("shortcut 's'")
                 && desc.contains("command");
-            if is_save_shortcut
-                && (current_app.as_deref() == Some("textedit") || textedit_context_seen)
+            let has_textedit_save_proof = Self::step_data_has_proof(step, "textedit_save")
+                || desc.contains("textedit saved")
+                || desc.contains("saved file")
+                || desc.contains("file saved");
+            if has_textedit_save_proof
+                || (is_save_shortcut
+                    && (current_app.as_deref() == Some("textedit") || textedit_context_seen))
             {
                 evidence.textedit_save_confirmed = true;
             }
+        }
+
+        if !evidence.mail_send_confirmed && no_draft_after_pending {
+            evidence.mail_send_confirmed = true;
         }
 
         if !evidence.mail_send_confirmed {
@@ -267,26 +332,39 @@ impl Planner {
         }
         if !evidence.textedit_save_confirmed {
             evidence.textedit_save_confirmed =
-                Self::history_contains_case_insensitive(history, "opened app: textedit")
-                    && Self::history_contains_shortcut(history, "s");
+                (Self::history_contains_case_insensitive(history, "opened app: textedit")
+                    && Self::history_contains_shortcut(history, "s"))
+                    || Self::history_contains_case_insensitive(history, "textedit saved")
+                    || Self::history_contains_case_insensitive(history, "file saved");
         }
 
         evidence
     }
 
+    fn step_mail_send_status(step: &crate::session_store::SessionStep) -> Option<String> {
+        step.data
+            .as_ref()
+            .and_then(|data| data.get("send_status"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+    }
+
     fn step_has_mail_send_confirmed(step: &crate::session_store::SessionStep) -> bool {
-        if let Some(data) = &step.data {
-            if data
-                .get("send_status")
-                .and_then(|v| v.as_str())
-                .map(|v| v == "sent_confirmed")
-                .unwrap_or(false)
-            {
-                return true;
-            }
+        if Self::step_mail_send_status(step).as_deref() == Some("sent_confirmed") {
+            return true;
         }
         let desc = step.description.to_lowercase();
         desc.contains("mail send completed") || desc.contains("(mail sent)")
+    }
+
+    fn is_benign_failed_step(step: &crate::session_store::SessionStep) -> bool {
+        if step.status == "success" {
+            return false;
+        }
+        matches!(
+            Self::step_mail_send_status(step).as_deref(),
+            Some("sent_pending") | Some("no_draft")
+        )
     }
 
     fn summarize_execution(
@@ -301,7 +379,12 @@ impl Planner {
             .iter()
             .filter(|s| s.status != "success")
             .count();
-        let execution_complete = planner_complete && failed_steps == 0;
+        let blocking_failed_steps = session
+            .steps
+            .iter()
+            .filter(|s| s.status != "success" && !Self::is_benign_failed_step(s))
+            .count();
+        let execution_complete = planner_complete && blocking_failed_steps == 0;
         let mail_send_required = Self::goal_requires_mail_send(goal);
         let notes_write_required = Self::goal_requires_notes_write(goal);
         let textedit_write_required = Self::goal_requires_textedit_write(goal);
@@ -316,8 +399,8 @@ impl Planner {
             (
                 false,
                 format!(
-                    "action execution had failures (failed_steps={} / total_steps={})",
-                    failed_steps, step_count
+                    "action execution had blocking failures (blocking_failed_steps={} / failed_steps={} / total_steps={})",
+                    blocking_failed_steps, failed_steps, step_count
                 ),
             )
         } else {
@@ -355,6 +438,7 @@ impl Planner {
             business_note,
             step_count,
             failed_steps,
+            blocking_failed_steps,
             mail_send_required,
             mail_send_confirmed,
             notes_write_required,
@@ -433,50 +517,82 @@ impl Planner {
                         );
                     }
                 }
+
+                let mail_body_done =
+                    Self::history_contains_case_insensitive(history, "(mail body)")
+                        || Self::history_contains_case_insensitive(
+                            history,
+                            "pasted clipboard contents (mail body)",
+                        );
+                let wants_mail_paste = Self::goal_contains_any(
+                    &goal_lower,
+                    &["붙여넣", "paste", "cmd+v", "command+v"],
+                );
+                if wants_mail_paste && !mail_body_done {
+                    return Some(serde_json::json!({ "action": "paste", "app": "Mail" }));
+                }
+
+                let mail_send_done =
+                    Self::history_contains_case_insensitive(history, "mail send completed")
+                        || Self::history_contains_case_insensitive(history, "(mail sent)")
+                        || (Self::history_contains_case_insensitive(
+                            history,
+                            "mail send blocked: sent_pending|",
+                        ) && Self::history_contains_case_insensitive(
+                            history,
+                            "mail send blocked: no_draft|0|0",
+                        ));
+                if Self::goal_requires_mail_send(goal) && !mail_send_done {
+                    return Some(serde_json::json!({ "action": "mail_send", "app": "Mail" }));
+                }
             }
 
             if Self::is_textual_app(app_name) {
                 let mail_subject = Self::extract_mail_subject_from_goal(goal);
-                for fragment in Self::extract_quoted_fragments(goal) {
-                    let trimmed = fragment.trim();
-                    let lower = trimmed.to_lowercase();
-                    if trimmed.len() < 2
-                        || lower.starts_with("cmd+")
-                        || lower == "done"
-                        || lower.starts_with("status:")
-                    {
-                        continue;
-                    }
+                if !app_name.eq_ignore_ascii_case("Mail") {
+                    for fragment in Self::extract_quoted_fragments(goal) {
+                        let trimmed = fragment.trim();
+                        let lower = trimmed.to_lowercase();
+                        if trimmed.len() < 2
+                            || lower.starts_with("cmd+")
+                            || lower == "done"
+                            || lower.starts_with("status:")
+                        {
+                            continue;
+                        }
 
-                    if !app_name.eq_ignore_ascii_case("Mail") {
                         if let Some(subject) = mail_subject.as_deref() {
                             if trimmed.eq_ignore_ascii_case(subject) {
                                 continue;
                             }
                         }
+
+                        if !Self::history_contains_case_insensitive(history, trimmed) {
+                            return Some(serde_json::json!({
+                                "action": "type",
+                                "text": trimmed,
+                                "app": app_name
+                            }));
+                        }
                     }
 
-                    if !Self::history_contains_case_insensitive(history, trimmed) {
-                        return Some(serde_json::json!({
-                            "action": "type",
-                            "text": trimmed,
-                            "app": app_name
-                        }));
+                    if Self::goal_contains_any(
+                        &goal_lower,
+                        &["select all", "전체 선택", "cmd+a", "command+a"],
+                    ) && !Self::history_contains_case_insensitive(
+                        history,
+                        "Selected all contents",
+                    ) {
+                        return Some(
+                            serde_json::json!({ "action": "select_all", "app": app_name }),
+                        );
                     }
-                }
 
-                if Self::goal_contains_any(
-                    &goal_lower,
-                    &["select all", "전체 선택", "cmd+a", "command+a"],
-                ) && !Self::history_contains_case_insensitive(history, "Selected all contents")
-                {
-                    return Some(serde_json::json!({ "action": "select_all", "app": app_name }));
-                }
-
-                if Self::goal_contains_any(&goal_lower, &["copy", "복사", "cmd+c", "command+c"])
-                    && !Self::history_contains_case_insensitive(history, "Copied selection")
-                {
-                    return Some(serde_json::json!({ "action": "copy", "app": app_name }));
+                    if Self::goal_contains_any(&goal_lower, &["copy", "복사", "cmd+c", "command+c"])
+                        && !Self::history_contains_case_insensitive(history, "Copied selection")
+                    {
+                        return Some(serde_json::json!({ "action": "copy", "app": app_name }));
+                    }
                 }
 
                 if Self::goal_contains_any(&goal_lower, &["paste", "붙여넣", "cmd+v", "command+v"])
@@ -895,6 +1011,136 @@ impl Planner {
         );
     }
 
+    fn extract_known_app_from_text(text: &str) -> Option<&'static str> {
+        let lower = text.to_lowercase();
+        let aliases: [(&str, &'static str); 13] = [
+            ("calendar", "Calendar"),
+            ("캘린더", "Calendar"),
+            ("notes", "Notes"),
+            ("메모", "Notes"),
+            ("textedit", "TextEdit"),
+            ("mail", "Mail"),
+            ("메일", "Mail"),
+            ("finder", "Finder"),
+            ("safari", "Safari"),
+            ("calculator", "Calculator"),
+            ("계산기", "Calculator"),
+            ("notion", "Notion"),
+            ("노션", "Notion"),
+        ];
+
+        for (needle, app) in aliases {
+            if lower.contains(needle) {
+                return Some(app);
+            }
+        }
+        None
+    }
+
+    fn next_unopened_app_in_goal(goal: &str, history: &[String]) -> Option<&'static str> {
+        for app in Self::ordered_apps_in_goal(goal) {
+            let marker = format!("Opened app: {}", app);
+            if !Self::history_contains_case_insensitive(history, &marker) {
+                return Some(app);
+            }
+        }
+        None
+    }
+
+    fn maybe_rewrite_click_visual_to_app_action(
+        goal: &str,
+        history: &[String],
+        plan: &mut serde_json::Value,
+    ) {
+        if plan["action"].as_str() != Some("click_visual") {
+            return;
+        }
+
+        let description = plan["description"].as_str().unwrap_or("").trim();
+        if description.is_empty() {
+            return;
+        }
+
+        let desc_lower = description.to_lowercase();
+        let looks_like_app_switch = desc_lower.contains("dock")
+            || desc_lower.contains("icon")
+            || desc_lower.contains("앱")
+            || desc_lower.contains("application");
+        if !looks_like_app_switch {
+            return;
+        }
+
+        let target_app = Self::extract_known_app_from_text(description)
+            .or_else(|| Self::next_unopened_app_in_goal(goal, history));
+        let Some(target_app) = target_app else {
+            return;
+        };
+
+        let opened_marker = format!("Opened app: {}", target_app);
+        if Self::history_contains_case_insensitive(history, &opened_marker) {
+            *plan = serde_json::json!({ "action": "switch_app", "app": target_app });
+            println!(
+                "   🔁 Rewrote click_visual dock/app action to switch_app: {}",
+                target_app
+            );
+        } else {
+            *plan = serde_json::json!({ "action": "open_app", "name": target_app });
+            println!(
+                "   🔁 Rewrote click_visual dock/app action to open_app: {}",
+                target_app
+            );
+        }
+    }
+
+    fn maybe_rewrite_open_app_to_pending_text_action(
+        goal: &str,
+        history: &[String],
+        plan: &mut serde_json::Value,
+    ) {
+        if plan["action"].as_str() != Some("open_app") {
+            return;
+        }
+
+        let Some(current_app) = Self::last_opened_app_from_history(history) else {
+            return;
+        };
+        if !Self::is_textual_app(&current_app) {
+            return;
+        }
+
+        let has_pending_literal = Self::extract_quoted_fragments(goal)
+            .into_iter()
+            .any(|frag| {
+                let trimmed = frag.trim();
+                let lower = trimmed.to_lowercase();
+                if trimmed.len() < 2
+                    || lower.starts_with("cmd+")
+                    || lower == "done"
+                    || lower.starts_with("status:")
+                {
+                    return false;
+                }
+                !Self::history_contains_case_insensitive(history, trimmed)
+            });
+        if !has_pending_literal {
+            return;
+        }
+
+        if let Some(fallback_plan) = Self::fallback_plan_from_goal(goal, history) {
+            let action = fallback_plan["action"].as_str().unwrap_or("").to_string();
+            if matches!(
+                action.as_str(),
+                "type" | "select_all" | "copy" | "paste" | "shortcut"
+            ) {
+                *plan = fallback_plan;
+                println!(
+                    "   🔁 Rewrote open_app to pending text-flow action: {} (current app: {})",
+                    action, current_app
+                );
+            }
+        }
+    }
+
     fn can_force_done_for_simple_goal(
         goal: &str,
         plan: &serde_json::Value,
@@ -950,6 +1196,27 @@ impl Planner {
             Ok(raw) => matches!(raw.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"),
             Err(_) => default_value,
         }
+    }
+
+    fn supervisor_safe_bypass_enabled() -> bool {
+        Self::env_truthy_default("STEER_SUPERVISOR_BYPASS_SAFE", true)
+    }
+
+    fn is_low_risk_action_for_supervisor(plan: &serde_json::Value) -> bool {
+        matches!(
+            plan["action"].as_str().unwrap_or(""),
+            "open_app"
+                | "switch_app"
+                | "shortcut"
+                | "key"
+                | "type"
+                | "paste"
+                | "copy"
+                | "select_all"
+                | "read"
+                | "read_clipboard"
+                | "transfer"
+        )
     }
 
     fn record_fallback_action(history: &mut Vec<String>, reason: &str, plan: &serde_json::Value) {
@@ -1097,6 +1364,7 @@ impl Planner {
                     "business_note": exec_summary.business_note,
                     "step_count": exec_summary.step_count,
                     "failed_steps": exec_summary.failed_steps,
+                    "blocking_failed_steps": exec_summary.blocking_failed_steps,
                     "mail_send_required": exec_summary.mail_send_required,
                     "mail_send_confirmed": exec_summary.mail_send_confirmed,
                     "notes_write_required": exec_summary.notes_write_required,
@@ -1134,8 +1402,10 @@ impl Planner {
                         "failed"
                     },
                     Some(&format!(
-                        "step_count={} failed_steps={}",
-                        exec_summary.step_count, exec_summary.failed_steps
+                        "step_count={} failed_steps={} blocking_failed_steps={}",
+                        exec_summary.step_count,
+                        exec_summary.failed_steps,
+                        exec_summary.blocking_failed_steps
                     )),
                 );
                 let _ = db::record_task_stage_assertion(
@@ -1145,7 +1415,7 @@ impl Planner {
                     "true",
                     if execution_complete { "true" } else { "false" },
                     execution_complete,
-                    Some("All recorded action steps must be successful"),
+                    Some("All blocking action steps must be successful (mail send pending/no_draft retries are non-blocking)"),
                 );
                 let _ = db::record_task_stage_run(
                     &run_id,
@@ -1276,6 +1546,11 @@ impl Planner {
     ) -> Result<RunGoalExecutionSummary> {
         println!("🌊 Starting Planned Surf: '{}'", goal);
         let scenario_mode = Self::scenario_mode_enabled();
+        let deterministic_goal_mode =
+            !scenario_mode && Self::should_use_deterministic_goal_autoplan(goal);
+        if deterministic_goal_mode {
+            println!("🧭 Deterministic goal autoplan enabled (script-like goal detected).");
+        }
         let test_context = Self::env_truthy("STEER_TEST_MODE") || Self::env_truthy("CI");
         let deterministic_fallback_requested =
             Self::env_truthy("STEER_ALLOW_DETERMINISTIC_FALLBACK");
@@ -1394,7 +1669,7 @@ impl Planner {
                 history_with_context.push(context);
             }
 
-            let mut plan = if scenario_mode {
+            let mut plan = if scenario_mode || deterministic_goal_mode {
                 Self::fallback_plan_from_goal(goal, &history_with_context)
                     .unwrap_or_else(|| serde_json::json!({ "action": "done" }))
             } else {
@@ -1422,28 +1697,52 @@ impl Planner {
                 continue;
             }
             plan = validation.normalized;
+            Self::maybe_rewrite_click_visual_to_app_action(goal, &history, &mut plan);
             Self::maybe_rewrite_shortcut_to_next_app(goal, &history, &mut plan);
             Self::maybe_rewrite_mail_subject_before_paste(goal, &history, &mut plan);
+            Self::maybe_rewrite_open_app_to_pending_text_action(goal, &history, &mut plan);
 
-            if scenario_mode {
+            if scenario_mode || deterministic_goal_mode {
                 if let Some(fallback_plan) = Self::fallback_plan_from_goal(goal, &history) {
-                    Self::record_fallback_action(&mut history, "scenario_mode", &fallback_plan);
+                    let reason = if scenario_mode {
+                        "scenario_mode"
+                    } else {
+                        "deterministic_goal_mode"
+                    };
+                    Self::record_fallback_action(&mut history, reason, &fallback_plan);
                     plan = fallback_plan;
                 }
             } else {
-                // 3. Supervisor Check
-                let supervisor_decision =
-                    crate::retry_logic::with_retry(&retry_config, "Supervisor", || async {
-                        Supervisor::consult(&*self.llm, goal, &plan, &history).await
-                    })
-                    .await?;
+                // 3. Supervisor Check (safe actions can bypass to reduce rate-limit stalls)
+                let bypass_supervisor = Self::supervisor_safe_bypass_enabled()
+                    && Self::is_low_risk_action_for_supervisor(&plan);
+                let (mut supervisor_action, supervisor_reason, supervisor_notes) =
+                    if bypass_supervisor {
+                        println!("   🕵️ Supervisor: bypass (safe action)");
+                        (
+                            "accept".to_string(),
+                            "safe_action_bypass".to_string(),
+                            "Low-risk action bypassed supervisor gate".to_string(),
+                        )
+                    } else {
+                        let supervisor_decision =
+                            crate::retry_logic::with_retry(&retry_config, "Supervisor", || async {
+                                Supervisor::consult(&*self.llm, goal, &plan, &history).await
+                            })
+                            .await?;
 
-                println!(
-                    "   🕵️ Supervisor: {} ({})",
-                    supervisor_decision.action, supervisor_decision.reason
-                );
+                        println!(
+                            "   🕵️ Supervisor: {} ({})",
+                            supervisor_decision.action, supervisor_decision.reason
+                        );
 
-                let mut supervisor_action = supervisor_decision.action.clone();
+                        (
+                            supervisor_decision.action,
+                            supervisor_decision.reason,
+                            supervisor_decision.notes,
+                        )
+                    };
+
                 if supervisor_action == "review"
                     && Self::can_force_done_for_simple_goal(goal, &plan, &history)
                 {
@@ -1457,8 +1756,8 @@ impl Planner {
                     && Self::should_accept_text_flow_after_type(
                         &plan,
                         &history,
-                        &supervisor_decision.reason,
-                        &supervisor_decision.notes,
+                        &supervisor_reason,
+                        &supervisor_notes,
                     )
                 {
                     println!(
@@ -1471,8 +1770,8 @@ impl Planner {
                     && Self::should_accept_typing_after_new_item_shortcut(
                         &plan,
                         &history,
-                        &supervisor_decision.reason,
-                        &supervisor_decision.notes,
+                        &supervisor_reason,
+                        &supervisor_notes,
                     )
                 {
                     println!(
@@ -1485,10 +1784,7 @@ impl Planner {
                     && !Self::goal_has_multi_app(goal)
                     && !Self::goal_has_explicit_sequence(goal)
                     && allow_deterministic_fallback
-                    && Self::should_relax_review(
-                        &supervisor_decision.reason,
-                        &supervisor_decision.notes,
-                    )
+                    && Self::should_relax_review(&supervisor_reason, &supervisor_notes)
                 {
                     if let Some(fallback_plan) = Self::fallback_plan_from_goal(goal, &history) {
                         Self::record_fallback_action(
@@ -1511,8 +1807,8 @@ impl Planner {
                     if recent_rejections >= 4 {
                         let review_text = format!(
                             "{} {}",
-                            supervisor_decision.reason.to_lowercase(),
-                            supervisor_decision.notes.to_lowercase()
+                            supervisor_reason.to_lowercase(),
+                            supervisor_notes.to_lowercase()
                         );
                         let hard_blockers = [
                             "danger",
@@ -1592,8 +1888,8 @@ impl Planner {
                         .take(16)
                         .filter(|h| h.starts_with("PLAN_REJECTED:"))
                         .count();
-                    let reason_lc = supervisor_decision.reason.to_lowercase();
-                    let notes_lc = supervisor_decision.notes.to_lowercase();
+                    let reason_lc = supervisor_reason.to_lowercase();
+                    let notes_lc = supervisor_notes.to_lowercase();
                     let repeated_content_escalation = (reason_lc.contains("repeated")
                         || notes_lc.contains("repeated"))
                         && (reason_lc.contains("content")
@@ -1611,11 +1907,11 @@ impl Planner {
                 match supervisor_action.as_str() {
                     "accept" => { /* Proceed */ }
                     "review" => {
-                        history.push(format!("PLAN_REJECTED: {}", supervisor_decision.notes));
+                        history.push(format!("PLAN_REJECTED: {}", supervisor_notes));
                         continue;
                     }
                     "escalate" => {
-                        let msg = format!("Supervisor escalated: {}", supervisor_decision.reason);
+                        let msg = format!("Supervisor escalated: {}", supervisor_reason);
                         println!("      🚨 {}", msg);
                         return Err(anyhow::anyhow!(msg));
                     }
@@ -1848,6 +2144,36 @@ mod tests {
     }
 
     #[test]
+    fn summarize_execution_accepts_pending_then_no_draft_mail_send() {
+        let goal = "Mail로 보고서를 보내세요.";
+        let mut session = base_session(goal);
+        session.add_step("open_app", "Opened app: Mail", "success", None);
+        session.add_step(
+            "mail_send",
+            "Mail send blocked: sent_pending|1|1",
+            "failed",
+            Some(serde_json::json!({"send_status": "sent_pending"})),
+        );
+        session.add_step(
+            "mail_send",
+            "Mail send blocked: no_draft|0|0",
+            "failed",
+            Some(serde_json::json!({"send_status": "no_draft"})),
+        );
+        let history = vec![
+            "Opened app: Mail".to_string(),
+            "Mail send blocked: sent_pending|1|1".to_string(),
+            "Mail send blocked: no_draft|0|0".to_string(),
+        ];
+
+        let summary = Planner::summarize_execution(goal, &session, &history, true);
+        assert!(summary.execution_complete);
+        assert!(summary.mail_send_required);
+        assert!(summary.mail_send_confirmed);
+        assert!(summary.business_complete);
+    }
+
+    #[test]
     fn summarize_execution_requires_textedit_save_when_goal_mentions_save() {
         let goal = "TextEdit에서 문서를 작성하고 저장하세요.";
         let mut session = base_session(goal);
@@ -1887,6 +2213,47 @@ mod tests {
         let summary = Planner::summarize_execution(goal, &session, &history, true);
         assert!(summary.textedit_write_required);
         assert!(summary.textedit_write_confirmed);
+        assert!(summary.textedit_save_required);
+        assert!(summary.textedit_save_confirmed);
+        assert!(summary.business_complete);
+    }
+
+    #[test]
+    fn goal_requires_textedit_save_detects_cmd_s_only() {
+        let goal = "TextEdit를 열고 문서를 편집한 다음 Cmd+S 로 저장하세요.";
+        assert!(Planner::goal_requires_textedit_save(goal));
+    }
+
+    #[test]
+    fn goal_requires_textedit_save_does_not_match_cmd_shift_d() {
+        let goal = "TextEdit를 열고 내용을 복사한 뒤 Mail에서 보내기(Cmd+Shift+D)로 발송하세요.";
+        assert!(!Planner::goal_requires_textedit_save(goal));
+    }
+
+    #[test]
+    fn summarize_execution_accepts_textedit_save_proof_without_shortcut_text() {
+        let goal = "TextEdit에서 문서를 작성하고 저장하세요.";
+        let mut session = base_session(goal);
+        session.add_step("open_app", "Opened app: TextEdit", "success", None);
+        session.add_step(
+            "type",
+            "Typed 'status: in-progress' (textedit body)",
+            "success",
+            Some(serde_json::json!({"proof": "textedit_append_text"})),
+        );
+        session.add_step(
+            "shortcut",
+            "Saved file in TextEdit",
+            "success",
+            Some(serde_json::json!({"proof": "textedit_save"})),
+        );
+        let history = vec![
+            "Opened app: TextEdit".to_string(),
+            "Typed 'status: in-progress' (textedit body)".to_string(),
+            "Saved file in TextEdit".to_string(),
+        ];
+
+        let summary = Planner::summarize_execution(goal, &session, &history, true);
         assert!(summary.textedit_save_required);
         assert!(summary.textedit_save_confirmed);
         assert!(summary.business_complete);

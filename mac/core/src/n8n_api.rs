@@ -53,7 +53,16 @@ impl N8nRuntime {
             .trim()
             .to_lowercase();
         match raw.as_str() {
-            "npx" => Self::Npx,
+            "npx" => {
+                if parse_bool_env_with_default("STEER_N8N_ENABLE_NPX_RUNTIME", false) {
+                    Self::Npx
+                } else {
+                    eprintln!(
+                        "⚠️ STEER_N8N_RUNTIME=npx ignored: set STEER_N8N_ENABLE_NPX_RUNTIME=1 to opt in."
+                    );
+                    Self::Docker
+                }
+            }
             "manual" | "none" => Self::Manual,
             _ => Self::Docker,
         }
@@ -81,11 +90,31 @@ fn parse_bool_env_with_default(key: &str, default: bool) -> bool {
 }
 
 impl N8nApi {
+    fn build_http_client() -> Client {
+        let prefer_no_proxy =
+            cfg!(test) || parse_bool_env_with_default("STEER_HTTP_NO_SYSTEM_PROXY", false);
+        if prefer_no_proxy {
+            if let Ok(client) = Client::builder().no_proxy().build() {
+                return client;
+            }
+        }
+
+        if let Ok(client) = std::panic::catch_unwind(Client::new) {
+            return client;
+        }
+
+        eprintln!("⚠️ reqwest default client init panicked; falling back to no-proxy client");
+        Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    }
+
     pub fn new(base_url: &str, api_key: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
-            client: Client::new(),
+            client: Self::build_http_client(),
         }
     }
 
@@ -222,6 +251,11 @@ impl N8nApi {
     }
 
     fn start_with_npx(&self) -> Result<()> {
+        if !parse_bool_env_with_default("STEER_N8N_ENABLE_NPX_RUNTIME", false) {
+            return Err(anyhow::anyhow!(
+                "npx runtime is disabled by default. Set STEER_N8N_ENABLE_NPX_RUNTIME=1 to enable."
+            ));
+        }
         println!("⚠️  Starting n8n with npx fallback runtime...");
         use std::process::{Command, Stdio};
 
@@ -758,16 +792,28 @@ impl N8nApi {
         if let Some(id) = marker_match {
             return Ok(id);
         }
-        if let Some(id) = name_matches.first() {
-            if name_matches.len() > 1 {
-                eprintln!(
-                    "⚠️ Multiple workflows matched by name '{}' after CLI import; using first exported id={}",
-                    name, id
-                );
+        let allow_name_fallback =
+            parse_bool_env_with_default("STEER_N8N_ALLOW_NAME_ID_FALLBACK", false);
+        if allow_name_fallback {
+            if let Some(id) = name_matches.first() {
+                if name_matches.len() > 1 {
+                    eprintln!(
+                        "⚠️ Multiple workflows matched by name '{}' after CLI import; using first exported id={}",
+                        name, id
+                    );
+                }
+                return Ok(id.clone());
             }
-            return Ok(id.clone());
         }
 
+        if !name_matches.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Import marker not found in exported workflows; {} name match(es) exist for '{}'. \
+Set STEER_N8N_ALLOW_NAME_ID_FALLBACK=1 to allow name-based fallback.",
+                name_matches.len(),
+                name
+            ));
+        }
         Err(anyhow::anyhow!(
             "Could not resolve imported workflow id via n8n CLI export"
         ))
