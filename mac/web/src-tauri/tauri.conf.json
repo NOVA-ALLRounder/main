@@ -12,15 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "Antigravity",
-        "width": 800,
-        "height": 600,
+        "title": "Steer OS Launcher",
+        "width": 1220,
+        "height": 184,
         "resizable": false,
         "fullscreen": false,
         "decorations": false,
         "transparent": true,
+        "backgroundColor": "#00000000",
         "alwaysOnTop": true,
-        "center": true,
+        "center": false,
         "hiddenTitle": true
       }
     ],

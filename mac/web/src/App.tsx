@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import Launcher from '@/features/launcher/Launcher'
-import WidgetLayer from '@/features/widget/WidgetLayer' // Import new layer
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
+
+const Launcher = lazy(() => import('@/features/launcher/Launcher'))
+const WidgetLayer = lazy(() => import('@/features/widget/WidgetLayer'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,21 +43,21 @@ function App() {
   })()
 
   useEffect(() => {
-    // Check if this is the 'widget' window
-    if (isWidget) {
-      document.body.style.backgroundColor = 'transparent'; // Ensure transparency
-    }
+    document.documentElement.style.backgroundColor = 'transparent'
+    document.body.style.backgroundColor = 'transparent'
   }, [isWidget]);
 
   return (
     <QueryClientProvider client={queryClient}>
-      {isWidget ? (
-        <WidgetLayer />
-      ) : (
-        <div className="h-screen w-screen bg-transparent overflow-hidden relative flex items-center justify-center">
-          <Launcher />
-        </div>
-      )}
+      <Suspense fallback={<div className="h-screen w-screen bg-transparent" />}>
+        {isWidget ? (
+          <WidgetLayer />
+        ) : (
+          <div className="h-screen w-screen overflow-hidden relative flex items-end justify-center bg-transparent">
+            <Launcher />
+          </div>
+        )}
+      </Suspense>
     </QueryClientProvider>
   )
 }

@@ -1,3 +1,5 @@
+use crate::send_policy::{self, SendDecision, SendPolicyContext};
+use crate::telegram_transport;
 use anyhow::Result;
 use reqwest::Client;
 
@@ -8,6 +10,8 @@ pub struct TelegramBot {
 }
 
 impl TelegramBot {
+    const MAX_SEND_ATTEMPTS: u32 = 4;
+
     pub fn new(token: &str, chat_id: &str) -> Self {
         Self {
             token: token.to_string(),
@@ -25,37 +29,51 @@ impl TelegramBot {
         Ok(Self::new(&token, &chat_id))
     }
 
-    pub async fn send(&self, message: &str) -> Result<()> {
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
-
-        let params = [
-            ("chat_id", self.chat_id.as_str()),
-            ("text", message),
-            ("parse_mode", "Markdown"),
-        ];
-
-        let resp = self.client.post(&url).form(&params).send().await?;
-
-        if !resp.status().is_success() {
-            let err = resp.text().await?;
-            return Err(anyhow::anyhow!("Telegram API Error: {}", err));
+    async fn send_message_internal(&self, message: &str, parse_mode: Option<&str>) -> Result<()> {
+        let ctx = SendPolicyContext {
+            session_key: Some(format!("telegram_chat_{}", self.chat_id)),
+            channel: Some("telegram".to_string()),
+            chat_type: None,
+            target_id: Some(self.chat_id.clone()),
+        };
+        if matches!(
+            send_policy::should_send_with_context("telegram", message, Some(&ctx)),
+            SendDecision::Deny
+        ) {
+            println!(
+                "🔕 [TELEGRAM] Suppressed by send policy (chat_id={})",
+                self.chat_id
+            );
+            return Ok(());
         }
 
-        Ok(())
+        telegram_transport::send_message_chunked(
+            &self.client,
+            &self.token,
+            &self.chat_id,
+            message,
+            parse_mode,
+            Self::MAX_SEND_ATTEMPTS,
+        )
+        .await
+    }
+
+    fn is_markdown_parse_error(err: &anyhow::Error) -> bool {
+        let msg = err.to_string().to_lowercase();
+        msg.contains("can't parse entities") || msg.contains("parse entities")
+    }
+
+    pub async fn send(&self, message: &str) -> Result<()> {
+        match self.send_message_internal(message, Some("Markdown")).await {
+            Ok(()) => Ok(()),
+            Err(e) if Self::is_markdown_parse_error(&e) => {
+                self.send_message_internal(message, None).await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn send_plain(&self, message: &str) -> Result<()> {
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
-
-        let params = [("chat_id", self.chat_id.as_str()), ("text", message)];
-
-        let resp = self.client.post(&url).form(&params).send().await?;
-
-        if !resp.status().is_success() {
-            let err = resp.text().await?;
-            return Err(anyhow::anyhow!("Telegram API Error: {}", err));
-        }
-
-        Ok(())
+        self.send_message_internal(message, None).await
     }
 }
