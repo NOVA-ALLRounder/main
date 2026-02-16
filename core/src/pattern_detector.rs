@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use chrono::{DateTime, Utc, Timelike, Datelike};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use crate::db;
 
@@ -59,6 +59,8 @@ use crate::llm_gateway::LLMClient;
 pub struct PatternDetector {
     config: PatternConfig,
     llm_client: Option<LLMClient>,
+    ignored_apps: HashSet<String>,
+    ignored_sources: HashSet<String>,
 }
 
 impl PatternDetector {
@@ -67,12 +69,19 @@ impl PatternDetector {
         Self {
             config: PatternConfig::default(),
             llm_client,
+            ignored_apps: Self::load_ignored_apps(),
+            ignored_sources: Self::load_ignored_sources(),
         }
     }
 
     pub fn with_config(config: PatternConfig) -> Self {
         let llm_client = LLMClient::new().ok();
-        Self { config, llm_client }
+        Self {
+            config,
+            llm_client,
+            ignored_apps: Self::load_ignored_apps(),
+            ignored_sources: Self::load_ignored_sources(),
+        }
     }
 
     /// Analyze logs and detect patterns (uses DB)
@@ -117,6 +126,83 @@ impl PatternDetector {
         format!("p_{:x}", hasher.finish())
     }
 
+    fn load_ignored_apps() -> HashSet<String> {
+        let defaults = [
+            "powershell",
+            "pwsh",
+            "cmd",
+            "conhost",
+            "windows terminal",
+            "terminal",
+            "npx",
+            "cargo",
+            "rustc",
+            "node",
+            "python",
+            "python3",
+        ];
+
+        let mut set: HashSet<String> = defaults.iter().map(|s| s.to_string()).collect();
+        if let Ok(extra) = std::env::var("PATTERN_IGNORED_APPS") {
+            for token in extra.split(',') {
+                let trimmed = token.trim().to_lowercase();
+                if !trimmed.is_empty() {
+                    set.insert(trimmed);
+                }
+            }
+        }
+        set
+    }
+
+    fn load_ignored_sources() -> HashSet<String> {
+        let defaults = [
+            "analyzer",
+            "scheduler",
+            "steer",
+            "steer_core",
+            "system",
+            "unknown",
+        ];
+
+        let mut set: HashSet<String> = defaults.iter().map(|s| s.to_string()).collect();
+        if let Ok(extra) = std::env::var("PATTERN_IGNORED_SOURCES") {
+            for token in extra.split(',') {
+                let trimmed = token.trim().to_lowercase();
+                if !trimmed.is_empty() {
+                    set.insert(trimmed);
+                }
+            }
+        }
+        set
+    }
+
+    fn is_ignored_source(&self, source: &str) -> bool {
+        if source.trim().is_empty() {
+            return false;
+        }
+        let source_lc = source.trim().to_lowercase();
+        self.ignored_sources
+            .iter()
+            .any(|needle| source_lc == *needle || source_lc.contains(needle))
+    }
+
+    fn is_ignored_app(&self, app: &str) -> bool {
+        if app.trim().is_empty() {
+            return true;
+        }
+        let app_lc = app.trim().to_lowercase();
+        self.ignored_apps
+            .iter()
+            .any(|needle| app_lc == *needle || app_lc.contains(needle))
+    }
+
+    fn extract_app_name<'a>(&self, val: &'a serde_json::Value) -> Option<&'a str> {
+        val.get("payload")
+            .or_else(|| val.get("data"))
+            .and_then(|p| p.get("app").and_then(|v| v.as_str()))
+            .or_else(|| val.get("app").and_then(|v| v.as_str()))
+    }
+
     /// Detect app switching sequences
     fn detect_app_sequences(&self, events: &[String]) -> Vec<DetectedPattern> {
         let mut sequences: HashMap<String, (u32, Vec<String>)> = HashMap::new();
@@ -130,17 +216,19 @@ impl PatternDetector {
                      .or_else(|| val.get("type"))
                      .and_then(|v| v.as_str())
                      .unwrap_or("");
-                 
-                 // Check for "payload" (New) or "data" (Old)
-                 // Note: payload/data might be an object
-                 let payload = val.get("payload").or_else(|| val.get("data"));
+                 let source = val.get("source")
+                     .and_then(|v| v.as_str())
+                     .unwrap_or("");
+
+                 if self.is_ignored_source(source) {
+                     continue;
+                 }
 
                  if event_type == "app_switch" || event_type == "system.open" {
-                      let app_name = if let Some(p) = payload {
-                          p.get("app").and_then(|v| v.as_str()).unwrap_or("")
-                      } else { "" };
-
-                      if !app_name.is_empty() {
+                      if let Some(app_name) = self.extract_app_name(&val) {
+                        if self.is_ignored_app(app_name) {
+                            continue;
+                        }
                         let app = app_name.to_string();
                         // 1. Single App Repeats
                         let key = format!("app:{}", app);
@@ -201,6 +289,19 @@ impl PatternDetector {
                      .or_else(|| val.get("type"))
                      .and_then(|v| v.as_str())
                      .unwrap_or("");
+                 let source = val.get("source")
+                     .and_then(|v| v.as_str())
+                     .unwrap_or("");
+
+                 if self.is_ignored_source(source) {
+                     continue;
+                 }
+
+                 if let Some(app_name) = self.extract_app_name(&val) {
+                     if self.is_ignored_app(app_name) {
+                         continue;
+                     }
+                 }
 
                  if event_type == "key_input" || event_type == "ui.type" || event_type == "keyboard.type" {
                      let text = val.get("payload")
@@ -250,6 +351,19 @@ impl PatternDetector {
                      .or_else(|| val.get("type"))
                      .and_then(|v| v.as_str())
                      .unwrap_or("");
+                 let source = val.get("source")
+                     .and_then(|v| v.as_str())
+                     .unwrap_or("");
+
+                 if self.is_ignored_source(source) {
+                     continue;
+                 }
+
+                 if let Some(app_name) = self.extract_app_name(&val) {
+                     if self.is_ignored_app(app_name) {
+                         continue;
+                     }
+                 }
                  
                  // Support simple string data or object payload
                  let path_opt = val.get("payload").or_else(|| val.get("data")).and_then(|d| {
@@ -310,15 +424,20 @@ impl PatternDetector {
                     .or_else(|| val.get("type"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                
+                let source = val.get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if self.is_ignored_source(source) {
+                    continue;
+                }
+                 
                 // 2. Filter for App Switches
                 if (event_type == "app_switch" || event_type == "system.open") && timestamp_str.is_some() {
-                     let app_name = val.get("payload").or_else(|| val.get("data"))
-                        .and_then(|p| p.get("app"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-
-                     if !app_name.is_empty() {
+                     if let Some(app_name) = self.extract_app_name(&val) {
+                         if self.is_ignored_app(app_name) {
+                             continue;
+                         }
                          if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp_str.unwrap()) {
                              let dt_utc: DateTime<Utc> = dt.with_timezone(&Utc);
                              let weekday = dt_utc.weekday().num_days_from_monday(); // 0=Mon

@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use anyhow::Result;
+use std::path::PathBuf;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,14 +209,31 @@ impl N8nApi {
              return Err(anyhow::anyhow!("❌ CLI Fallback aborted: n8n is remote ({}). CLI only works for local instances.", self.base_url));
         }
 
+        let latest_before = self.retrieve_latest_workflow_id().ok();
         // 5. Run CLI Import
         if let Err(e) = self.create_workflow_cli(name, &normalized, active).await {
             return Err(anyhow::anyhow!("❌ CLI Fallback Failed: {}", e));
         }
         
-        // 6. Retrieve ID from DB (Crucial Step for Management)
-        // Since CLI doesn't return ID, we query the DB by name
-        self.retrieve_workflow_id_by_name(name)
+        // 6. Retrieve ID from DB (best effort)
+        if let Ok(id) = self.retrieve_workflow_id_by_name(name) {
+            return Ok(id);
+        }
+
+        if let Ok(latest_after) = self.retrieve_latest_workflow_id() {
+            if latest_before.as_ref() != Some(&latest_after) || latest_before.is_none() {
+                println!(
+                    "Workflow imported via CLI; using latest workflow id fallback: {}",
+                    latest_after
+                );
+                return Ok(latest_after);
+            }
+        }
+
+        println!(
+            "Workflow imported via CLI but workflow ID lookup failed. Returning synthetic id."
+        );
+        Ok(format!("cli-imported:{}", name))
     }
 
     async fn create_workflow_api(&self, name: &str, workflow_json: &Value, _active: bool) -> Result<String> {
@@ -257,8 +275,9 @@ impl N8nApi {
              return Err(anyhow::anyhow!("Refusing to import empty workflow via CLI"));
         }
 
-        let path = format!("/tmp/n8n_import_{}.json", uuid::Uuid::new_v4());
-        tokio::fs::write(&path, serde_json::to_string(&final_json)?).await?;
+        let path_buf = std::env::temp_dir().join(format!("n8n_import_{}.json", uuid::Uuid::new_v4()));
+        let path = path_buf.to_string_lossy().to_string();
+        tokio::fs::write(&path_buf, serde_json::to_string(&final_json)?).await?;
 
         println!("📥 Importing workflow via CLI from {}...", path);
 
@@ -268,7 +287,7 @@ impl N8nApi {
             .await?;
 
         // Cleanup
-        if let Err(e) = tokio::fs::remove_file(&path).await {
+        if let Err(e) = tokio::fs::remove_file(&path_buf).await {
              eprintln!("⚠️ Failed to clean up temp file: {}", e);
         }
 
@@ -291,18 +310,119 @@ impl N8nApi {
     
     // Helper to find ID after CLI import
     fn retrieve_workflow_id_by_name(&self, name: &str) -> Result<String> {
-        use rusqlite::Connection;
-        let home = std::env::var("HOME").unwrap_or("/".to_string());
-        let db_path = format!("{}/.n8n/database.sqlite", home);
-        
-        let conn = Connection::open(db_path)?;
-        let id: String = conn.query_row(
+        use rusqlite::{Connection, OptionalExtension};
+
+        let db_path = self.resolve_n8n_db_path().ok_or_else(|| {
+            anyhow::anyhow!("Could not locate n8n database.sqlite in common locations")
+        })?;
+        let conn = Connection::open(&db_path)?;
+
+        let queries = [
             "SELECT id FROM workflow_entity WHERE name = ?1 ORDER BY updatedAt DESC LIMIT 1",
-            [name],
-            |row| row.get(0),
-        ).map_err(|_| anyhow::anyhow!("Could not find imported workflow ID in DB"))?;
-        
-        Ok(id)
+            "SELECT id FROM workflow_entity WHERE name = ?1 ORDER BY \"updatedAt\" DESC LIMIT 1",
+            "SELECT id FROM workflow_entity WHERE name = ?1 ORDER BY createdAt DESC LIMIT 1",
+            "SELECT id FROM workflow_entity WHERE name = ?1 ORDER BY rowid DESC LIMIT 1",
+        ];
+
+        let mut last_err: Option<String> = None;
+        for q in queries {
+            match conn.query_row(q, [name], |row| row.get::<_, String>(0)).optional() {
+                Ok(Some(id)) => return Ok(id),
+                Ok(None) => {}
+                Err(e) => last_err = Some(e.to_string()),
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Could not find imported workflow ID in DB at {}{}",
+            db_path.display(),
+            last_err
+                .as_ref()
+                .map(|e| format!(" (last query error: {})", e))
+                .unwrap_or_default()
+        ))
+    }
+
+    fn retrieve_latest_workflow_id(&self) -> Result<String> {
+        use rusqlite::{Connection, OptionalExtension};
+
+        let db_path = self.resolve_n8n_db_path().ok_or_else(|| {
+            anyhow::anyhow!("Could not locate n8n database.sqlite in common locations")
+        })?;
+        let conn = Connection::open(&db_path)?;
+
+        let queries = [
+            "SELECT id FROM workflow_entity ORDER BY updatedAt DESC LIMIT 1",
+            "SELECT id FROM workflow_entity ORDER BY \"updatedAt\" DESC LIMIT 1",
+            "SELECT id FROM workflow_entity ORDER BY createdAt DESC LIMIT 1",
+            "SELECT id FROM workflow_entity ORDER BY rowid DESC LIMIT 1",
+        ];
+
+        let mut last_err: Option<String> = None;
+        for q in queries {
+            match conn.query_row(q, [], |row| row.get::<_, String>(0)).optional() {
+                Ok(Some(id)) => return Ok(id),
+                Ok(None) => {}
+                Err(e) => last_err = Some(e.to_string()),
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Could not read latest workflow ID from {}{}",
+            db_path.display(),
+            last_err
+                .as_ref()
+                .map(|e| format!(" (last query error: {})", e))
+                .unwrap_or_default()
+        ))
+    }
+
+    fn resolve_n8n_db_path(&self) -> Option<PathBuf> {
+        self.candidate_n8n_db_paths()
+            .into_iter()
+            .find(|p| p.exists())
+    }
+
+    fn candidate_n8n_db_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        if let Ok(explicit) = std::env::var("N8N_DB_PATH") {
+            let p = PathBuf::from(explicit);
+            if p.is_file() {
+                paths.push(p);
+            } else {
+                paths.push(p.join("database.sqlite"));
+            }
+        }
+
+        if let Ok(user_folder) = std::env::var("N8N_USER_FOLDER") {
+            paths.push(PathBuf::from(user_folder).join("database.sqlite"));
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            paths.push(PathBuf::from(home).join(".n8n").join("database.sqlite"));
+        }
+
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            paths.push(PathBuf::from(profile).join(".n8n").join("database.sqlite"));
+        }
+
+        if let (Ok(home_drive), Ok(home_path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+            let joined = format!("{}{}", home_drive, home_path);
+            paths.push(PathBuf::from(joined).join(".n8n").join("database.sqlite"));
+        }
+
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            paths.push(PathBuf::from(appdata).join("n8n").join("database.sqlite"));
+        }
+
+        let mut uniq = Vec::new();
+        for p in paths {
+            if !uniq.iter().any(|u: &PathBuf| u == &p) {
+                uniq.push(p);
+            }
+        }
+        uniq
     }
 
     fn build_minimal_workflow(name: &str) -> Value {
@@ -345,13 +465,10 @@ impl N8nApi {
     /// HACK: Directly modify n8n SQLite DB to assign project ownership to imported workflows (n8n v1+)
     fn fix_workflow_ownership(&self) -> Result<()> {
         use rusqlite::Connection;
-        
-        let home = std::env::var("HOME").unwrap_or("/".to_string());
-        let db_path = format!("{}/.n8n/database.sqlite", home);
-        
-        if !std::path::Path::new(&db_path).exists() {
+
+        let Some(db_path) = self.resolve_n8n_db_path() else {
             return Ok(());
-        }
+        };
 
         let conn = Connection::open(db_path)?;
         

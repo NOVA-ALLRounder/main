@@ -31,6 +31,24 @@ pub struct ChatRequest {
 }
 
 #[derive(Deserialize)]
+pub struct JarvisCommandRequest {
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+pub struct JarvisWebMessageRequest {
+    pub text: String,
+    pub session_key: Option<String>,
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Deserialize)]
+pub struct JarvisSkillExecuteRequest {
+    pub action: String,
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
 pub struct FeedbackRequest {
     pub goal: String,
     pub feedback: String,
@@ -350,6 +368,12 @@ Set STEER_REQUIRE_API_KEY=1 (or STEER_ENV=production) to enforce authentication.
         // Protected Endpoints (Chat, Execute, Plan, Verify)
         .route("/events", post(ingest_events))
         .route("/api/chat", post(handle_chat))
+        .route("/api/jarvis", post(handle_jarvis_command))
+        .route("/api/jarvis/channels/web/message", post(handle_jarvis_web_message))
+        .route("/api/jarvis/skills", get(list_jarvis_skills))
+        .route("/api/jarvis/skills/:skill_name/execute", post(execute_jarvis_skill))
+        .route("/api/jarvis/sessions", get(list_jarvis_sessions))
+        .route("/api/jarvis/autonomous/start", post(start_jarvis_autonomous))
         .route("/api/recommendations", get(list_recommendations))
         .route("/api/recommendations/:id/approve", post(approve_recommendation))
         .route("/api/recommendations/:id/reject", post(reject_recommendation))
@@ -1069,6 +1093,142 @@ async fn handle_chat(
     }
 }
 
+fn jarvis_chat_request(message: String) -> ChatRequest {
+    ChatRequest {
+        message,
+        channel: Some("jarvis".to_string()),
+        chat_type: Some("direct".to_string()),
+        sender: Some("web".to_string()),
+        mentioned: Some(true),
+    }
+}
+
+fn jarvis_skill_message(skill_name: &str, action: &str, params: &Option<serde_json::Value>) -> String {
+    if let Some(text) = params
+        .as_ref()
+        .and_then(|p| p.get("text"))
+        .and_then(|t| t.as_str())
+    {
+        return text.to_string();
+    }
+
+    match (skill_name, action) {
+        ("pattern_analysis", _) => "analyze_patterns".to_string(),
+        ("screen_summary", _) => "summarize current screen and put it in notepad".to_string(),
+        ("email_workflow", _) => "email workflow template run".to_string(),
+        ("calendar_overview", "today") => "오늘 일정 보여줘".to_string(),
+        ("calendar_overview", "week") => "이번주 일정 보여줘".to_string(),
+        _ => format!("{} {}", skill_name.replace('_', " "), action),
+    }
+}
+
+async fn handle_jarvis_command(
+    State(state): State<AppState>,
+    Json(req): Json<JarvisCommandRequest>,
+) -> Json<serde_json::Value> {
+    let chat = handle_chat(State(state), Json(jarvis_chat_request(req.text))).await.0;
+    Json(json!({
+        "success": true,
+        "message": chat.response,
+        "data": {
+            "command": chat.command
+        }
+    }))
+}
+
+async fn handle_jarvis_web_message(
+    State(state): State<AppState>,
+    Json(req): Json<JarvisWebMessageRequest>,
+) -> Json<serde_json::Value> {
+    let chat = handle_chat(State(state), Json(jarvis_chat_request(req.text))).await.0;
+    Json(json!({
+        "success": true,
+        "message": chat.response,
+        "data": {
+            "command": chat.command,
+            "session_key": req.session_key,
+            "metadata": req.metadata
+        }
+    }))
+}
+
+async fn list_jarvis_skills() -> Json<serde_json::Value> {
+    Json(json!({
+        "skills": [
+            {
+                "name": "pattern_analysis",
+                "description": "Analyze recent activity patterns and suggest workflows.",
+                "version": "1.0",
+                "actions": ["run"],
+                "eligible": true,
+                "platform": "desktop",
+                "tags": ["automation", "analysis"]
+            },
+            {
+                "name": "email_workflow",
+                "description": "Run email triage workflow and generate CSV artifacts.",
+                "version": "1.0",
+                "actions": ["run"],
+                "eligible": true,
+                "platform": "desktop",
+                "tags": ["email", "workflow"]
+            },
+            {
+                "name": "screen_summary",
+                "description": "Summarize current screen and deliver results to notepad.",
+                "version": "1.0",
+                "actions": ["run"],
+                "eligible": true,
+                "platform": "desktop",
+                "tags": ["vision", "productivity"]
+            },
+            {
+                "name": "calendar_overview",
+                "description": "Read today's or this week's calendar events.",
+                "version": "1.0",
+                "actions": ["today", "week"],
+                "eligible": true,
+                "platform": "desktop",
+                "tags": ["calendar"]
+            }
+        ]
+    }))
+}
+
+async fn execute_jarvis_skill(
+    State(state): State<AppState>,
+    Path(skill_name): Path<String>,
+    Json(req): Json<JarvisSkillExecuteRequest>,
+) -> Json<serde_json::Value> {
+    let message = jarvis_skill_message(&skill_name, &req.action, &req.params);
+    let chat = handle_chat(State(state), Json(jarvis_chat_request(message))).await.0;
+    Json(json!({
+        "success": true,
+        "message": chat.response,
+        "data": {
+            "skill": skill_name,
+            "action": req.action,
+            "command": chat.command
+        }
+    }))
+}
+
+async fn list_jarvis_sessions() -> Json<serde_json::Value> {
+    Json(json!({
+        "sessions": []
+    }))
+}
+
+async fn start_jarvis_autonomous() -> Json<serde_json::Value> {
+    Json(json!({
+        "success": false,
+        "message": "Autonomous mode is not wired in this API build. Use /api/agent/goal.",
+        "data": {
+            "hint": "POST /api/agent/goal"
+        }
+    }))
+}
+
 // --- Routine Handlers ---
 
 async fn list_routines() -> Json<Vec<crate::db::Routine>> {
@@ -1538,22 +1698,31 @@ async fn analyze_patterns() -> Json<Vec<String>> {
 
 fn run_analysis_internal() -> Vec<String> {
     let detector = pattern_detector::PatternDetector::new();
+    let matcher = crate::recommendation::TemplateMatcher::new();
     let patterns = detector.analyze();
     
-    // 1. Save detected patterns to DB
+    // 1. Save only high-signal and template-matched recommendations
+    let mut seen_pattern_ids = std::collections::HashSet::new();
     for p in &patterns {
-        let proposal = crate::recommendation::AutomationProposal {
-            title: format!("New Pattern: {}", p.description),
-            summary: format!("Detected {} repeats. AI suggests automating this.", p.occurrences),
-            trigger: format!("Pattern Type: {:?}", p.pattern_type),
-            actions: vec!["Analyze".to_string(), "Automate".to_string()],
-            n8n_prompt: format!("Create an automation for: {}", p.description),
-            confidence: p.similarity_score,
-            evidence: vec![format!("Pattern: {}", p.description)],
-            pattern_id: Some(p.pattern_id.clone()),
+        if !detector.should_recommend(p) {
+            continue;
+        }
+        if !seen_pattern_ids.insert(p.pattern_id.clone()) {
+            continue;
+        }
+        let mut proposal = match matcher.match_pattern(p) {
+            Some(proposal) => proposal,
+            None => continue,
         };
+        if proposal.evidence.is_empty() {
+            proposal.evidence = vec![
+                format!("Pattern: {}", p.description),
+                format!("Frequency: Found {} occurrences", p.occurrences),
+            ];
+        }
+        proposal.pattern_id = Some(p.pattern_id.clone());
         if let Err(e) = db::insert_recommendation(&proposal) {
-            eprintln!("Failed to save pattern: {}", e);
+            eprintln!("Failed to save pattern recommendation: {}", e);
         }
     }
 

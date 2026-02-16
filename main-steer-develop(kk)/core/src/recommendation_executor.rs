@@ -1,0 +1,467 @@
+use crate::{db, env_flag, llm_gateway::LLMClient, n8n_api};
+use anyhow::{anyhow, Result};
+use serde_json::json;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ApprovalExecutionOutcome {
+    pub workflow_id: String,
+    pub approved_now: bool,
+    pub reused_existing: bool,
+}
+
+fn mock_workflow_json(name: &str) -> serde_json::Value {
+    json!({
+        "name": name,
+        "nodes": [{
+            "id": "manual-trigger-1",
+            "name": "Manual Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [240, 300],
+            "parameters": {}
+        }],
+        "connections": {},
+        "settings": {},
+        "meta": {
+            "source": "steer-approve-assumed-test"
+        }
+    })
+}
+
+fn parse_bool_env(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+fn n8n_create_active_default() -> bool {
+    // Safe default: create inactive unless explicitly requested.
+    parse_bool_env("STEER_N8N_ACTIVE_ON_CREATE", false)
+}
+
+fn should_use_test_mock_workflow() -> bool {
+    env_flag("STEER_TEST_ASSUME_APPROVED") && env_flag("STEER_N8N_MOCK")
+}
+
+fn provisioning_claim_ttl_millis() -> i64 {
+    std::env::var("STEER_PROVISIONING_CLAIM_TTL_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|seconds| seconds.clamp(1, 86_400) * 1_000)
+        .unwrap_or(10 * 60 * 1_000)
+}
+
+fn parse_claim_timestamp_millis(token: &str) -> Option<i64> {
+    if !token.starts_with("provisioning:") {
+        return None;
+    }
+    token.rsplit(':').next()?.parse::<i64>().ok()
+}
+
+fn is_stale_provisioning_claim(token: &str) -> bool {
+    let ts = match parse_claim_timestamp_millis(token) {
+        Some(v) => v,
+        None => return false,
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    now.saturating_sub(ts) > provisioning_claim_ttl_millis()
+}
+
+pub fn maybe_assume_approved_for_test(id: i64) -> Result<()> {
+    if !env_flag("STEER_TEST_ASSUME_APPROVED") {
+        return Err(anyhow!(
+            "STEER_TEST_ASSUME_APPROVED=1 is required for approve_test path"
+        ));
+    }
+    if !env_flag("STEER_N8N_MOCK") {
+        return Err(anyhow!(
+            "approve_test path requires STEER_N8N_MOCK=1 to prevent real workflow creation"
+        ));
+    }
+
+    let rec =
+        db::get_recommendation(id)?.ok_or_else(|| anyhow!("recommendation {} not found", id))?;
+    if rec.status.eq_ignore_ascii_case("rejected") {
+        return Err(anyhow!(
+            "recommendation {} is rejected and cannot be assumed approved",
+            id
+        ));
+    }
+    if !rec.status.eq_ignore_ascii_case("approved") {
+        db::update_recommendation_review_status(id, "approved")?;
+        println!("🧪 [TEST] Assumed approval for recommendation {}.", id);
+    }
+    Ok(())
+}
+
+pub async fn execute_approved_recommendation(
+    id: i64,
+    llm_client: Option<Arc<dyn LLMClient>>,
+) -> Result<String> {
+    let rec =
+        db::get_recommendation(id)?.ok_or_else(|| anyhow!("recommendation {} not found", id))?;
+
+    if rec.status.eq_ignore_ascii_case("rejected") {
+        return Err(anyhow!(
+            "recommendation {} is rejected and cannot be created",
+            id
+        ));
+    }
+    if !rec.status.eq_ignore_ascii_case("approved") {
+        return Err(anyhow!(
+            "recommendation {} is '{}' (approval required before creation)",
+            id,
+            rec.status
+        ));
+    }
+
+    // Idempotency guard: if this recommendation already has a workflow id,
+    // do not create another workflow unless explicitly forced.
+    let force_recreate = env_flag("STEER_APPROVE_FORCE_RECREATE");
+    let claim_token = format!(
+        "provisioning:{}:{}",
+        id,
+        chrono::Utc::now().timestamp_millis()
+    );
+    if !force_recreate {
+        if let Some(existing_id) = rec
+            .workflow_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if existing_id.starts_with("provisioning:") {
+                if is_stale_provisioning_claim(existing_id) {
+                    let _ = db::release_recommendation_provisioning_claim(id, existing_id);
+                } else {
+                    return Err(anyhow!(
+                        "recommendation {} is already being provisioned ({})",
+                        id,
+                        existing_id
+                    ));
+                }
+            }
+            if !existing_id.starts_with("provisioning:") {
+                println!(
+                    "ℹ️ Recommendation {} already provisioned. Reusing workflow_id={}",
+                    id, existing_id
+                );
+                return Ok(existing_id.to_string());
+            }
+        }
+
+        let mut claim_acquired = false;
+        for _ in 0..2 {
+            match db::claim_recommendation_provisioning(id, &claim_token)? {
+                Some(existing) => {
+                    if existing.starts_with("provisioning:") {
+                        if is_stale_provisioning_claim(&existing) {
+                            let _ = db::release_recommendation_provisioning_claim(id, &existing);
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "recommendation {} is already being provisioned ({})",
+                            id,
+                            existing
+                        ));
+                    }
+                    println!(
+                        "ℹ️ Recommendation {} already provisioned. Reusing workflow_id={}",
+                        id, existing
+                    );
+                    return Ok(existing);
+                }
+                None => {
+                    claim_acquired = true;
+                    break;
+                }
+            }
+        }
+        if !claim_acquired {
+            return Err(anyhow!(
+                "failed to acquire provisioning claim for recommendation {}",
+                id
+            ));
+        }
+    }
+
+    let workflow_json_str_result: Result<String> = (|| async {
+        if should_use_test_mock_workflow() {
+            return serde_json::to_string(&mock_workflow_json(&rec.title))
+                .map_err(|e| anyhow!("mock workflow serialization failed: {}", e));
+        }
+
+        if let Some(existing_json) = rec
+            .workflow_json
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Ok(existing_json.to_string());
+        }
+
+        let brain = llm_client
+            .clone()
+            .ok_or_else(|| anyhow!("LLM Client not available"))?;
+        let generated = brain
+            .build_n8n_workflow(&rec.n8n_prompt)
+            .await
+            .map_err(|e| anyhow!("workflow generation failed: {}", e))?;
+        Ok(generated)
+    })()
+    .await;
+    let workflow_json_str = match workflow_json_str_result {
+        Ok(v) => v,
+        Err(e) => {
+            if !force_recreate {
+                let _ = db::release_recommendation_provisioning_claim(id, &claim_token);
+            }
+            return Err(e);
+        }
+    };
+
+    let workflow_val_result = serde_json::from_str::<serde_json::Value>(&workflow_json_str)
+        .map_err(|e| {
+            anyhow!(
+                "generated workflow JSON is invalid for recommendation {}: {}",
+                id,
+                e
+            )
+        });
+    let workflow_val = match workflow_val_result {
+        Ok(v) => v,
+        Err(e) => {
+            if !force_recreate {
+                let _ = db::release_recommendation_provisioning_claim(id, &claim_token);
+            }
+            return Err(e);
+        }
+    };
+
+    let n8n = match n8n_api::N8nApi::from_env() {
+        Ok(v) => v,
+        Err(e) => {
+            if !force_recreate {
+                let _ = db::release_recommendation_provisioning_claim(id, &claim_token);
+            }
+            return Err(e);
+        }
+    };
+    let active = n8n_create_active_default();
+
+    match n8n.create_workflow(&rec.title, &workflow_val, active).await {
+        Ok(workflow_id) => {
+            db::mark_recommendation_approved(id, &workflow_id, &workflow_json_str)?;
+            Ok(workflow_id)
+        }
+        Err(e) => {
+            if !force_recreate {
+                let _ = db::release_recommendation_provisioning_claim(id, &claim_token);
+            }
+            let _ = db::mark_recommendation_failed(id, &e.to_string());
+            Err(anyhow!("workflow creation failed: {}", e))
+        }
+    }
+}
+
+pub async fn approve_and_execute_recommendation(
+    id: i64,
+    llm_client: Option<Arc<dyn LLMClient>>,
+) -> Result<ApprovalExecutionOutcome> {
+    let rec =
+        db::get_recommendation(id)?.ok_or_else(|| anyhow!("recommendation {} not found", id))?;
+
+    if rec.status.eq_ignore_ascii_case("rejected") {
+        return Err(anyhow!(
+            "recommendation {} is rejected and cannot be approved",
+            id
+        ));
+    }
+
+    let approved_now = !rec.status.eq_ignore_ascii_case("approved");
+    if approved_now {
+        db::update_recommendation_review_status(id, "approved")?;
+    }
+
+    let preexisting_workflow = rec
+        .workflow_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|s| !s.starts_with("provisioning:"))
+        .map(|s| s.to_string());
+
+    let workflow_id = execute_approved_recommendation(id, llm_client).await?;
+    let reused_existing = preexisting_workflow
+        .as_deref()
+        .map(|existing| existing == workflow_id)
+        .unwrap_or(false);
+
+    Ok(ApprovalExecutionOutcome {
+        workflow_id,
+        approved_now,
+        reused_existing,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recommendation::AutomationProposal;
+
+    fn insert_test_recommendation(title: &str) -> Option<i64> {
+        let _ = db::init();
+        let proposal = AutomationProposal {
+            title: title.to_string(),
+            summary: "test summary".to_string(),
+            trigger: format!("trigger-{}", title),
+            actions: vec!["noop".to_string()],
+            confidence: 0.9,
+            n8n_prompt: format!("Create workflow {}", title),
+            evidence: vec!["test".to_string()],
+            pattern_id: None,
+        };
+        let _ = db::insert_recommendation(&proposal);
+        db::get_recommendations_with_filter(Some("pending"))
+            .ok()
+            .and_then(|recs| recs.into_iter().find(|r| r.title == title))
+            .map(|r| r.id)
+    }
+
+    #[test]
+    fn test_assume_approved_requires_flag() {
+        std::env::remove_var("STEER_TEST_ASSUME_APPROVED");
+        let result = maybe_assume_approved_for_test(1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_assume_approved_requires_mock_flag() {
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::remove_var("STEER_N8N_MOCK");
+        let result = maybe_assume_approved_for_test(1);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_requires_approved_status() {
+        let title = format!(
+            "rec-exec-requires-{}",
+            chrono::Utc::now().timestamp_millis()
+        );
+        let Some(id) = insert_test_recommendation(&title) else {
+            return;
+        };
+        std::env::remove_var("STEER_TEST_ASSUME_APPROVED");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+        let res = execute_approved_recommendation(id, None).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_approve_assumed_pipeline_with_mock() {
+        let title = format!(
+            "rec-approve-assumed-{}",
+            chrono::Utc::now().timestamp_millis()
+        );
+        let Some(id) = insert_test_recommendation(&title) else {
+            return;
+        };
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+
+        assert!(maybe_assume_approved_for_test(id).is_ok());
+        let workflow_id = execute_approved_recommendation(id, None)
+            .await
+            .unwrap_or_default();
+        assert!(!workflow_id.trim().is_empty());
+
+        let rec = db::get_recommendation(id).ok().flatten();
+        assert!(rec.is_some());
+        let rec = rec.unwrap();
+        assert_eq!(rec.status, "approved");
+        assert!(rec.workflow_id.unwrap_or_default().starts_with("mock-wf-"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_is_idempotent_for_existing_workflow() {
+        let title = format!("rec-idempotent-{}", chrono::Utc::now().timestamp_millis());
+        let Some(id) = insert_test_recommendation(&title) else {
+            return;
+        };
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+        std::env::remove_var("STEER_APPROVE_FORCE_RECREATE");
+
+        assert!(maybe_assume_approved_for_test(id).is_ok());
+        let first = execute_approved_recommendation(id, None)
+            .await
+            .unwrap_or_default();
+        assert!(!first.is_empty());
+
+        let second = execute_approved_recommendation(id, None)
+            .await
+            .unwrap_or_default();
+        assert_eq!(first, second);
+    }
+
+    #[tokio::test]
+    async fn test_stale_provisioning_claim_is_recovered() {
+        let title = format!("rec-stale-claim-{}", chrono::Utc::now().timestamp_millis());
+        let Some(id) = insert_test_recommendation(&title) else {
+            return;
+        };
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+        std::env::set_var("STEER_PROVISIONING_CLAIM_TTL_SECONDS", "1");
+        std::env::remove_var("STEER_APPROVE_FORCE_RECREATE");
+        assert!(maybe_assume_approved_for_test(id).is_ok());
+
+        let stale_token = format!("provisioning:{}:1", id);
+        let _ = db::claim_recommendation_provisioning(id, &stale_token);
+        let workflow_id = execute_approved_recommendation(id, None)
+            .await
+            .unwrap_or_default();
+        assert!(!workflow_id.trim().is_empty());
+        assert!(!workflow_id.starts_with("provisioning:"));
+    }
+
+    #[tokio::test]
+    async fn test_approve_and_execute_reports_status() {
+        let title = format!("rec-approve-exec-{}", chrono::Utc::now().timestamp_millis());
+        let Some(id) = insert_test_recommendation(&title) else {
+            return;
+        };
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+        std::env::remove_var("STEER_APPROVE_FORCE_RECREATE");
+
+        let first = approve_and_execute_recommendation(id, None)
+            .await
+            .unwrap_or_else(|_| ApprovalExecutionOutcome {
+                workflow_id: String::new(),
+                approved_now: false,
+                reused_existing: false,
+            });
+        assert!(!first.workflow_id.trim().is_empty());
+        assert!(first.approved_now);
+
+        let second = approve_and_execute_recommendation(id, None)
+            .await
+            .unwrap_or_else(|_| ApprovalExecutionOutcome {
+                workflow_id: String::new(),
+                approved_now: true,
+                reused_existing: false,
+            });
+        assert_eq!(first.workflow_id, second.workflow_id);
+        assert!(!second.approved_now);
+        assert!(second.reused_existing);
+    }
+}

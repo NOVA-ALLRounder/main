@@ -1,0 +1,41 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Swift
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Secrets & Config
+core/credentials.json
+core/.env
+.env
+*.env
+
+# Logs
+*.log
+**/*.log
+behavior_test_output.txt
+
+# Database
+*.db
+core/steer.db
+
+# Dependencies
+node_modules/
+dist/
+build/
+
+# Runtime artifacts (scenario runs / temporary UI captures)
+scenario_results/
+
+# Python bytecode caches
+**/__pycache__/
+
+# LanceDB runtime transaction/data shards
+core/steer_mem/context_logs.lance/_transactions/
+core/steer_mem/context_logs.lance/_versions/
+core/steer_mem/context_logs.lance/data/

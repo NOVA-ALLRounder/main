@@ -1,0 +1,4 @@
+priority,subject,from,action,owner,status
+P2,"Client escalation: delivery timeline","sales@company.com","review-and-reply","me","todo"
+P2,"Weekly project sync agenda","pm@company.com","review-and-reply","me","todo"
+P2,"Q1 budget review request","finance@company.com","review-and-reply","me","todo"
