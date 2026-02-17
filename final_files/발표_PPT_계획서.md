@@ -201,3 +201,16 @@
   2. **반복 패턴을 자율 감지**하여
   3. **OS 전체를 자연어로 안전하게 제어**합니다.
 - **마무리 문구**: "Next Gen Automation starts with Steer."
+
+#### Slide 16: Contact & Team
+- **핵심 메시지**: 프로젝트 관련 문의 및 추가 정보 안내
+- **내용**:
+  - **공식 링크**:
+    - GitHub: [NOVA-ALLRounder/main](https://github.com/NOVA-ALLRounder/main)
+    - Website: [Steer Official Website] (QR 코드로 배치)
+  - **팀원별 Contact (4인)**:
+    - **[팀원 1]**: [이메일/LinkedIn/GitHub]
+    - **[팀원 2]**: [이메일/LinkedIn/GitHub]
+    - **[팀원 3]**: [이메일/LinkedIn/GitHub]
+    - **[팀원 4]**: [이메일/LinkedIn/GitHub]
+- **비고**: 웹사이트 연결 QR 코드를 크게 배치하여 청중이 즉시 접속할 수 있도록 유도
