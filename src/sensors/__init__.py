@@ -1,1 +1,0 @@
-"""Sensor package entrypoint."""
