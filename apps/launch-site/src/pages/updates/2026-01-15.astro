@@ -1,0 +1,47 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import Section from '../../components/ui/Section.astro';
+import Container from '../../components/ui/Container.astro';
+import Badge from '../../components/ui/Badge.astro';
+---
+
+<BaseLayout title="배치 처리 성능 40% 개선 — NOVA Updates" description="NOVA 업데이트: 배치 처리 성능 개선 안내 (placeholder).">
+  <Header slot="header" />
+
+  <Section padding="large">
+    <Container narrow>
+      <article class="animate-on-scroll">
+        <a href="/updates" class="inline-flex items-center text-sm text-neutral-500 hover:text-neutral-900 mb-8">← Updates로 돌아가기</a>
+        <div class="flex items-center gap-3 mb-4">
+          <time datetime="2026-01-15" class="text-sm text-neutral-400">2026.01.15</time>
+          <Badge text="개선" variant="success" />
+        </div>
+        <h1 class="text-h1 text-neutral-900 mb-6">배치 처리 성능 40% 개선</h1>
+        <p class="text-body-lg text-neutral-500 mb-12">
+          Placeholder 업데이트 본문입니다. 대용량 처리 파이프라인의 구조 개선과 운영 효율 상승 내용을 설명하는 샘플 페이지입니다.
+        </p>
+
+        <div class="space-y-8">
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">무엇이 개선되었나요?</h2>
+            <ul class="list-disc pl-6 space-y-2 text-neutral-600">
+              <li>병렬 처리 큐 최적화로 처리량 향상 (placeholder)</li>
+              <li>I/O 병목 구간 캐시 전략 적용 (placeholder)</li>
+              <li>실패 재처리 안정성 강화 (placeholder)</li>
+            </ul>
+          </section>
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">권장 확인 항목</h2>
+            <p class="text-body text-neutral-600">
+              기존 배치 워크플로우의 실행 시간을 비교해 개선 효과를 측정하세요. 처리량 증가에 따라 알림 임계값 재설정을 권장합니다.
+            </p>
+          </section>
+        </div>
+      </article>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>

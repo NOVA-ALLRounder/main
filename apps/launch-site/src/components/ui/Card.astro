@@ -1,0 +1,33 @@
+---
+export interface Props {
+  class?: string;
+  href?: string;
+  hoverable?: boolean;
+}
+
+const { class: className, href, hoverable = true } = Astro.props;
+const Tag = href ? 'a' : 'div';
+---
+
+{href ? (
+  <a
+    href={href}
+    class:list={[
+      'block bg-white rounded-2xl border border-neutral-200 overflow-hidden transition-all duration-200',
+      hoverable && 'hover:border-neutral-300 hover:shadow-md hover:-translate-y-0.5',
+      className,
+    ]}
+  >
+    <slot />
+  </a>
+) : (
+  <div
+    class:list={[
+      'bg-white rounded-2xl border border-neutral-200 overflow-hidden transition-all duration-200',
+      hoverable && 'hover:border-neutral-300 hover:shadow-md hover:-translate-y-0.5',
+      className,
+    ]}
+  >
+    <slot />
+  </div>
+)}

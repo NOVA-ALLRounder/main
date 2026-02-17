@@ -136,6 +136,36 @@ class SQLiteStore:
                 sleep_for = (backoff_ms / 1000.0) * (2**attempt)
                 time.sleep(sleep_for)
 
+    def insert_action(self, action: Any) -> bool:
+        """Saves a processed action record to the db."""
+        if self._conn is None:
+            return False
+        try:
+            with self._lock:
+                self._conn.execute(
+                    """
+                    INSERT INTO actions (
+                        ts, app, action_type, control_name, window_title, final_value, duration_ms, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        action.ts,
+                        action.app,
+                        action.action_type,
+                        action.control_name,
+                        action.window_title,
+                        action.final_value,
+                        action.duration_ms,
+                        json.dumps(action.metadata)
+                    ),
+                )
+                self._conn.commit()
+            return True
+        except Exception as e:
+            logger.warning("Failed to insert action: %s", e)
+            return False
+
     def upsert_activity_details(
         self, records: list[tuple[str, str, str, str, str, int]]
     ) -> None:

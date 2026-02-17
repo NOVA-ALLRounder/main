@@ -9,6 +9,8 @@ use local_os_agent::singleton_lock;
 
 #[cfg(target_os = "macos")]
 use local_os_agent::macos;
+#[cfg(target_os = "windows")]
+use local_os_agent::windows;
 
 use chrono::Utc;
 use local_os_agent::schema::{AgentAction, EventEnvelope};
@@ -173,7 +175,6 @@ async fn main() -> anyhow::Result<()> {
             .arg("tell application \"System Events\" to return name of first application process")
             .output();
 
-<<<<<<< HEAD:apps/core/src/main.rs
         match ax_check {
             Ok(output) if output.status.success() => {
                  println!("✅ Accessibility Permissions: GRANTED.");
@@ -187,20 +188,6 @@ async fn main() -> anyhow::Result<()> {
                  println!("################################################################\n\n");
                  // We continue, but warn heavily.
             }
-=======
-    match ax_check {
-        Ok(output) if output.status.success() => {
-            println!("✅ Accessibility Permissions: GRANTED.");
-        }
-        _ => {
-            println!("\n\n################################################################");
-            println!("❌ WARNING: ACCESSIBILITY PERMISSIONS MISSING OR REVOKED!");
-            println!("   The agent can launch apps but CANNOT click or type.");
-            println!("   FIX: Go to System Settings -> Privacy -> Accessibility");
-            println!("   ACTION: Remove (-) and Re-add (+) your Terminal / Agent.");
-            println!("################################################################\n\n");
-            // We continue, but warn heavily.
->>>>>>> origin/steer/develop:core/src/main.rs
         }
     }
     #[cfg(target_os = "windows")]
@@ -318,6 +305,14 @@ async fn main() -> anyhow::Result<()> {
             error!("❌ Failed to start Event Tap: {}", e);
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        if env_flag("STEER_DISABLE_EVENT_TAP") {
+            info!("⚠️  Event Tap disabled via STEER_DISABLE_EVENT_TAP.");
+        } else if let Err(e) = windows::events::start_event_tap(log_tx.clone()) {
+            error!("❌ Failed to start Windows event tap: {}", e);
+        }
+    }
 
     // 2. Start "Shadow Analyzer" (Decoupled Module)
     // CRITICAL FIX: Always consume log_rx, even without LLM
@@ -347,17 +342,10 @@ async fn main() -> anyhow::Result<()> {
 
     // 5. Start File Watcher
     // Watch Downloads folder
-<<<<<<< HEAD:apps/core/src/main.rs
     let downloads_dir = dirs::download_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Downloads")))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let downloads = downloads_dir.to_string_lossy().to_string();
-    
-=======
-    let home = std::env::var("HOME").unwrap_or("/".to_string());
-    let downloads = format!("{}/Downloads", home);
-
->>>>>>> origin/steer/develop:core/src/main.rs
     // We reuse log_tx to send file events to Analyzer
     if let Err(e) = monitor::spawn_file_watcher(downloads.clone(), log_tx.clone()) {
         println!("⚠️  Failed to watch {}: {}", downloads, e);
@@ -437,25 +425,17 @@ async fn main() -> anyhow::Result<()> {
                 println!("[Policy] Write Lock LOCKED.");
             }
             "snap" => {
-<<<<<<< HEAD:apps/core/src/main.rs
                 let scope = if parts.len() > 1 { Some(parts[1].to_string()) } else { None };
                 println!("[UI] Snapshotting...");
-=======
-                let scope = if parts.len() > 1 {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                };
-                println!("[MacOS] Snapshotting...");
->>>>>>> origin/steer/develop:core/src/main.rs
                 #[cfg(target_os = "macos")]
                 {
                     let tree = macos::accessibility::snapshot(scope);
                     println!("📄 Snapshot:\n{}", serde_json::to_string_pretty(&tree)?);
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(target_os = "windows")]
                 {
-                    println!("⚠️ UI snapshot is currently supported only on macOS.");
+                    let tree = windows::accessibility::snapshot(scope);
+                    println!("📄 Snapshot:\n{}", serde_json::to_string_pretty(&tree)?);
                 }
             }
             "type" => {
@@ -496,9 +476,9 @@ async fn main() -> anyhow::Result<()> {
                         if let Err(e) = macos::actions::click_element(id) {
                             println!("❌ Click failed: {}", e);
                         }
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            println!("⚠️ UI clicking is currently supported only on macOS.");
+                        #[cfg(target_os = "windows")]
+                        if let Err(e) = windows::actions::click_element(id) {
+                            println!("❌ Click failed: {}", e);
                         }
                     }
                     Err(e) => println!("⛔️ Policy Blocked: {}", e),
@@ -594,8 +574,15 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let url = parts[1];
                 println!("🌐 Opening URL: {}", url);
+                #[cfg(target_os = "macos")]
                 if let Err(e) = crate::applescript::open_url(url).map(|_| ()) {
                     println!("❌ Open failed: {}", e);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(&["/C", "start", "", url])
+                        .spawn();
                 }
             }
             "fake_log" => {

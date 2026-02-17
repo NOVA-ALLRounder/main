@@ -1,0 +1,47 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import Section from '../../components/ui/Section.astro';
+import Container from '../../components/ui/Container.astro';
+import Badge from '../../components/ui/Badge.astro';
+---
+
+<BaseLayout title="RBAC & 감사 로그 기본 지원 — NOVA Updates" description="NOVA 업데이트: RBAC 및 감사 로그 지원 안내 (placeholder).">
+  <Header slot="header" />
+
+  <Section padding="large">
+    <Container narrow>
+      <article class="animate-on-scroll">
+        <a href="/updates" class="inline-flex items-center text-sm text-neutral-500 hover:text-neutral-900 mb-8">← Updates로 돌아가기</a>
+        <div class="flex items-center gap-3 mb-4">
+          <time datetime="2025-12-01" class="text-sm text-neutral-400">2025.12.01</time>
+          <Badge text="보안" variant="warning" />
+        </div>
+        <h1 class="text-h1 text-neutral-900 mb-6">RBAC & 감사 로그 기본 지원 시작</h1>
+        <p class="text-body-lg text-neutral-500 mb-12">
+          Placeholder 업데이트 본문입니다. 조직 보안 정책 강화를 위한 접근 권한 제어와 감사 이력 관리 기능 소개용 샘플 페이지입니다.
+        </p>
+
+        <div class="space-y-8">
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">추가된 보안 기능</h2>
+            <ul class="list-disc pl-6 space-y-2 text-neutral-600">
+              <li>역할 기반 권한(RBAC) 정책 템플릿 제공 (placeholder)</li>
+              <li>사용자 활동 로그 자동 수집/내보내기 (placeholder)</li>
+              <li>관리자용 변경 이력 추적 화면 추가 (placeholder)</li>
+            </ul>
+          </section>
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">도입 시 고려 사항</h2>
+            <p class="text-body text-neutral-600">
+              현재 조직의 권한 체계를 먼저 정리한 뒤, 팀/부서 단위로 단계적 적용을 권장합니다. 필요 시 보안 검토 세션을 요청할 수 있습니다.
+            </p>
+          </section>
+        </div>
+      </article>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>

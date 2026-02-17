@@ -1,0 +1,29 @@
+---
+export interface Props {
+  background?: 'white' | 'light' | 'dark';
+  padding?: 'default' | 'large' | 'none';
+  class?: string;
+  id?: string;
+}
+
+const { background = 'white', padding = 'default', class: className, id } = Astro.props;
+
+const bgClasses = {
+  white: 'bg-white',
+  light: 'bg-neutral-50',
+  dark: 'bg-neutral-900 text-white',
+};
+
+const paddingClasses = {
+  default: 'py-24 md:py-32',
+  large: 'py-32 md:py-40',
+  none: '',
+};
+---
+
+<section
+  id={id}
+  class:list={[bgClasses[background], paddingClasses[padding], className]}
+>
+  <slot />
+</section>

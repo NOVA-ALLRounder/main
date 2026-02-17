@@ -1,0 +1,154 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import Section from '../components/ui/Section.astro';
+import Container from '../components/ui/Container.astro';
+import Button from '../components/ui/Button.astro';
+import StepCard from '../components/ui/StepCard.astro';
+import Table from '../components/ui/Table.astro';
+---
+
+<BaseLayout title="Product — NOVA" description="NOVA의 핵심 기능과 기술 사양을 자세히 알아보세요. 지능형 자동화가 어떻게 동작하는지 확인합니다.">
+  <Header slot="header" />
+
+  <!-- Hero -->
+  <Section padding="large">
+    <Container>
+      <div class="text-center max-w-4xl mx-auto animate-on-scroll">
+        <p class="text-caption text-accent-600 font-medium tracking-wide uppercase mb-4">Product</p>
+        <h1 class="text-h1 md:text-display text-neutral-900 mb-6 text-balance">
+          복잡함 너머의<br class="hidden md:block" /> 단순함
+        </h1>
+        <p class="text-body-lg text-neutral-500 max-w-2xl mx-auto mb-10">
+          NOVA는 직관적인 인터페이스 아래에 강력한 자동화 엔진을 품고 있습니다.
+          누구나 쉽게 시작하고, 어떤 규모에서도 안정적으로 운영됩니다.
+        </p>
+        <Button variant="primary" size="lg" href="/docs/getting-started">무료로 시작하기</Button>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- How it Works -->
+  <Section background="light">
+    <Container>
+      <div class="text-center mb-16 animate-on-scroll">
+        <h2 class="text-h2 text-neutral-900 mb-4">작동 방식</h2>
+        <p class="text-body-lg text-neutral-500 max-w-xl mx-auto">세 단계로 모든 반복 업무를 자동화할 수 있습니다.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-12 animate-on-scroll">
+        <StepCard step={1} title="데이터 입력" description="API, 파일 업로드, 실시간 스트림 등 다양한 소스에서 데이터를 수집합니다." />
+        <StepCard step={2} title="지능형 처리" description="규칙 엔진과 AI 모델이 데이터를 분석하고, 최적의 행동을 결정합니다." />
+        <StepCard step={3} title="결과 전달" description="처리 결과를 원하는 채널과 형식으로 자동 전달하고, 실행 이력을 기록합니다." />
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Feature Deep-dive 1 -->
+  <Section>
+    <Container>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center animate-on-scroll">
+        <div>
+          <p class="text-caption text-accent-600 font-medium tracking-wide uppercase mb-3">Feature 01</p>
+          <h2 class="text-h2 text-neutral-900 mb-4">흩어진 데이터,<br />하나의 흐름으로</h2>
+          <div class="space-y-6 text-body text-neutral-600">
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">문제</h3>
+              <p>팀마다 다른 도구, 서로 다른 형식의 데이터. 수작업 취합에 매주 수 시간이 소요됩니다.</p>
+            </div>
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">해결</h3>
+              <p>NOVA의 통합 커넥터가 40개 이상의 SaaS 도구에서 데이터를 자동으로 수집하고 정규화합니다.</p>
+            </div>
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">효과</h3>
+              <p>데이터 취합 시간 90% 감소. 실시간 싱크로 항상 최신 상태를 유지합니다.</p>
+            </div>
+          </div>
+        </div>
+        <div class="bg-neutral-200 rounded-2xl aspect-[4/3] flex items-center justify-center">
+          <span class="text-neutral-400 text-sm">기능 데모 스크린샷</span>
+        </div>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Feature Deep-dive 2 -->
+  <Section background="light">
+    <Container>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center animate-on-scroll">
+        <div class="order-2 lg:order-1 bg-neutral-200 rounded-2xl aspect-[4/3] flex items-center justify-center">
+          <span class="text-neutral-400 text-sm">AI 분석 대시보드</span>
+        </div>
+        <div class="order-1 lg:order-2">
+          <p class="text-caption text-accent-600 font-medium tracking-wide uppercase mb-3">Feature 02</p>
+          <h2 class="text-h2 text-neutral-900 mb-4">규칙 + AI,<br />더 똑똑한 판단</h2>
+          <div class="space-y-6 text-body text-neutral-600">
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">문제</h3>
+              <p>단순한 if-then 규칙만으로는 복잡한 비즈니스 시나리오를 커버할 수 없습니다.</p>
+            </div>
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">해결</h3>
+              <p>확정적 규칙 엔진 위에 ML 기반 판단 레이어를 결합합니다. 사용자가 각 레이어의 비중을 조절할 수 있습니다.</p>
+            </div>
+            <div>
+              <h3 class="text-h4 text-neutral-900 mb-2">효과</h3>
+              <p>분류 정확도 95% 이상. 예외 케이스도 학습을 통해 점진적으로 개선됩니다.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Specs Table -->
+  <Section>
+    <Container>
+      <div class="animate-on-scroll">
+        <div class="text-center mb-12">
+          <h2 class="text-h2 text-neutral-900 mb-4">기술 사양</h2>
+          <p class="text-body-lg text-neutral-500">NOVA 플랫폼의 주요 기술 스펙을 확인하세요.</p>
+        </div>
+        <Table>
+          <thead>
+            <tr>
+              <th>항목</th>
+              <th>사양</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>처리 엔진</td><td>이벤트 기반 비동기 처리, 초당 10,000+ 이벤트</td></tr>
+            <tr><td>지원 커넥터</td><td>40+ SaaS 도구, REST API, Webhook, gRPC</td></tr>
+            <tr><td>AI/ML 모델</td><td>텍스트 분류, 이상 탐지, 요약, 커스텀 모델 배포</td></tr>
+            <tr><td>데이터 보안</td><td>TLS 1.3 전송 암호화, AES-256 저장 암호화</td></tr>
+            <tr><td>인증/인가</td><td>OAuth 2.0, SAML SSO, RBAC, MFA</td></tr>
+            <tr><td>배포 옵션</td><td>SaaS (멀티테넌트), 전용 클라우드, 온프레미스 (예정)</td></tr>
+            <tr><td>SLA</td><td>99.9% 업타임, 엔터프라이즈 99.99% (별도 계약)</td></tr>
+            <tr><td>스케일링</td><td>자동 수평 확장, 리전별 배포 지원</td></tr>
+            <tr><td>모니터링</td><td>실시간 대시보드, Prometheus/Grafana 연동</td></tr>
+            <tr><td>SDK/API</td><td>Python, Node.js, Go SDK, RESTful API v2</td></tr>
+          </tbody>
+        </Table>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- CTA -->
+  <Section background="dark">
+    <Container>
+      <div class="text-center animate-on-scroll">
+        <h2 class="text-h2 text-white mb-4">직접 경험해 보세요</h2>
+        <p class="text-body-lg text-neutral-400 max-w-xl mx-auto mb-10">
+          무료 플랜으로 NOVA의 모든 핵심 기능을 체험할 수 있습니다.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button variant="primary" size="lg" href="/docs/getting-started" class="bg-white text-neutral-900 hover:bg-neutral-100">시작하기</Button>
+          <Button variant="ghost" size="lg" href="/solutions" class="text-neutral-300 hover:text-white hover:bg-white/10">데모 요청</Button>
+        </div>
+      </div>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>

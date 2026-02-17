@@ -1,0 +1,86 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import Section from '../../components/ui/Section.astro';
+import Container from '../../components/ui/Container.astro';
+import Card from '../../components/ui/Card.astro';
+import Badge from '../../components/ui/Badge.astro';
+import Button from '../../components/ui/Button.astro';
+
+const updates = [
+  {
+    date: '2026.02.10',
+    badge: '새로운 기능',
+    badgeVariant: 'accent' as const,
+    title: 'AI 분류 모델 v3 출시 — 더 빠르고. 더 정확하게.',
+    summary: '텍스트 분류 정확도가 12% 향상되었습니다. 신규 언어 5개 추가 지원과 함께, 커스텀 모델 학습 시간도 절반으로 단축했습니다.',
+    href: '/updates/2026-02-10',
+  },
+  {
+    date: '2026.01.15',
+    badge: '개선',
+    badgeVariant: 'success' as const,
+    title: '배치 처리 성능 40% 개선',
+    summary: '대량 데이터 처리 파이프라인을 최적화하여 배치 모드 처리 속도가 40% 빨라졌습니다. 10만 건 이상의 데이터도 안정적으로 처리합니다.',
+    href: '/updates/2026-01-15',
+  },
+  {
+    date: '2025.12.01',
+    badge: '보안',
+    badgeVariant: 'warning' as const,
+    title: 'RBAC & 감사 로그 기본 지원 시작',
+    summary: '역할 기반 접근 제어(RBAC)가 Team 플랜 이상에서 기본 제공됩니다. 모든 사용자 활동 감사 로그도 함께 지원합니다.',
+    href: '/updates/2025-12-01',
+  },
+];
+---
+
+<BaseLayout title="Updates — NOVA" description="NOVA의 최신 업데이트, 새로운 기능, 개선 사항을 확인하세요.">
+  <Header slot="header" />
+
+  <Section padding="large">
+    <Container>
+      <div class="text-center max-w-3xl mx-auto mb-16 animate-on-scroll">
+        <p class="text-caption text-accent-600 font-medium tracking-wide uppercase mb-4">Updates</p>
+        <h1 class="text-h1 text-neutral-900 mb-6">새로운 소식</h1>
+        <p class="text-body-lg text-neutral-500">
+          NOVA의 최신 기능, 개선 사항, 그리고 앞으로의 계획을 전해드립니다.
+        </p>
+      </div>
+
+      <!-- Subscribe Placeholder -->
+      <div class="max-w-md mx-auto mb-16 animate-on-scroll">
+        <div class="flex gap-3">
+          <input
+            type="email"
+            placeholder="이메일 주소"
+            class="flex-1 px-4 py-3 bg-white rounded-xl border border-neutral-200 text-body text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20"
+            aria-label="업데이트 구독 이메일"
+          />
+          <Button variant="primary" size="md">구독</Button>
+        </div>
+        <p class="text-xs text-neutral-400 mt-2 text-center">새 업데이트가 있을 때 알려드립니다. 언제든 구독 해지 가능.</p>
+      </div>
+
+      <!-- Update Cards -->
+      <div class="space-y-6 max-w-3xl mx-auto animate-on-scroll">
+        {updates.map((update) => (
+          <Card hoverable={true} href={update.href}>
+            <div class="p-8">
+              <div class="flex items-center gap-3 mb-4">
+                <span class="text-caption text-neutral-400">{update.date}</span>
+                <Badge text={update.badge} variant={update.badgeVariant} />
+              </div>
+              <h2 class="text-h3 text-neutral-900 mb-3">{update.title}</h2>
+              <p class="text-body text-neutral-500">{update.summary}</p>
+              <span class="inline-block mt-4 text-sm text-accent-600 font-medium">자세히 보기 →</span>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>

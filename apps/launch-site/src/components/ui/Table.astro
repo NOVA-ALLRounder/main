@@ -1,0 +1,28 @@
+---
+export interface Props {
+  class?: string;
+}
+
+const { class: className } = Astro.props;
+---
+
+<div class:list={['overflow-x-auto -mx-6 px-6', className]}>
+  <table class="w-full text-left border-collapse">
+    <slot />
+  </table>
+</div>
+
+<style>
+  table :global(thead) {
+    @apply border-b-2 border-neutral-200;
+  }
+  table :global(th) {
+    @apply py-3 px-4 text-sm font-semibold text-neutral-900 whitespace-nowrap;
+  }
+  table :global(td) {
+    @apply py-3 px-4 text-sm text-neutral-600 border-b border-neutral-100;
+  }
+  table :global(tbody tr:hover) {
+    @apply bg-neutral-50;
+  }
+</style>

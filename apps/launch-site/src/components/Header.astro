@@ -1,0 +1,190 @@
+---
+const navItems = [
+  { label: 'Home', href: '/' },
+  { label: 'Product', href: '/product' },
+  { label: 'Solutions', href: '/solutions' },
+  { label: 'Pricing', href: '/pricing' },
+  { label: 'Docs', href: '/docs' },
+  { label: 'Updates', href: '/updates' },
+  { label: 'Company', href: '/company' },
+];
+
+const currentPath = Astro.url.pathname;
+const isActive = (href: string) => currentPath === href || (href !== '/' && currentPath.startsWith(href));
+const isHome = currentPath === '/';
+---
+
+<header
+  class:list={[
+    'fixed top-0 left-0 right-0 z-50 backdrop-blur-lg border-b',
+    isHome
+      ? 'bg-[#060b20]/80 border-white/10'
+      : 'bg-white/80 border-neutral-200/60',
+  ]}
+  role="banner"
+>
+  <nav
+    class="max-w-container mx-auto px-6 h-16 flex items-center justify-between"
+    aria-label="메인 네비게이션"
+  >
+    <!-- Logo -->
+    <a
+      href="/"
+      class:list={[
+        'flex items-center gap-2 font-bold text-xl tracking-tight hover:opacity-70 transition-opacity',
+        isHome ? 'text-white' : 'text-neutral-900',
+      ]}
+    >
+      <span class:list={[
+        'inline-flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold',
+        isHome ? 'bg-white text-[#060b20]' : 'bg-neutral-900 text-white',
+      ]}>N</span>
+      <span>NOVA</span>
+    </a>
+
+    <!-- Desktop Nav -->
+    <ul class="hidden lg:flex items-center gap-1" role="list">
+      {navItems.map((item) => (
+        <li>
+          <a
+            href={item.href}
+            class:list={[
+              'px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+              isHome
+                ? (isActive(item.href)
+                  ? 'text-white bg-white/10'
+                  : 'text-white/70 hover:text-white hover:bg-white/10')
+                : (isActive(item.href)
+                  ? 'text-neutral-900 bg-neutral-100'
+                  : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50'),
+            ]}
+            aria-current={isActive(item.href) ? 'page' : undefined}
+          >
+            {item.label}
+          </a>
+        </li>
+      ))}
+    </ul>
+
+    <!-- Desktop CTA -->
+    <div class="hidden lg:flex items-center gap-3">
+      <a
+        href="/pricing"
+        class:list={[
+          'text-sm font-medium transition-colors',
+          isHome ? 'text-white/80 hover:text-white' : 'text-neutral-600 hover:text-neutral-900',
+        ]}
+      >
+        로그인
+      </a>
+      <a
+        href="/docs/getting-started"
+        class:list={[
+          'inline-flex items-center px-4 py-2 text-sm font-medium rounded-full transition-colors',
+          isHome
+            ? 'bg-emerald-500 text-white hover:bg-emerald-400'
+            : 'bg-neutral-900 text-white hover:bg-neutral-800',
+        ]}
+      >
+        시작하기
+      </a>
+    </div>
+
+    <!-- Mobile Menu Toggle -->
+    <button
+      id="mobile-menu-toggle"
+      class:list={[
+        'lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg transition-colors',
+        isHome ? 'text-white/80 hover:bg-white/10' : 'text-neutral-600 hover:bg-neutral-100',
+      ]}
+      aria-expanded="false"
+      aria-controls="mobile-menu"
+      aria-label="메뉴 열기"
+    >
+      <svg id="menu-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+      <svg id="close-icon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </button>
+  </nav>
+
+  <!-- Mobile Menu -->
+  <div
+    id="mobile-menu"
+    class:list={[
+      'lg:hidden hidden border-t backdrop-blur-lg',
+      isHome
+        ? 'border-white/10 bg-[#060b20]/95'
+        : 'border-neutral-100 bg-white/95',
+    ]}
+    role="navigation"
+    aria-label="모바일 네비게이션"
+  >
+    <ul class="px-6 py-4 space-y-1" role="list">
+      {navItems.map((item) => (
+        <li>
+          <a
+            href={item.href}
+            class:list={[
+              'block px-4 py-3 rounded-lg text-base font-medium transition-colors',
+              isHome
+                ? (isActive(item.href)
+                  ? 'text-white bg-white/10'
+                  : 'text-white/80 hover:text-white hover:bg-white/10')
+                : (isActive(item.href)
+                  ? 'text-neutral-900 bg-neutral-100'
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'),
+            ]}
+            aria-current={isActive(item.href) ? 'page' : undefined}
+          >
+            {item.label}
+          </a>
+        </li>
+      ))}
+    </ul>
+    <div class:list={[
+      'px-6 pb-4 pt-2 border-t flex flex-col gap-2',
+      isHome ? 'border-white/10' : 'border-neutral-100',
+    ]}>
+      <a
+        href="/pricing"
+        class:list={[
+          'block px-4 py-3 text-center text-sm font-medium rounded-lg transition-colors',
+          isHome ? 'text-white/80 hover:bg-white/10' : 'text-neutral-600 hover:bg-neutral-50',
+        ]}
+      >
+        로그인
+      </a>
+      <a
+        href="/docs/getting-started"
+        class:list={[
+          'block px-4 py-3 text-center text-sm font-medium text-white rounded-full transition-colors',
+          isHome ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-neutral-900 hover:bg-neutral-800',
+        ]}
+      >
+        시작하기
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- Spacer for fixed header -->
+<div class="h-16" aria-hidden="true"></div>
+
+<script>
+  const toggle = document.getElementById('mobile-menu-toggle');
+  const menu = document.getElementById('mobile-menu');
+  const menuIcon = document.getElementById('menu-icon');
+  const closeIcon = document.getElementById('close-icon');
+
+  toggle?.addEventListener('click', () => {
+    const isOpen = menu?.classList.contains('hidden') === false;
+    menu?.classList.toggle('hidden');
+    menuIcon?.classList.toggle('hidden');
+    closeIcon?.classList.toggle('hidden');
+    toggle.setAttribute('aria-expanded', String(!isOpen));
+    toggle.setAttribute('aria-label', isOpen ? '메뉴 열기' : '메뉴 닫기');
+  });
+</script>

@@ -1,0 +1,145 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import Section from '../components/ui/Section.astro';
+import Container from '../components/ui/Container.astro';
+import Button from '../components/ui/Button.astro';
+import Card from '../components/ui/Card.astro';
+---
+
+<BaseLayout title="Solutions — NOVA" description="NOVA가 다양한 산업과 팀에서 어떻게 활용되는지 확인하세요. 도입부터 운영까지 안심할 수 있는 보안과 지원.">
+  <Header slot="header" />
+
+  <!-- Hero -->
+  <Section padding="large">
+    <Container>
+      <div class="text-center max-w-4xl mx-auto animate-on-scroll">
+        <p class="text-caption text-accent-600 font-medium tracking-wide uppercase mb-4">Solutions for Teams</p>
+        <h1 class="text-h1 md:text-display text-neutral-900 mb-6 text-balance">
+          팀의 성장에 맞춰<br class="hidden md:block" /> 함께 확장됩니다
+        </h1>
+        <p class="text-body-lg text-neutral-500 max-w-2xl mx-auto mb-10">
+          5인 스타트업부터 5,000인 엔터프라이즈까지. NOVA는 조직의 규모와 복잡성에 맞춰 유연하게 적응합니다.
+        </p>
+        <Button variant="primary" size="lg" href="#contact-sales">데모 요청하기</Button>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Use Cases -->
+  <Section background="light">
+    <Container>
+      <div class="text-center mb-16 animate-on-scroll">
+        <h2 class="text-h2 text-neutral-900 mb-4">산업별 활용 사례</h2>
+        <p class="text-body-lg text-neutral-500 max-w-xl mx-auto">다양한 산업에서 NOVA가 만들어 낸 변화를 확인하세요.</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8 animate-on-scroll">
+        {[
+          {
+            icon: '📊',
+            title: '금융 서비스',
+            desc: '거래 모니터링, 이상 탐지, 고객 리포트 자동 생성까지. 컴플라이언스 요구를 만족하면서 운영 비용을 절감합니다.',
+            metrics: '처리 시간 78% 단축',
+          },
+          {
+            icon: '🏥',
+            title: '헬스케어',
+            desc: '환자 데이터 수집·분석, 일정 자동화, 보험 청구 프로세스 최적화. 의료진이 환자에게 집중할 수 있도록 합니다.',
+            metrics: '관리 업무 65% 감소',
+          },
+          {
+            icon: '🛒',
+            title: '이커머스',
+            desc: '주문 처리, 재고 관리, 고객 문의 자동 분류. 성수기에도 일관된 서비스 품질을 유지합니다.',
+            metrics: '응답 시간 3분 이내',
+          },
+        ].map((useCase) => (
+          <Card hoverable={false}>
+            <div class="p-8">
+              <span class="text-3xl mb-4 block">{useCase.icon}</span>
+              <h3 class="text-h3 text-neutral-900 mb-3">{useCase.title}</h3>
+              <p class="text-body text-neutral-500 mb-4">{useCase.desc}</p>
+              <p class="text-caption text-accent-600 font-medium">{useCase.metrics}</p>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Adoption Process Timeline -->
+  <Section>
+    <Container>
+      <div class="text-center mb-16 animate-on-scroll">
+        <h2 class="text-h2 text-neutral-900 mb-4">도입 프로세스</h2>
+        <p class="text-body-lg text-neutral-500 max-w-xl mx-auto">체계적인 4단계 프로세스로 안정적인 도입을 보장합니다.</p>
+      </div>
+      <div class="relative animate-on-scroll">
+        <!-- Timeline Line (desktop) -->
+        <div class="hidden md:block absolute top-8 left-0 right-0 h-0.5 bg-neutral-200" aria-hidden="true"></div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+          {[
+            { step: '01', title: 'PoC · 파일럿', desc: '핵심 유스케이스 1~2개를 선정하여 2주간 파일럿을 진행합니다. 비용 부담 없이 효과를 검증합니다.', duration: '2주' },
+            { step: '02', title: '보안 검토', desc: 'IT/보안팀과 함께 데이터 처리 정책, 접근 제어, 감사 요건을 검토합니다.', duration: '1~2주' },
+            { step: '03', title: '배포 · 연동', desc: '기존 시스템에 맞춤 연동을 구성하고, 단계적으로 사용자를 확대합니다.', duration: '2~4주' },
+            { step: '04', title: '운영 · 최적화', desc: '전담 CSM이 운영을 지원하며, 지속적인 개선과 확장을 돕습니다.', duration: '상시' },
+          ].map((phase) => (
+            <div class="relative text-center md:text-left">
+              <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-white border-2 border-neutral-200 text-neutral-900 font-bold text-lg mb-4 relative z-10">
+                {phase.step}
+              </div>
+              <h3 class="text-h4 text-neutral-900 mb-2">{phase.title}</h3>
+              <p class="text-caption text-neutral-500 mb-2">{phase.desc}</p>
+              <span class="inline-flex items-center px-3 py-1 rounded-full bg-neutral-100 text-xs font-medium text-neutral-600">
+                {phase.duration}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Container>
+  </Section>
+
+  <!-- Trust & Security -->
+  <Section background="light">
+    <Container>
+      <div class="text-center mb-16 animate-on-scroll">
+        <h2 class="text-h2 text-neutral-900 mb-4">신뢰할 수 있는 보안</h2>
+        <p class="text-body-lg text-neutral-500 max-w-xl mx-auto">기업이 요구하는 보안 수준을 기본으로 제공합니다.</p>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 animate-on-scroll">
+        {[
+          { icon: '🔐', title: '권한 관리(RBAC)', desc: '역할 기반 접근 제어로 팀별·기능별 권한을 세밀하게 관리합니다.' },
+          { icon: '📋', title: '감사 로그', desc: '모든 사용자 활동과 자동화 실행 이력을 기록하고, 필요 시 보고서로 내보냅니다.' },
+          { icon: '🛡️', title: '데이터 보호', desc: '전송·저장 시 암호화, 데이터 처리 리전 선택, 보존 기간 정책을 지원합니다.' },
+          { icon: '📞', title: 'SLA · 지원', desc: '엔터프라이즈 전용 SLA(99.99%)와 전담 기술 지원을 제공합니다. (예정)' },
+        ].map((item) => (
+          <div class="bg-white rounded-xl p-6 border border-neutral-200">
+            <span class="text-2xl mb-3 block">{item.icon}</span>
+            <h3 class="text-h4 text-neutral-900 mb-2">{item.title}</h3>
+            <p class="text-caption text-neutral-500">{item.desc}</p>
+          </div>
+        ))}
+      </div>
+    </Container>
+  </Section>
+
+  <!-- CTA -->
+  <Section background="dark" id="contact-sales">
+    <Container>
+      <div class="text-center animate-on-scroll">
+        <h2 class="text-h2 text-white mb-4">함께 시작할 준비가 되셨나요?</h2>
+        <p class="text-body-lg text-neutral-400 max-w-xl mx-auto mb-10">
+          영업팀이 조직에 최적화된 도입 방안을 제안해 드립니다. 부담 없이 상담하세요.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Button variant="primary" size="lg" href="/company#contact" class="bg-white text-neutral-900 hover:bg-neutral-100">데모 요청</Button>
+          <Button variant="ghost" size="lg" href="/pricing" class="text-neutral-300 hover:text-white hover:bg-white/10">가격 확인하기</Button>
+        </div>
+      </div>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>

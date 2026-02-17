@@ -14,6 +14,13 @@ from .priority import PriorityProcessor
 from .store import SQLiteStore
 
 try:
+    from .action_collector import ActionCollector
+    from .action_buffer import ActionBuffer
+except ImportError:
+    ActionCollector = None
+    ActionBuffer = None
+
+try:
     from .observability import Observability
 except ImportError:  # pragma: no cover - optional for test import order
     Observability = None  # type: ignore
@@ -68,7 +75,15 @@ class EventBus:
             for item in (activity_detail_full_title_apps or [])
             if str(item).strip()
         }
+        }
         self._activity_detail_max_title_len = max(0, int(activity_detail_max_title_len))
+
+        # Secondary collector integration (steer/jy/jw features)
+        self._action_collector = None
+        if ActionCollector and ActionBuffer:
+             self._action_buffer = ActionBuffer()
+             self._action_collector = ActionCollector(store)
+             self._action_buffer.on_action = self._action_collector.on_action
 
     def start(self) -> None:
         self._worker.start()
@@ -109,6 +124,10 @@ class EventBus:
                     continue
                 queue_ratio = _queue_ratio(self._queue)
                 for output in self._priority.process(envelope, queue_ratio):
+                    # Feed to secondary collector if enabled
+                    if self._action_collector:
+                        self._action_buffer.append_event(output)
+
                     self._buffer.append(output)
                     if len(self._buffer) >= self._batch_size:
                         self._flush_buffer(force=True)

@@ -1,0 +1,18 @@
+---
+export interface Props {
+  step: number;
+  title: string;
+  description: string;
+  class?: string;
+}
+
+const { step, title, description, class: className } = Astro.props;
+---
+
+<div class:list={['text-center', className]}>
+  <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-neutral-100 text-neutral-900 text-lg font-bold mb-5">
+    {step}
+  </div>
+  <h3 class="text-h4 text-neutral-900 mb-3">{title}</h3>
+  <p class="text-body text-neutral-500 max-w-xs mx-auto">{description}</p>
+</div>

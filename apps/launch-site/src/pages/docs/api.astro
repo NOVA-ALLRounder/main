@@ -1,0 +1,46 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+---
+
+<DocsLayout title="API Reference" description="NOVA REST API의 엔드포인트, 파라미터, 응답 형식을 확인합니다.">
+  <h1>API Reference</h1>
+  <p>NOVA REST API v2 문서입니다. 모든 API는 JSON 형식을 사용하며, Bearer 토큰 인증이 필요합니다.</p>
+
+  <h2>인증</h2>
+  <p>모든 API 요청에는 <code>Authorization</code> 헤더가 필요합니다.</p>
+  <pre><code>Authorization: Bearer YOUR_API_KEY</code></pre>
+  <p>API 키는 대시보드 → 설정 → API 키에서 발급받을 수 있습니다.</p>
+
+  <h2>Base URL</h2>
+  <pre><code>https://api.nova-platform.io/v2</code></pre>
+
+  <h2>엔드포인트</h2>
+
+  <h3>POST /automations</h3>
+  <p>새 자동화를 생성합니다.</p>
+  <pre><code>{`{
+  "name": "my-automation",
+  "trigger": {
+    "type": "webhook",
+    "config": {}
+  },
+  "actions": [
+    {
+      "type": "classify",
+      "model": "default"
+    }
+  ]
+}`}</code></pre>
+
+  <h3>GET /automations</h3>
+  <p>워크스페이스의 모든 자동화 목록을 반환합니다.</p>
+
+  <h3>GET /automations/:id/runs</h3>
+  <p>특정 자동화의 실행 이력을 반환합니다. 페이지네이션을 지원합니다.</p>
+
+  <h3>DELETE /automations/:id</h3>
+  <p>자동화를 삭제합니다. 삭제된 자동화의 실행 이력은 보관 기간 동안 유지됩니다.</p>
+
+  <hr />
+  <p>전체 API 스펙은 OpenAPI 형식으로도 제공됩니다. (준비 중)</p>
+</DocsLayout>

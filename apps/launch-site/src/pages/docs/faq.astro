@@ -1,0 +1,39 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+---
+
+<DocsLayout title="FAQ" description="NOVA 사용 시 자주 묻는 질문과 답변입니다.">
+  <h1>FAQ</h1>
+  <p>NOVA를 사용하면서 자주 접하는 질문과 해결 방법을 정리했습니다.</p>
+
+  <h2>일반</h2>
+
+  <h3>NOVA는 어떤 브라우저를 지원하나요?</h3>
+  <p>Chrome, Firefox, Safari, Edge의 최신 2개 버전을 공식 지원합니다.</p>
+
+  <h3>오프라인에서도 사용할 수 있나요?</h3>
+  <p>현재는 온라인 환경이 필요합니다. 오프라인 모드는 향후 로드맵에 포함되어 있습니다.</p>
+
+  <h2>기술</h2>
+
+  <h3>API Rate Limit은 어떻게 되나요?</h3>
+  <p>Individual 플랜은 분당 60회, Team은 분당 300회, Enterprise는 협의에 따라 설정됩니다.</p>
+
+  <h3>Webhook 실패 시 재시도 정책은?</h3>
+  <p>실패한 Webhook은 지수 백오프(exponential backoff) 방식으로 최대 5회 재시도됩니다.</p>
+
+  <h2>트러블슈팅</h2>
+
+  <h3>자동화가 실행되지 않아요</h3>
+  <ul>
+    <li>트리거 설정이 올바른지 확인하세요.</li>
+    <li>커넥터 인증이 만료되지 않았는지 확인하세요.</li>
+    <li>실행 이력에서 에러 메시지를 확인하세요.</li>
+  </ul>
+
+  <h3>느린 처리 속도가 발생해요</h3>
+  <p>대량 데이터 처리 시 배치 모드를 활성화하면 처리량이 개선됩니다. 설정 → 고급 → 배치 모드에서 활성화할 수 있습니다.</p>
+
+  <hr />
+  <p>해결되지 않는 문제가 있나요? <a href="/company#contact">문의하기</a>를 통해 도움을 받으세요.</p>
+</DocsLayout>

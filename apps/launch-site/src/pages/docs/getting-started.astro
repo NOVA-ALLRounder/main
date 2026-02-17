@@ -1,0 +1,36 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+---
+
+<DocsLayout title="Getting Started" description="NOVA를 처음 사용하시나요? 설치부터 첫 자동화까지 안내합니다.">
+  <h1>Getting Started</h1>
+  <p>NOVA를 시작하기 위한 가이드입니다. 5분 이내에 첫 자동화를 실행할 수 있습니다.</p>
+
+  <h2>1. 계정 생성</h2>
+  <p>NOVA 웹사이트에서 무료 계정을 생성합니다. 이메일 또는 Google/GitHub 소셜 로그인을 지원합니다.</p>
+  <pre><code># 또는 CLI를 사용하여 로그인
+nova login --email your@email.com</code></pre>
+
+  <h2>2. 워크스페이스 설정</h2>
+  <p>팀 또는 개인 워크스페이스를 생성합니다. 워크스페이스는 프로젝트와 자동화를 그룹화하는 단위입니다.</p>
+  <ul>
+    <li>워크스페이스 이름 지정 (예: "my-team")</li>
+    <li>팀원 초대 (Team 플랜 이상)</li>
+    <li>기본 환경 변수 설정</li>
+  </ul>
+
+  <h2>3. 첫 번째 자동화 생성</h2>
+  <p>대시보드에서 "새 자동화" 버튼을 클릭하고, 템플릿을 선택하거나 처음부터 구성합니다.</p>
+  <ol>
+    <li>트리거 선택 (Webhook, 스케줄, 이벤트)</li>
+    <li>처리 규칙 정의</li>
+    <li>출력 채널 설정 (Slack, Email, API 등)</li>
+    <li>테스트 실행</li>
+  </ol>
+
+  <h2>4. 모니터링</h2>
+  <p>실행 이력과 성과 지표를 대시보드에서 실시간으로 확인합니다.</p>
+
+  <hr />
+  <p>더 자세한 내용은 <a href="/docs/tutorials">Tutorials</a>를 참고하세요.</p>
+</DocsLayout>

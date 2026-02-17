@@ -1,0 +1,101 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+export interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+
+const sidebarItems = [
+  { label: 'Getting Started', href: '/docs/getting-started' },
+  { label: 'Tutorials', href: '/docs/tutorials' },
+  { label: 'API Reference', href: '/docs/api' },
+  { label: 'FAQ', href: '/docs/faq' },
+  { label: 'Changelog', href: '/docs/changelog' },
+];
+
+const currentPath = Astro.url.pathname;
+---
+
+<BaseLayout title={`${title} — NOVA Docs`} description={description}>
+  <Header slot="header" />
+
+  <div class="max-w-container mx-auto px-6 py-12 md:py-20">
+    <div class="flex flex-col md:flex-row gap-12">
+      <!-- Sidebar -->
+      <aside class="md:w-56 flex-shrink-0">
+        <nav aria-label="문서 네비게이션">
+          <a href="/docs" class="text-sm font-medium text-accent-600 hover:text-accent-700 mb-4 block">← 문서 홈</a>
+          <ul class="space-y-1" role="list">
+            {sidebarItems.map((item) => (
+              <li>
+                <a
+                  href={item.href}
+                  class:list={[
+                    'block px-3 py-2 rounded-lg text-sm transition-colors',
+                    currentPath === item.href || currentPath === item.href + '/'
+                      ? 'bg-neutral-100 text-neutral-900 font-medium'
+                      : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-50',
+                  ]}
+                  aria-current={currentPath === item.href ? 'page' : undefined}
+                >
+                  {item.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </aside>
+
+      <!-- Content -->
+      <article class="flex-1 min-w-0 prose prose-neutral max-w-none">
+        <slot />
+      </article>
+    </div>
+  </div>
+
+  <Footer slot="footer" />
+</BaseLayout>
+
+<style>
+  .prose :global(h1) {
+    @apply text-h1 text-neutral-900 mb-6;
+  }
+  .prose :global(h2) {
+    @apply text-h2 text-neutral-900 mt-12 mb-4;
+  }
+  .prose :global(h3) {
+    @apply text-h3 text-neutral-900 mt-8 mb-3;
+  }
+  .prose :global(p) {
+    @apply text-body text-neutral-600 mb-4 leading-relaxed;
+  }
+  .prose :global(ul) {
+    @apply list-disc pl-6 mb-4 space-y-2 text-neutral-600;
+  }
+  .prose :global(ol) {
+    @apply list-decimal pl-6 mb-4 space-y-2 text-neutral-600;
+  }
+  .prose :global(code) {
+    @apply bg-neutral-100 px-1.5 py-0.5 rounded text-sm text-neutral-800;
+  }
+  .prose :global(pre) {
+    @apply bg-neutral-900 text-neutral-100 p-6 rounded-xl overflow-x-auto mb-6;
+  }
+  .prose :global(pre code) {
+    @apply bg-transparent p-0 text-inherit;
+  }
+  .prose :global(a) {
+    @apply text-accent-600 hover:text-accent-700 underline;
+  }
+  .prose :global(hr) {
+    @apply border-neutral-200 my-8;
+  }
+  .prose :global(blockquote) {
+    @apply border-l-4 border-neutral-200 pl-4 italic text-neutral-500;
+  }
+</style>

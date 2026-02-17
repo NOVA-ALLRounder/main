@@ -14,6 +14,7 @@ pub mod monitor;
 pub mod n8n_api;
 pub mod notifier;
 pub mod peekaboo_cli;
+#[cfg(target_os = "macos")]
 pub mod permission_manager;
 pub mod policy;
 pub mod prompts;
@@ -46,7 +47,6 @@ pub mod command_queue;
 pub mod context_pruning;
 pub mod project_scanner;
 pub mod runtime_verification;
-<<<<<<< HEAD:apps/core/src/lib.rs
 pub mod replanning_config;
 pub mod quality_scorer;
 pub mod chat_gate;
@@ -75,9 +75,7 @@ pub mod screen_recorder;
 pub mod cli_llm;
 pub mod reality_check;
 pub mod collector_bridge;
-=======
 pub mod tool_policy;
->>>>>>> origin/steer/develop:core/src/lib.rs
 
 pub mod chat_gate;
 pub mod consistency_check;
@@ -104,7 +102,10 @@ pub mod error;
 pub mod cli_llm;
 pub mod config_manager;
 pub mod content_extractor;
+#[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 pub mod reality_check;
 pub mod screen_recorder;
 pub mod telegram;

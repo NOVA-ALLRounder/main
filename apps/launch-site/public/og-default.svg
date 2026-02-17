@@ -1,0 +1,16 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F5F5F5"/>
+  <rect x="72" y="72" width="1056" height="486" rx="28" fill="white" stroke="#E5E5E5"/>
+  <rect x="132" y="132" width="68" height="68" rx="16" fill="#171717"/>
+  <text x="152" y="176" fill="white" font-size="36" font-family="Manrope, sans-serif" font-weight="700">N</text>
+  <text x="230" y="178" fill="#171717" font-size="56" font-family="Manrope, sans-serif" font-weight="800">NOVA</text>
+  <text x="132" y="258" fill="#171717" font-size="64" font-family="Manrope, sans-serif" font-weight="700">
+    <tspan x="132" dy="0">Intelligent Automation</tspan>
+    <tspan x="132" dy="78">for Modern Teams</tspan>
+  </text>
+  <text x="132" y="452" fill="#525252" font-size="28" font-family="Noto Sans KR, sans-serif" font-weight="500">
+    제품 런칭 페이지 프리뷰 · Placeholder Content
+  </text>
+  <rect x="132" y="490" width="204" height="56" rx="28" fill="#171717"/>
+  <text x="188" y="526" fill="white" font-size="24" font-family="Noto Sans KR, sans-serif" font-weight="600">시작하기</text>
+</svg>

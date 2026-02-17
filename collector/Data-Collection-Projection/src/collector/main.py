@@ -14,6 +14,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List
 
 from .bus import EventBus
+try:
+    from .keystroke_buffer import KeystrokeBuffer
+except ImportError:
+    KeystrokeBuffer = None
 from .config import load_config
 from .logging_ import setup_logging
 from .observability import Observability

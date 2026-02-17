@@ -190,22 +190,24 @@ collector\Data-Collection-Projection
    ├─ test_sessionizer.py
    ├─ test_input_hook.py
    └─ test_ui_automation.py
-```
+## ?뱿 Key Features
 
-### apps (선택 구성)
-```
-apps
-├─ core\                       # 로컬 OS 에이전트(Rust)
-│  ├─ Cargo.toml / Cargo.lock  # Rust 빌드 설정
-│  ├─ src\                     # 코어 로직
-│  └─ daily_report_workflow.json # 예시 워크플로우
-├─ desktop\                    # 데스크톱 UI(React/Tauri)
-│  ├─ src\ / src-tauri\         # 앱 코드
-│  ├─ index.html / main.js      # 엔트리
-│  └─ package.json              # 프론트 의존성
-└─ web\                         # 웹 UI(Vite/Tailwind)
-   ├─ src\ / public\            # 프론트 코드
-   └─ package.json              # 프론트 의존성
+- **Multi-Platform Support**: Cross-platform support for **macOS** and **Windows**.
+- **Unified Data Collection**: Advanced event ingestion including keystroke buffering, action normalization, and privacy masking.
+- **LLM-Powered Autonomy**: Intelligent OS automation using LLM for planning and Rust for secure execution.
+- **n8n Integration**: Automatic generation and deployment of n8n workflows based on detected behavior patterns.
+- **Zero-Trust Security**: Multi-layered security model with explicit write-locks and command classification.
+
+## ??Project Structure
+
+```text
+.
+?? apps/
+?   ?? core/           # Rust Core Engine (SSOT, OS Automation, Policy Enforcement)
+?   ?? desktop/        # Tauri-based Desktop UI
+?   ?? web/            # React-based Web Interface
+?? collector/          # Python Data Collection & Analysis Engine (Pattern Detection)
+?? main-steer-develop/ # Integrated Reference Baseline (Windows-optimized)
 ```
 
 ---

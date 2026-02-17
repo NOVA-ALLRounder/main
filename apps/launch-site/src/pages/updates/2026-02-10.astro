@@ -1,0 +1,53 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Header from '../../components/Header.astro';
+import Footer from '../../components/Footer.astro';
+import Section from '../../components/ui/Section.astro';
+import Container from '../../components/ui/Container.astro';
+import Badge from '../../components/ui/Badge.astro';
+---
+
+<BaseLayout title="AI 분류 모델 v3 출시 — NOVA Updates" description="NOVA 업데이트: AI 분류 모델 v3 출시 안내 (placeholder).">
+  <Header slot="header" />
+
+  <Section padding="large">
+    <Container narrow>
+      <article class="animate-on-scroll">
+        <a href="/updates" class="inline-flex items-center text-sm text-neutral-500 hover:text-neutral-900 mb-8">← Updates로 돌아가기</a>
+        <div class="flex items-center gap-3 mb-4">
+          <time datetime="2026-02-10" class="text-sm text-neutral-400">2026.02.10</time>
+          <Badge text="새로운 기능" variant="accent" />
+        </div>
+        <h1 class="text-h1 text-neutral-900 mb-6">AI 분류 모델 v3 출시 — 더 빠르고, 더 정확하게</h1>
+        <p class="text-body-lg text-neutral-500 mb-12">
+          Placeholder 업데이트 본문입니다. 모델 정확도, 처리 성능, 다국어 지원 개선 사항을 전달하는 형식의 샘플 페이지입니다.
+        </p>
+
+        <div class="space-y-8">
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">핵심 변경 사항</h2>
+            <ul class="list-disc pl-6 space-y-2 text-neutral-600">
+              <li>텍스트 분류 정확도 12% 향상 (placeholder)</li>
+              <li>신규 언어 5종 추가 지원 (placeholder)</li>
+              <li>커스텀 모델 학습 시간 평균 50% 단축 (placeholder)</li>
+            </ul>
+          </section>
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">영향 범위</h2>
+            <p class="text-body text-neutral-600">
+              Team 및 Enterprise 플랜 사용자에게 우선 제공되며, Individual 플랜은 점진 배포 예정입니다. 실제 일정은 추후 공지됩니다.
+            </p>
+          </section>
+          <section>
+            <h2 class="text-h3 text-neutral-900 mb-3">다음 단계</h2>
+            <p class="text-body text-neutral-600">
+              업데이트 이후 워크플로우 결과를 모니터링하고, 분류 임계값을 재조정해 성능을 최적화하세요.
+            </p>
+          </section>
+        </div>
+      </article>
+    </Container>
+  </Section>
+
+  <Footer slot="footer" />
+</BaseLayout>
