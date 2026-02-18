@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import axios from "axios";
 import {
     Zap,
     Activity,
@@ -9,6 +10,7 @@ import {
     Globe,
     Wand2,
     AppWindow,
+    MessageCircle,
     Mic,
     ArrowUp,
     Circle
@@ -28,10 +30,12 @@ import {
     fetchTaskRunStages,
     fetchTaskRunAssertions,
     fetchTaskRunArtifacts,
+    fetchLockMetrics,
 } from "@/lib/api";
 import type {
     AgentPreflightCheck,
     ExecutionProfile,
+    LockMetrics,
     TaskRunArtifact,
     TaskStageAssertion,
     TaskStageRun,
@@ -73,6 +77,7 @@ type RunPhase =
 type ExecutionSnapshot = {
     status: string;
     runId: string | null;
+    resumeToken: string | null;
     plannerComplete: boolean;
     executionComplete: boolean;
     businessComplete: boolean;
@@ -86,7 +91,7 @@ type ExecutionSnapshot = {
     } | null;
 };
 
-type ComposerMode = "nl" | "program";
+type ComposerMode = "nl" | "chat" | "program";
 
 type QuickProgramAction = {
     key: string;
@@ -215,6 +220,13 @@ const QUICK_NL_SUGGESTIONS = [
     "텔레그램으로 실행 결과 요약 보내줘",
 ];
 
+const QUICK_CHAT_SUGGESTIONS = [
+    "안녕? 오늘 우선순위 3개만 정리해줘",
+    "방금 실행 결과를 한 줄로 설명해줘",
+    "지금 가장 위험한 문제 하나만 알려줘",
+    "다음에 뭘 하면 좋을지 3단계로 말해줘",
+];
+
 const EXECUTION_PROFILE_OPTIONS: ExecutionProfileOption[] = [
     { value: "strict", label: "정확", hint: "충돌 시 중단" },
     { value: "test", label: "테스트", hint: "충돌 시 일시정지" },
@@ -264,11 +276,7 @@ export default function Launcher() {
         const raw = window.localStorage.getItem("steer.compact_layout_mode");
         return raw == null ? true : raw === "1";
     });
-    const [showAdvancedControls, setShowAdvancedControls] = useState<boolean>(() => {
-        if (typeof window === "undefined") return false;
-        const raw = window.localStorage.getItem("steer.launcher_show_advanced");
-        return raw === "1";
-    });
+    const [showAdvancedControls, setShowAdvancedControls] = useState<boolean>(false);
     const [showDetailPanel, setShowDetailPanel] = useState(false);
     const [results, setResults] = useState<LauncherResult[]>([]);
     const [loading, setLoading] = useState(false);
@@ -321,6 +329,8 @@ export default function Launcher() {
     const [preflightFixBusy, setPreflightFixBusy] = useState<string | null>(null);
     const [preflightFixMessage, setPreflightFixMessage] = useState<string | null>(null);
     const [showDiagnostics, setShowDiagnostics] = useState(false);
+    const [lockMetrics, setLockMetrics] = useState<LockMetrics | null>(null);
+    const [lockMetricsError, setLockMetricsError] = useState<string | null>(null);
     const [artifactOpenBusy, setArtifactOpenBusy] = useState<string | null>(null);
     const [artifactActionMessage, setArtifactActionMessage] = useState<string | null>(null);
     const [recoveryActionBusyKey, setRecoveryActionBusyKey] = useState<string | null>(null);
@@ -1028,8 +1038,7 @@ export default function Launcher() {
         showAdvancedControls ||
         preflightLoading ||
         preflightOk === false ||
-        !!preflightError ||
-        !!executionLockHint;
+        !!preflightError;
     const navigableItems = [
         ...results.map((r, i) => ({ type: 'result', data: r, id: `res-${i}` })),
         ...pendingRecs.map(r => ({ type: 'recommendation', data: r, id: `rec-${r.id}` }))
@@ -1058,6 +1067,23 @@ export default function Launcher() {
             setTaskRunArtifacts([]);
         }
     };
+
+    const loadLockMetrics = useCallback(async () => {
+        try {
+            const metrics = await fetchLockMetrics();
+            setLockMetrics(metrics);
+            setLockMetricsError(null);
+        } catch (error) {
+            console.error("Failed to load lock metrics", error);
+            setLockMetrics(null);
+            setLockMetricsError("lock metrics unavailable");
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!showDiagnostics) return;
+        void loadLockMetrics();
+    }, [showDiagnostics, loadLockMetrics]);
 
     const loadDodHistory = useCallback(async () => {
         setDodHistoryLoading(true);
@@ -1156,6 +1182,34 @@ export default function Launcher() {
             }
             return preflight.ok;
         } catch (error) {
+            if (axios.isAxiosError(error) && error.response?.status === 404) {
+                const nowIso = new Date().toISOString();
+                setPreflightChecks([
+                    {
+                        key: "legacy_core_preflight",
+                        label: "Preflight API",
+                        ok: true,
+                        expected: "/api/agent/preflight",
+                        actual: "legacy_core_mode",
+                        message:
+                            "Legacy core detected (preflight API unavailable). Proceeding without preflight gate.",
+                    },
+                ]);
+                setPreflightOk(true);
+                setPreflightCheckedAt(nowIso);
+                setPreflightActiveApp(null);
+                setPreflightError(null);
+                if (!silent) {
+                    setResults([
+                        {
+                            type: "response",
+                            content:
+                                "⚠️ 실행 전 점검 API가 없는 코어 버전입니다. 이번 실행은 preflight 게이트 없이 진행합니다.",
+                        },
+                    ]);
+                }
+                return true;
+            }
             const message = error instanceof Error ? error.message : String(error);
             setPreflightOk(false);
             setPreflightError(message);
@@ -1328,10 +1382,23 @@ export default function Launcher() {
     }, []);
 
     useEffect(() => {
-        if (results.length > 0 || pendingApproval || lastStatus === "manual_required") {
+        if (
+            pendingApproval ||
+            lastStatus === "manual_required" ||
+            runPhase === "failed" ||
+            failedAssertions.length > 0
+        ) {
             setShowDetailPanel(true);
+            return;
         }
-    }, [results.length, pendingApproval, lastStatus]);
+        if (
+            runPhase === "completed" &&
+            failedAssertions.length === 0 &&
+            !pendingApproval
+        ) {
+            setShowDetailPanel(false);
+        }
+    }, [pendingApproval, lastStatus, runPhase, failedAssertions.length]);
 
     useEffect(() => {
         if (lastStatus === "manual_required") {
@@ -1376,32 +1443,50 @@ export default function Launcher() {
             return;
         }
 
+        const showOperationalPanels = composerMode !== "chat";
         const isExpanded = showDetailPanel && hasDetailContent;
-        const preflightExpanded = showPreflightDetail || preflightOk === false || !!preflightError;
+        const preflightExpanded =
+            showOperationalPanels &&
+            showPreflightPanel &&
+            (showPreflightDetail ||
+                showAdvancedControls ||
+                preflightOk === false ||
+                !!preflightError ||
+                !!executionLockHint);
+        const desiredWidth = compactLayoutMode ? 1080 : 1240;
+        const maxViewportWidth =
+            typeof window !== "undefined"
+                ? Math.max(960, (window.screen?.availWidth ?? window.innerWidth) - 24)
+                : desiredWidth;
+        const targetWidth = Math.min(desiredWidth, maxViewportWidth);
         const targetHeight = isExpanded
             ? compactLayoutMode
-                ? 620
-                : 680
+                ? 640
+                : 720
             : preflightExpanded
               ? compactLayoutMode
-                  ? 232
-                  : 256
+                  ? 252
+                  : 292
               : compactLayoutMode
-                ? 170
-                : 184;
+                ? 182
+                : 214;
 
         void getCurrentWindow()
-            .setSize(new LogicalSize(1220, targetHeight))
+            .setSize(new LogicalSize(targetWidth, targetHeight))
             .catch((error) => {
                 console.error("Failed to sync launcher window size:", error);
             });
     }, [
         showDetailPanel,
         hasDetailContent,
+        showPreflightPanel,
         showPreflightDetail,
+        showAdvancedControls,
         preflightOk,
         preflightError,
+        executionLockHint,
         compactLayoutMode,
+        composerMode,
     ]);
 
     // Reset selection when items change
@@ -1443,7 +1528,7 @@ export default function Launcher() {
             setShowDetailPanel(true);
             return;
         }
-        if (safeExecutionMode && !bypassSafeCountdown) {
+        if (composerMode !== "chat" && safeExecutionMode && !bypassSafeCountdown) {
             const executeAtMs = Date.now() + 3000;
             setPendingDispatch({ prompt, executeAtMs });
             setDispatchBlockedReason("안전 카운트다운");
@@ -1462,7 +1547,7 @@ export default function Launcher() {
             setRunPhase("idle");
             return;
         }
-        if (bypassSafeCountdown && pendingDispatch) {
+        if (composerMode !== "chat" && bypassSafeCountdown && pendingDispatch) {
             setPendingDispatch(null);
         }
         if (loading) {
@@ -1514,6 +1599,32 @@ export default function Launcher() {
         lastDispatchRef.current = { promptKey, ts: now };
         setDispatchBlockedReason(null);
         setDispatchBlockedUntilMs(null);
+
+        if (composerMode === "chat") {
+            setShowDetailPanel(true);
+            setLoading(true);
+            setRunPhase("running");
+            setResults([]);
+            setPendingApproval(null);
+            setRecoveryActionBusyKey(null);
+
+            try {
+                const res = await sendChatMessage(prompt);
+                setResults([{ type: "response", content: res.response }]);
+                setInput("");
+                setRunPhase("completed");
+                triggerSuccess();
+            } catch (error) {
+                const message =
+                    error instanceof Error ? error.message : "Failed to reach chat agent.";
+                setResults([{ type: "error", content: message }]);
+                setRunPhase("failed");
+                triggerError();
+            } finally {
+                setLoading(false);
+            }
+            return;
+        }
 
         const preflightReady = await runPreflightCheck(false);
         if (!preflightReady) {
@@ -1609,6 +1720,7 @@ export default function Launcher() {
             updateExecutionState({
                 status: execRes.status,
                 runId: execRes.run_id ?? null,
+                resumeToken: execRes.resume_token ?? null,
                 plannerComplete: !!execRes.planner_complete,
                 executionComplete: !!execRes.execution_complete,
                 businessComplete: !!execRes.business_complete,
@@ -1624,6 +1736,7 @@ export default function Launcher() {
                 `**Status**: ${execRes.status}`,
                 `**Profile**: ${execRes.profile ?? effectiveProfile}${execRes.collision_policy ? ` (collision=${execRes.collision_policy})` : ""}`,
                 execRes.run_id ? `**Run ID**: ${execRes.run_id}` : "",
+                execRes.resume_token ? `**Resume Token**: ${execRes.resume_token}` : "",
                 `**Planner Complete**: ${execRes.planner_complete ? "yes" : "no"}`,
                 `**Execution Complete**: ${execRes.execution_complete ? "yes" : "no"}`,
                 `**Business Complete**: ${execRes.business_complete ? "yes" : "no"}`,
@@ -1823,12 +1936,15 @@ export default function Launcher() {
         setRunPhase("retrying");
         try {
             const resumeProfile = safeExecutionMode ? "strict" : activeExecutionProfile;
-            const execRes = await agentExecute(lastPlanId, resumeProfile);
+            const execRes = await agentExecute(lastPlanId, resumeProfile, {
+                resumeToken: runSnapshot?.resumeToken ?? null,
+            });
             setLastStatus(execRes.status);
             const verifyRes = await agentVerify(lastPlanId);
             updateExecutionState({
                 status: execRes.status,
                 runId: execRes.run_id ?? null,
+                resumeToken: execRes.resume_token ?? null,
                 plannerComplete: !!execRes.planner_complete,
                 executionComplete: !!execRes.execution_complete,
                 businessComplete: !!execRes.business_complete,
@@ -1842,6 +1958,7 @@ export default function Launcher() {
                 `**Status**: ${execRes.status}`,
                 `**Profile**: ${execRes.profile ?? resumeProfile}${execRes.collision_policy ? ` (collision=${execRes.collision_policy})` : ""}`,
                 execRes.run_id ? `**Run ID**: ${execRes.run_id}` : "",
+                execRes.resume_token ? `**Resume Token**: ${execRes.resume_token}` : "",
                 `**Planner Complete**: ${execRes.planner_complete ? "yes" : "no"}`,
                 `**Execution Complete**: ${execRes.execution_complete ? "yes" : "no"}`,
                 `**Business Complete**: ${execRes.business_complete ? "yes" : "no"}`,
@@ -1958,11 +2075,14 @@ export default function Launcher() {
                 return;
             }
             const approvalProfile = safeExecutionMode ? "strict" : activeExecutionProfile;
-            const execRes = await agentExecute(pendingApproval.planId, approvalProfile);
+            const execRes = await agentExecute(pendingApproval.planId, approvalProfile, {
+                resumeToken: runSnapshot?.resumeToken ?? null,
+            });
             const verifyRes = await agentVerify(pendingApproval.planId);
             updateExecutionState({
                 status: execRes.status,
                 runId: execRes.run_id ?? null,
+                resumeToken: execRes.resume_token ?? null,
                 plannerComplete: !!execRes.planner_complete,
                 executionComplete: !!execRes.execution_complete,
                 businessComplete: !!execRes.business_complete,
@@ -1976,6 +2096,7 @@ export default function Launcher() {
                 `**Status**: ${execRes.status}`,
                 `**Profile**: ${execRes.profile ?? approvalProfile}${execRes.collision_policy ? ` (collision=${execRes.collision_policy})` : ""}`,
                 execRes.run_id ? `**Run ID**: ${execRes.run_id}` : "",
+                execRes.resume_token ? `**Resume Token**: ${execRes.resume_token}` : "",
                 `**Planner Complete**: ${execRes.planner_complete ? "yes" : "no"}`,
                 `**Execution Complete**: ${execRes.execution_complete ? "yes" : "no"}`,
                 `**Business Complete**: ${execRes.business_complete ? "yes" : "no"}`,
@@ -2119,13 +2240,17 @@ export default function Launcher() {
         }
     };
 
+    const launcherWidthClass = compactLayoutMode
+        ? "max-w-[calc(100vw-16px)] sm:max-w-[calc(100vw-24px)] lg:max-w-[1080px] xl:max-w-[1160px]"
+        : "max-w-[calc(100vw-16px)] sm:max-w-[calc(100vw-24px)] lg:max-w-[1220px] xl:max-w-[1280px]";
+
     return (
         <div
-            className="w-full h-full bg-transparent flex items-end justify-center pb-1.5 px-2 pointer-events-none"
+            className="w-full h-full bg-[radial-gradient(120%_90%_at_50%_0%,rgba(18,44,89,0.45),rgba(9,13,22,0.96)_62%,rgba(7,10,17,0.98)_100%)] flex items-end justify-center pb-2 sm:pb-3 px-2 sm:px-3 pointer-events-none"
             onMouseDown={handleBackgroundClick}
         >
             <motion.div
-                className={`pointer-events-auto w-full ${compactLayoutMode ? "max-w-[920px]" : "max-w-[980px]"} max-h-[calc(100vh-8px)] bg-[#13161d]/96 backdrop-blur-2xl rounded-[18px] shadow-2xl overflow-hidden border transition-colors duration-500
+                className={`pointer-events-auto w-full ${launcherWidthClass} max-h-[calc(100vh-6px)] bg-[#121722]/96 backdrop-blur-2xl rounded-[18px] shadow-2xl overflow-hidden border transition-colors duration-500
                     ${successPulse ? 'border-green-500/50 shadow-green-500/20' : 'border-white/10 ring-1 ring-black/5'}
                 `}
                 initial={{ scale: 0.9, opacity: 0 }}
@@ -2151,6 +2276,16 @@ export default function Launcher() {
                                 자연어
                             </button>
                             <button
+                                onClick={() => setComposerMode("chat")}
+                                disabled={isExecutionLocked}
+                                className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${composerMode === "chat"
+                                    ? "bg-white/15 text-white"
+                                    : "text-gray-400 hover:text-gray-200"
+                                    } ${isExecutionLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+                            >
+                                대화
+                            </button>
+                            <button
                                 onClick={() => setComposerMode("program")}
                                 disabled={isExecutionLocked}
                                 className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${composerMode === "program"
@@ -2162,20 +2297,22 @@ export default function Launcher() {
                             </button>
                         </div>
 
-                        <button
-                            onClick={() => setShowAdvancedControls((prev) => !prev)}
-                            disabled={isExecutionLocked}
-                            className={`px-2.5 py-1.5 text-[11px] rounded-xl border transition-colors shrink-0 ${
-                                showAdvancedControls
-                                    ? "border-cyan-400/35 bg-cyan-500/15 text-cyan-200"
-                                    : "border-white/20 bg-white/5 text-gray-300 hover:bg-white/10"
-                            } ${isExecutionLocked ? "opacity-50 cursor-not-allowed" : ""}`}
-                            title="고급 실행 옵션/점검 패널 표시"
-                        >
-                            옵션 {showAdvancedControls ? "ON" : "OFF"}
-                        </button>
+                        {composerMode !== "chat" && (
+                            <button
+                                onClick={() => setShowAdvancedControls((prev) => !prev)}
+                                disabled={isExecutionLocked}
+                                className={`px-2.5 py-1.5 text-[11px] rounded-xl border transition-colors shrink-0 ${
+                                    showAdvancedControls
+                                        ? "border-cyan-400/35 bg-cyan-500/15 text-cyan-200"
+                                        : "border-white/20 bg-white/5 text-gray-300 hover:bg-white/10"
+                                } ${isExecutionLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+                                title="고급 실행 옵션/점검 패널 표시"
+                            >
+                                옵션 {showAdvancedControls ? "ON" : "OFF"}
+                            </button>
+                        )}
 
-                        {showAdvancedControls && (
+                        {composerMode !== "chat" && showAdvancedControls && (
                             <div className="inline-flex items-center gap-1 rounded-xl bg-white/6 p-1 shrink-0">
                                 {EXECUTION_PROFILE_OPTIONS.map((option) => (
                                     <button
@@ -2202,7 +2339,7 @@ export default function Launcher() {
                                 ))}
                             </div>
                         )}
-                        {showAdvancedControls && (
+                        {composerMode !== "chat" && showAdvancedControls && (
                             <div className="hidden lg:flex items-center gap-2 text-[11px] text-gray-300 shrink-0">
                                 <span className="px-2 py-1 rounded-full border border-white/15 bg-white/5">
                                     권장 {profileLabel(profileRecommendation.profile)}
@@ -2266,8 +2403,14 @@ export default function Launcher() {
                             <input
                                 ref={inputRef}
                                 type="text"
-                                className="w-full h-[50px] bg-white/[0.03] border border-white/15 rounded-xl px-4 text-[20px] text-white/95 placeholder-gray-500 outline-none focus:border-white/30 transition-colors"
-                                placeholder={composerMode === "nl" ? "무엇이든 부탁하세요" : "버튼 또는 명령으로 실행"}
+                                className="w-full h-11 sm:h-12 md:h-[50px] bg-white/[0.03] border border-white/15 rounded-xl px-3.5 sm:px-4 text-[16px] sm:text-[18px] md:text-[20px] text-white/95 placeholder-gray-500 outline-none focus:border-white/30 transition-colors"
+                                placeholder={
+                                    composerMode === "program"
+                                        ? "버튼 또는 명령으로 실행"
+                                        : composerMode === "chat"
+                                          ? "간단히 대화해보세요"
+                                          : "무엇이든 부탁하세요"
+                                }
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={handleKeyDown}
@@ -2279,7 +2422,7 @@ export default function Launcher() {
                         <button
                             onClick={handleSend}
                             disabled={!input.trim() || isExecutionLocked}
-                            className="w-12 h-12 rounded-full bg-white/18 hover:bg-white/30 disabled:opacity-40 text-white flex items-center justify-center transition-colors"
+                            className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white/18 hover:bg-white/30 disabled:opacity-40 text-white flex items-center justify-center transition-colors"
                         >
                             {loading ? (
                                 <Activity className="w-5 h-5 animate-spin" />
@@ -2297,13 +2440,13 @@ export default function Launcher() {
                         )}
                     </div>
 
-                    {executionLockHint && (
+                    {composerMode !== "chat" && executionLockHint && (
                         <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
                             실행 차단 사유: {executionLockHint}
                         </div>
                     )}
 
-                    {showPreflightPanel && (
+                    {composerMode !== "chat" && showPreflightPanel && (
                     <div className={`mt-2.5 rounded-xl border px-3 py-2 ${preflightOk === false || preflightError ? "border-rose-500/35 bg-rose-500/10" : "border-white/10 bg-[#1b1b1b]/80"}`}>
                         <div className="flex items-center justify-between gap-3">
                             <div className="text-xs text-gray-200">
@@ -2431,6 +2574,21 @@ export default function Launcher() {
                         </div>
                     )}
 
+                    {composerMode === "chat" && !input.trim() && (
+                        <div className="mt-2.5 rounded-xl border border-white/10 bg-[#1b1b1b]/90 p-2.5 flex flex-nowrap gap-2 overflow-x-auto">
+                            {(compactLayoutMode ? QUICK_CHAT_SUGGESTIONS.slice(0, 2) : QUICK_CHAT_SUGGESTIONS).map((suggestion) => (
+                                <button
+                                    key={suggestion}
+                                    onClick={() => handleSuggestionClick(suggestion)}
+                                    disabled={isExecutionLocked}
+                                    className="text-xs px-3.5 py-1.5 rounded-full bg-white/8 text-gray-200 hover:bg-white/15 border border-white/10 transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {suggestion}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
                     {composerMode === "program" && (
                         <div className="mt-2.5 rounded-xl border border-white/10 bg-[#1b1b1b]/90 p-2.5 flex flex-nowrap gap-2 overflow-x-auto">
                             {(compactLayoutMode ? QUICK_PROGRAM_ACTIONS.slice(0, 4) : QUICK_PROGRAM_ACTIONS).map((action) => (
@@ -2449,10 +2607,14 @@ export default function Launcher() {
                     <div className="mt-2.5 flex items-center justify-between text-gray-300">
                         <div className="flex items-center gap-1.5">
                             <button
-                                onClick={() => setComposerMode(prev => prev === "nl" ? "program" : "nl")}
+                                onClick={() =>
+                                    setComposerMode((prev) =>
+                                        prev === "nl" ? "chat" : prev === "chat" ? "program" : "nl"
+                                    )
+                                }
                                 disabled={isExecutionLocked}
                                 className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="모드 전환"
+                                title="모드 순환"
                             >
                                 <Plus className="w-4 h-4" />
                             </button>
@@ -2487,6 +2649,14 @@ export default function Launcher() {
                                 title="프로그램 버튼"
                             >
                                 <AppWindow className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={() => setComposerMode("chat")}
+                                disabled={isExecutionLocked}
+                                className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="대화 모드"
+                            >
+                                <MessageCircle className="w-4 h-4" />
                             </button>
                             <span className="text-xl font-semibold text-gray-300 ml-1">5.2</span>
                         </div>
@@ -2641,6 +2811,34 @@ export default function Launcher() {
 
                             {showDiagnostics && (
                                 <div className="px-4 py-3 border-b border-white/5 bg-[#151515]">
+                                    <div className="mb-2 rounded border border-white/10 bg-white/5 px-2 py-2">
+                                        <div className="text-[11px] uppercase tracking-wider text-cyan-200 font-semibold mb-1">
+                                            Singleton Lock Telemetry
+                                        </div>
+                                        {lockMetrics ? (
+                                            <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 text-[11px]">
+                                                <div className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-emerald-200">
+                                                    acquired={lockMetrics.acquired}
+                                                </div>
+                                                <div className="rounded border border-sky-400/25 bg-sky-500/10 px-2 py-1 text-sky-200">
+                                                    bypassed={lockMetrics.bypassed}
+                                                </div>
+                                                <div className="rounded border border-rose-400/25 bg-rose-500/10 px-2 py-1 text-rose-200">
+                                                    blocked={lockMetrics.blocked}
+                                                </div>
+                                                <div className="rounded border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-amber-100">
+                                                    stale_recovered={lockMetrics.stale_recovered}
+                                                </div>
+                                                <div className="rounded border border-fuchsia-400/25 bg-fuchsia-500/10 px-2 py-1 text-fuchsia-200">
+                                                    rejected={lockMetrics.rejected}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-xs text-gray-400">
+                                                {lockMetricsError ?? "아직 lock telemetry를 불러오지 않았습니다."}
+                                            </div>
+                                        )}
+                                    </div>
                                     <div className="text-[11px] uppercase tracking-wider text-cyan-300 font-semibold mb-2">
                                         최근 DoD 히스토리
                                     </div>

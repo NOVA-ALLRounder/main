@@ -41,6 +41,7 @@ fi
 : "${STEER_SEMANTIC_ENFORCE_RUST_ONLY:=1}"
 : "${STEER_SEMANTIC_FAIL_ON_TRUNCATION:=1}"
 : "${STEER_SEMANTIC_REQUIRE_APP_SCOPE:=1}"
+COMPACT_SUCCESS_REPORT_VALUE="${STEER_TELEGRAM_COMPACT_SUCCESS:-1}"
 
 require_terminal_context() {
     local require_terminal="${STEER_REQUIRE_TERMINAL:-1}"
@@ -205,23 +206,42 @@ preflight_checks() {
     fi
 
     if [ "${STEER_PREFLIGHT_FOCUS_HANDOFF:-1}" = "1" ]; then
-        if ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "Finder" to activate'; then
-            focus_activate_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
-            echo "❌ Preflight failed: Focus handoff activate(Finder) failed."
-            [ -n "$focus_activate_out" ] && echo "   Details: $focus_activate_out"
-            failed=1
-        elif ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true'; then
-            focus_front_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
-            echo "❌ Preflight failed: Focus handoff frontmost check failed."
-            [ -n "$focus_front_out" ] && echo "   Details: $focus_front_out"
-            failed=1
-        else
-            focus_front="$(printf '%s' "${RUN_TIMEOUT_STDOUT}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            if [ "$focus_front" != "Finder" ]; then
-                echo "❌ Preflight failed: Focus handoff check failed (expected=Finder actual=${focus_front:-unknown})."
-                echo "   Fix: 실행 중 전면 앱 충돌을 막기 위해 전용 데스크톱/사용자 세션에서 실행하세요."
-                failed=1
+        local focus_retries="${STEER_PREFLIGHT_FOCUS_RETRIES:-3}"
+        local focus_retry_sleep="${STEER_PREFLIGHT_FOCUS_RETRY_SLEEP_SEC:-0.25}"
+        local focus_attempt=1
+        local focus_ok=0
+        if ! [[ "$focus_retries" =~ ^[0-9]+$ ]] || [ "$focus_retries" -lt 1 ]; then
+            focus_retries=3
+        fi
+
+        while [ "$focus_attempt" -le "$focus_retries" ]; do
+            if ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "Finder" to activate'; then
+                focus_activate_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
+            elif ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true'; then
+                focus_front_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
+            else
+                focus_front="$(printf '%s' "${RUN_TIMEOUT_STDOUT}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                if [ "$focus_front" = "Finder" ]; then
+                    focus_ok=1
+                    break
+                fi
+                focus_front_out="expected=Finder actual=${focus_front:-unknown}"
             fi
+
+            if [ "$focus_attempt" -lt "$focus_retries" ]; then
+                sleep "$focus_retry_sleep"
+            fi
+            focus_attempt=$((focus_attempt + 1))
+        done
+
+        if [ "$focus_ok" -eq 1 ]; then
+            echo "✅ Preflight: Focus handoff works (frontmost=Finder, attempt=${focus_attempt}/${focus_retries})."
+        else
+            echo "❌ Preflight failed: Focus handoff check failed after ${focus_retries} attempts."
+            [ -n "$focus_activate_out" ] && echo "   activate details: $focus_activate_out"
+            [ -n "$focus_front_out" ] && echo "   frontmost details: $focus_front_out"
+            echo "   Fix: 실행 중 전면 앱 충돌을 막기 위해 전용 데스크톱/사용자 세션에서 실행하세요."
+            failed=1
         fi
     else
         echo "ℹ️ Preflight: Focus handoff check disabled (STEER_PREFLIGHT_FOCUS_HANDOFF=0)."
@@ -274,16 +294,15 @@ compute_notifier_timeout() {
 compress_telegram_report() {
     local message="$1"
     local max_chars="${STEER_TELEGRAM_REPORT_MAX_CHARS:-3300}"
-    local max_evidence_lines="${STEER_TELEGRAM_EVIDENCE_MAX_LINES:-18}"
+    local max_evidence_lines="${STEER_TELEGRAM_EVIDENCE_MAX_LINES:-4}"
     if ! [[ "$max_chars" =~ ^[0-9]+$ ]]; then
         max_chars=3300
     fi
     if ! [[ "$max_evidence_lines" =~ ^[0-9]+$ ]]; then
-        max_evidence_lines=18
+        max_evidence_lines=4
     fi
     local compressed="$message"
-    if [ "${#compressed}" -gt "$max_chars" ]; then
-        compressed="$(printf '%s\n' "$compressed" | awk -v max_lines="$max_evidence_lines" '
+    compressed="$(printf '%s\n' "$compressed" | awk -v max_lines="$max_evidence_lines" '
 BEGIN { in_evidence=0; evidence_lines=0 }
 {
     if ($0 ~ /^근거:/) { in_evidence=1; print; next }
@@ -295,11 +314,42 @@ END {
         print "- ...(근거 축약, 상세는 로그/캡처 파일 참조)"
     }
 }')"
-    fi
     if [ "${#compressed}" -gt "$max_chars" ]; then
         compressed="${compressed:0:max_chars}"$'\n'"- ...(메시지 길이 축약)"
     fi
     printf '%s' "$compressed"
+}
+
+collect_diagnostic_event_lines() {
+    local limit="${STEER_DIAGNOSTIC_EVENT_TAIL:-8}"
+    local diag_path="${STEER_DIAGNOSTIC_EVENTS_PATH:-scenario_results/diagnostic_events.jsonl}"
+
+    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+        limit=8
+    fi
+    if [ "$limit" -le 0 ]; then
+        return 0
+    fi
+    if [ ! -f "$diag_path" ]; then
+        return 0
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        tail -n 240 "$diag_path" 2>/dev/null \
+            | jq -r '
+                select(
+                    .type == "run.attempt"
+                    or .type == "telegram.send.retry"
+                    or .type == "telegram.send.error"
+                    or .type == "n8n.http.retry"
+                    or .type == "scheduler.start.skipped"
+                )
+                | "- diag[" + (.type | tostring) + "] " + ((.payload | tostring) // "{}")
+            ' 2>/dev/null \
+            | tail -n "$limit"
+    else
+        tail -n "$limit" "$diag_path" 2>/dev/null | sed -E 's/^/- diag.raw /'
+    fi
 }
 
 log_run_attempt() {
@@ -559,6 +609,40 @@ extract_expected_recipients_from_request() {
             print lc($e), "\n";
         }
     ' | awk '!seen[$0]++'
+}
+
+request_requires_mail_send() {
+    local source_text="${REQUEST_TEXT_FOR_VERIFY:-$REQUEST_TEXT}"
+    local lower_text
+    lower_text="$(printf '%s' "$source_text" | tr '[:upper:]' '[:lower:]')"
+
+    local has_mail_context=0
+    local has_send_intent=0
+    local has_non_mail_send_context=0
+
+    if printf '%s' "$lower_text" | grep -Eiq 'mail|gmail|email|이메일|메일|전자메일'; then
+        has_mail_context=1
+    fi
+    if printf '%s' "$lower_text" | grep -Eiq '보내|발송|send'; then
+        has_send_intent=1
+    fi
+    if printf '%s' "$lower_text" | grep -Eiq 'telegram|텔레그램|slack|디스코드|discord|notion|노션'; then
+        has_non_mail_send_context=1
+    fi
+
+    local recipients=""
+    recipients="$(extract_expected_recipients_from_request || true)"
+    if [ -n "$recipients" ]; then
+        return 0
+    fi
+
+    if [ "$has_mail_context" = "1" ] && [ "$has_send_intent" = "1" ]; then
+        return 0
+    fi
+    if [ "$has_send_intent" = "1" ] && [ "$has_non_mail_send_context" = "0" ] && [ "$has_mail_context" = "1" ]; then
+        return 0
+    fi
+    return 1
 }
 
 extract_latest_notes_target_from_log() {
@@ -1529,6 +1613,17 @@ OPENAI_PREFLIGHT_REQUIRED_VALUE="${STEER_PREFLIGHT_REQUIRE_OPENAI_KEY:-0}"
 REQUIRE_SEMANTIC_NONEMPTY_VALUE="${STEER_SEMANTIC_REQUIRE_NONEMPTY:-1}"
 RUN_STARTED_EPOCH=0
 
+is_truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 detect_cli_llm_provider() {
     local preferred="${STEER_CLI_LLM_AUTO_ORDER:-codex,gemini,claude}"
     local oldifs="$IFS"
@@ -1586,6 +1681,15 @@ if [ "$REQUIRE_PRIMARY_PLANNER_VALUE" = "1" ] && [ "$SCENARIO_MODE_VALUE" = "1" 
     echo "❌ 정책 위반: STEER_SCENARIO_MODE=1 이지만 STEER_ALLOW_SCENARIO_MODE=1 승인 없이 fallback 모드 실행은 금지됩니다."
     echo "   운영 검증은 STEER_SCENARIO_MODE=0으로 실행하거나, 테스트 목적일 때만 STEER_ALLOW_SCENARIO_MODE=1을 설정하세요."
     exit 1
+fi
+
+if is_truthy "$LOCK_DISABLED_VALUE"; then
+    if ! is_truthy "$TEST_MODE_VALUE" && ! is_truthy "${CI:-0}" && ! is_truthy "${STEER_ALLOW_LOCK_DISABLED_NON_TEST:-0}"; then
+        echo "❌ 안전정책 위반: STEER_LOCK_DISABLED=1 은 테스트/CI 전용입니다."
+        echo "   운영 실행에서는 STEER_LOCK_DISABLED=0으로 설정하세요."
+        echo "   예외 허용이 꼭 필요하면 STEER_ALLOW_LOCK_DISABLED_NON_TEST=1을 명시적으로 설정하세요."
+        exit 1
+    fi
 fi
 
 if [ "$OPENAI_PREFLIGHT_REQUIRED_VALUE" = "1" ] && [ "$SCENARIO_MODE_VALUE" = "0" ] && [ -z "$CLI_LLM_VALUE" ] && ! has_openai_key_configured; then
@@ -1743,13 +1847,23 @@ run_surf_with_input_guard() {
     local poll_interval="${STEER_INPUT_POLL_SECONDS:-1}"
     local max_pauses="${STEER_INPUT_GUARD_MAX_PAUSES:-40}"
     local max_pause_seconds="${STEER_INPUT_GUARD_MAX_PAUSE_SECONDS:-300}"
+    local live_new_item_limit="${STEER_INPUT_GUARD_MAX_NEW_ITEMS:-${STEER_MAX_NEW_ITEM_ACTIONS:-6}}"
+    local live_new_item_pattern="Shortcut 'n'.*Created new item|mail_draft_ready|shortcut cmd\\+n"
     local paused=0
     local pause_count=0
     local pause_started_epoch=0
     local total_paused_seconds=0
     local run_pid
 
+    if ! [[ "$live_new_item_limit" =~ ^[0-9]+$ ]]; then
+        live_new_item_limit=6
+    fi
+    if [ "$live_new_item_limit" -lt 1 ]; then
+        live_new_item_limit=1
+    fi
+
     echo "🛡️ User-input guard enabled (mode=${STEER_USER_INPUT_GUARD_MODE:-all}, apps=${STEER_USER_ACTIVE_APPS:-Terminal,Codex,iTerm2}, active<=${active_threshold}s, resume>=${resume_idle}s, max_pauses=${max_pauses}, max_pause_seconds=${max_pause_seconds})"
+    echo "🛡️ Window flood guard enabled (new_item_limit=${live_new_item_limit})"
 
     if [ -n "$CLI_LLM_VALUE" ]; then
         STEER_SCENARIO_MODE="$SCENARIO_MODE_VALUE" \
@@ -1776,6 +1890,22 @@ run_surf_with_input_guard() {
     run_pid=$!
 
     while kill -0 "$run_pid" 2>/dev/null; do
+        if [ -f "$LOG_FILE" ]; then
+            local new_item_live_count=0
+            new_item_live_count="$(grep -Eic "$live_new_item_pattern" "$LOG_FILE" 2>/dev/null || true)"
+            if [ "${new_item_live_count:-0}" -gt "$live_new_item_limit" ]; then
+                INPUT_GUARD_ABORTED=1
+                INPUT_GUARD_ABORT_REASON="new_item_flood(${new_item_live_count}>${live_new_item_limit})"
+                echo "⛔️ [InputGuard] Abort run: ${INPUT_GUARD_ABORT_REASON}"
+                echo "⛔️ [InputGuard] Abort run: ${INPUT_GUARD_ABORT_REASON}" >> "$LOG_FILE"
+                kill -TERM "$run_pid" >/dev/null 2>&1 || true
+                pkill -TERM -P "$run_pid" >/dev/null 2>&1 || true
+                sleep 1
+                kill -KILL "$run_pid" >/dev/null 2>&1 || true
+                pkill -KILL -P "$run_pid" >/dev/null 2>&1 || true
+                break
+            fi
+        fi
         local idle_sec=""
         idle_sec="$(get_idle_seconds || true)"
         if [ -n "$idle_sec" ]; then
@@ -1958,10 +2088,10 @@ if [ "${STEER_SEMANTIC_VERIFY:-1}" = "1" ]; then
         fi
         FILTERED_TOKENS+=("$token")
     done
-    default_token_cap=256
+    default_token_cap=384
     request_len=${#REQUEST_TEXT_FOR_VERIFY}
     if [ "$request_len" -gt 2400 ]; then
-        default_token_cap=384
+        default_token_cap=640
     fi
     token_cap="${STEER_SEMANTIC_MAX_TOKENS:-$default_token_cap}"
     if ! [[ "$token_cap" =~ ^[0-9]+$ ]]; then
@@ -2050,7 +2180,7 @@ else
     SEMANTIC_LINES="${SEMANTIC_LINES}- 의미검증 비활성(STEER_SEMANTIC_VERIFY=0)"$'\n'
 fi
 
-if printf '%s' "$REQUEST_TEXT_FOR_VERIFY" | grep -Eiq '보내|발송|send'; then
+if request_requires_mail_send; then
     mail_dod_required=1
     mail_send_logged=0
     mail_log_status="${MAIL_PROOF_STATUS:-}"
@@ -2320,12 +2450,13 @@ if [ "$textedit_required" = "1" ] && [ "$REQUIRE_TEXTEDIT_WRITE_VALUE" = "1" ]; 
     fi
 fi
 
-KEY_LOGS=$(grep -En "Goal completed by planner|Surf failed|Supervisor escalated|Preflight failed|Execution Error|SCHEMA_ERROR|PLAN_REJECTED|LLM Refused|fallback action|FALLBACK_ACTION:|Node evidence|MAIL_SEND_PROOF\\||EVIDENCE\\|" "$LOG_FILE" 2>/dev/null | tail -n 10 | sed -E 's/^[0-9]+://')
+KEY_LOGS=$(grep -En "Goal completed by planner|Surf failed|Supervisor escalated|Preflight failed|Execution Error|SCHEMA_ERROR|PLAN_REJECTED|LLM Refused|fallback action|FALLBACK_ACTION:|MAIL_SEND_PROOF\\||EVIDENCE\\|target=mail\\|event=send\\|" "$LOG_FILE" 2>/dev/null | tail -n 6 | sed -E 's/^[0-9]+://')
 if [ -z "$KEY_LOGS" ]; then
     KEY_LOGS=$(tail -n 4 "$LOG_FILE" 2>/dev/null | sed -E 's/^[[:space:]]+//')
 fi
 LOOP_BLOCKED_COUNT=$(grep -Ec 'LOOP_BLOCKED: high_risk_repeated_plan' "$LOG_FILE" 2>/dev/null || true)
 CMD_N_GUARD_COUNT=$(grep -Ec 'cmd_n_loop_guard_block' "$LOG_FILE" 2>/dev/null || true)
+CMD_N_WINDOW_FLOOD_GUARD_COUNT=$(grep -Ec 'cmd_n_window_flood_block' "$LOG_FILE" 2>/dev/null || true)
 
 EVIDENCE_LINES=""
 while IFS= read -r line; do
@@ -2368,6 +2499,10 @@ if [ -n "$ARTIFACT_TOP3_LINES" ]; then
 else
     EVIDENCE_LINES="${EVIDENCE_LINES}- artifact evidence top3: (no artifact summary found)"$'\n'
 fi
+DIAG_LINES="$(collect_diagnostic_event_lines || true)"
+if [ -n "$DIAG_LINES" ]; then
+    EVIDENCE_LINES="${EVIDENCE_LINES}- diagnostics tail (${STEER_DIAGNOSTIC_EVENTS_PATH:-scenario_results/diagnostic_events.jsonl})"$'\n'"${DIAG_LINES}"$'\n'
+fi
 if [ "$notes_required" = "1" ]; then
     EVIDENCE_LINES="${EVIDENCE_LINES}- notes_target_app_seen=${notes_target_app_seen} (${notes_target_location})"$'\n'
 fi
@@ -2389,6 +2524,10 @@ fi
 if [ "$CMD_N_GUARD_COUNT" -gt 0 ]; then
     STATUS="failed"
     EVIDENCE_LINES="${EVIDENCE_LINES}- cmd+n 루프 가드 발동 횟수=${CMD_N_GUARD_COUNT} (동일 앱 새 창 과다 시도 차단)"$'\n'
+fi
+if [ "$CMD_N_WINDOW_FLOOD_GUARD_COUNT" -gt 0 ]; then
+    STATUS="failed"
+    EVIDENCE_LINES="${EVIDENCE_LINES}- cmd+n 창 폭증 가드 발동 횟수=${CMD_N_WINDOW_FLOOD_GUARD_COUNT} (최근 new item 누적 과다 차단)"$'\n'
 fi
 if [ "${INPUT_GUARD_ABORTED:-0}" = "1" ]; then
     EVIDENCE_LINES="${EVIDENCE_LINES}- 입력 가드 중단: ${INPUT_GUARD_ABORT_REASON:-unknown}"$'\n'
@@ -2604,17 +2743,51 @@ if [ "$STATUS" != "success" ]; then
     elif [ "${WINDOW_FLOOD_HIT:-0}" -eq 1 ]; then
         FAIL_PRIMARY_REASON="new_item_window_flood"
         RETRY_GUIDE="Mail 초안창 정리 후, 중복 Cmd+N 없이 재실행하세요."
+    elif [ "${CMD_N_WINDOW_FLOOD_GUARD_COUNT:-0}" -gt 0 ]; then
+        FAIL_PRIMARY_REASON="cmd_n_window_flood_guard"
+        RETRY_GUIDE="최근 생성된 새 창을 정리한 뒤 재실행하세요."
     else
         FAIL_PRIMARY_REASON="evidence_or_runtime_failure"
         RETRY_GUIDE="실패 근거 라인을 기준으로 해당 단계만 보강 후 재실행하세요."
     fi
 fi
 
+BRIEF_MAIL_RESULT_LINE="- 메일 발송 증거: 확인 필요"
+if [ "${MAIL_PROOF_STATUS:-}" = "sent_confirmed" ]; then
+    BRIEF_MAIL_RESULT_LINE="- 메일 정상 발송 완료 (${MAIL_PROOF_RECIPIENT:-unknown})"
+fi
+BRIEF_FINAL_LINE="- 문제가 있어 재실행 필요 -> 실패"
+if [ "$STATUS" = "success" ]; then
+    BRIEF_FINAL_LINE="- 문제 없음 -> 성공"
+fi
+
+if [ "$STATUS" = "success" ] && [ "$COMPACT_SUCCESS_REPORT_VALUE" = "1" ]; then
 TELEGRAM_MESSAGE=$(cat <<EOF
-작업: ${TASK_NAME}
-요청: ${REQUEST_PREVIEW}
-수행: 자연어 요청 실행 및 결과 캡처/검증
-결과: ${RESULT_TEXT}
+📌 ${TASK_NAME} - 성공 요약
+
+🔄 워크플로우
+- 자연어 요청 플랜 실행 -> 앱 액션 수행 -> 검증 -> 텔레그램 보고
+
+✅ 결과
+- ${RESULT_TEXT}
+${BRIEF_MAIL_RESULT_LINE}
+- 문제 없음 -> 성공
+EOF
+)
+else
+TELEGRAM_MESSAGE=$(cat <<EOF
+📌 ${TASK_NAME} - 쉽게 말한 요약
+
+🔄 뭘 했는지
+- 사용자 명령을 실행 플랜으로 만들고
+- 단계별 실행/캡처 증거를 수집했고
+- 결과를 검증 규칙으로 최종 판정했어요.
+
+✅ 결과
+- ${RESULT_TEXT}
+${BRIEF_MAIL_RESULT_LINE}
+${BRIEF_FINAL_LINE}
+
 상태: ${STATUS_LABEL}
 판정:
 - ${JUDGEMENT_SUMMARY}
@@ -2625,6 +2798,7 @@ TELEGRAM_MESSAGE=$(cat <<EOF
 ${EVIDENCE_LINES}- 로그: $(basename "$LOG_FILE")
 EOF
 )
+fi
 TELEGRAM_MESSAGE="$(compress_telegram_report "$TELEGRAM_MESSAGE")"
 
 printf '%s\n' "$TELEGRAM_MESSAGE" > "$RAW_MSG_FILE"

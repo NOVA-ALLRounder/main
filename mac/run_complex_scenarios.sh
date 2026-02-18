@@ -11,6 +11,10 @@ if [ -f core/.env ]; then
     set +a
 fi
 
+# Semantic contract policy defaults: keep complex scenarios aligned with NL request runner.
+: "${STEER_SEMANTIC_FAIL_ON_TRUNCATION:=1}"
+: "${STEER_SEMANTIC_REQUIRE_APP_SCOPE:=1}"
+
 echo "🚀 Starting Complex Scenarios 1-5 Execution..."
 echo "⚠️  PLEASE DO NOT TOUCH THE MOUSE/KEYBOARD DURING EXECUTION"
 echo ""
@@ -29,6 +33,18 @@ REQUIRE_PRIMARY_PLANNER_VALUE="${STEER_REQUIRE_PRIMARY_PLANNER:-1}"
 LOCK_DISABLED_VALUE="${STEER_LOCK_DISABLED:-0}"
 APPROVAL_ASK_FALLBACK_VALUE="${STEER_APPROVAL_ASK_FALLBACK:-deny}"
 TEST_MODE_VALUE="${STEER_TEST_MODE:-0}"
+COMPACT_SUCCESS_REPORT_VALUE="${STEER_TELEGRAM_COMPACT_SUCCESS:-1}"
+
+is_truthy() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 REQUIRE_TELEGRAM_REPORT_VALUE="${STEER_REQUIRE_TELEGRAM_REPORT:-1}"
 DETERMINISTIC_GOAL_AUTOPLAN_VALUE="${STEER_DETERMINISTIC_GOAL_AUTOPLAN:-}"
 SCENARIO_IDS_RAW="${STEER_SCENARIO_IDS:-1,2,3,4,5}"
@@ -96,6 +112,18 @@ should_run_scenario() {
     [[ " ${SELECTED_SCENARIO_IDS} " == *" ${id} "* ]]
 }
 
+complex_scenario_workflow_label() {
+    local scenario_num="$1"
+    case "$scenario_num" in
+        1) printf '%s\n' "Calendar -> Notes -> TextEdit -> Mail" ;;
+        2) printf '%s\n' "Finder(Downloads) -> Notes -> TextEdit -> Mail" ;;
+        3) printf '%s\n' "Calculator -> Notes -> TextEdit -> Mail" ;;
+        4) printf '%s\n' "Calendar -> Notes -> TextEdit -> Mail" ;;
+        5) printf '%s\n' "Finder(Desktop) -> Calculator -> Notes -> TextEdit -> Mail" ;;
+        *) printf '%s\n' "App chain workflow" ;;
+    esac
+}
+
 SELECTED_SCENARIO_IDS="$(normalize_scenario_ids "$SCENARIO_IDS_RAW")"
 if [ -z "$SELECTED_SCENARIO_IDS" ]; then
     echo "❌ 유효한 STEER_SCENARIO_IDS 값이 없습니다: '${SCENARIO_IDS_RAW}'"
@@ -155,6 +183,15 @@ if [ "$REQUIRE_PRIMARY_PLANNER_VALUE" = "1" ] && [ "$SCENARIO_MODE_VALUE" = "1" 
     echo "❌ 정책 위반: STEER_SCENARIO_MODE=1 이지만 STEER_ALLOW_SCENARIO_MODE=1 승인 없이 fallback 모드 실행은 금지됩니다."
     echo "   운영 검증은 STEER_SCENARIO_MODE=0으로 실행하거나, 테스트 목적일 때만 STEER_ALLOW_SCENARIO_MODE=1을 설정하세요."
     exit 1
+fi
+
+if is_truthy "$LOCK_DISABLED_VALUE"; then
+    if ! is_truthy "$TEST_MODE_VALUE" && ! is_truthy "${CI:-0}" && ! is_truthy "${STEER_ALLOW_LOCK_DISABLED_NON_TEST:-0}"; then
+        echo "❌ 안전정책 위반: STEER_LOCK_DISABLED=1 은 테스트/CI 전용입니다."
+        echo "   운영 실행에서는 STEER_LOCK_DISABLED=0으로 설정하세요."
+        echo "   예외 허용이 꼭 필요하면 STEER_ALLOW_LOCK_DISABLED_NON_TEST=1을 명시적으로 설정하세요."
+        exit 1
+    fi
 fi
 
 echo "🔧 STEER_SCENARIO_MODE=${SCENARIO_MODE_VALUE} (0=LLM planning, 1=fallback scenario mode)"
@@ -267,7 +304,29 @@ run_cmd_with_timeout_capture() {
 
 semantic_location_missing() {
     case "$1" in
-        NOT_FOUND|CHECK_ERROR|CHECK_TIMEOUT|MARKER_REQUIRED|"")
+        NOT_FOUND|CHECK_ERROR|CHECK_TIMEOUT|MARKER_REQUIRED|LOG_ONLY_BLOCKED*|"")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+semantic_location_is_log() {
+    case "${1:-}" in
+        LOG_*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+semantic_log_location_allowed_as_app_scope() {
+    case "${1:-}" in
+        LOG_MAIL_SUBJECT|LOG_MAIL_RECIPIENT|LOG_MAIL_BODY|LOG_NOTE_BODY|LOG_TEXTEDIT_BODY|LOG_MAIL_SEND|LOG_MAIL_WRITE_SUBJECT|LOG_MAIL_WRITE_RECIPIENT|LOG_MAIL_WRITE_BODY_LEN|LOG_MAIL_FLOW_DRAFT)
             return 0
             ;;
         *)
@@ -278,6 +337,73 @@ semantic_location_missing() {
 
 normalize_semantic_token() {
     printf '%s' "$1" | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+extract_expected_recipients_from_request() {
+    local source_text="${1:-}"
+    [ -z "$source_text" ] && return 0
+
+    local rust_recipients=""
+    if rust_recipients="$(extract_semantic_contract_with_rust "recipients" "$source_text")"; then
+        if [ -n "$rust_recipients" ]; then
+            printf '%s\n' "$rust_recipients" | awk 'NF > 0 && !seen[$0]++'
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "$source_text" | perl -ne '
+        while (/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g) {
+            my $e = $&;
+            $e =~ s/^[<\(\["'\'']+//;
+            $e =~ s/[>\)\]"'\'',;:.]+$//;
+            print lc($e), "\n";
+        }
+    ' | awk '!seen[$0]++'
+}
+
+request_requires_mail_send() {
+    local source_text="${1:-}"
+    [ -z "$source_text" ] && return 1
+    local lower_text
+    lower_text="$(printf '%s' "$source_text" | tr '[:upper:]' '[:lower:]')"
+
+    local has_mail_context=0
+    local has_send_intent=0
+    local has_non_mail_send_context=0
+
+    if printf '%s' "$lower_text" | grep -Eiq 'mail|gmail|email|이메일|메일|전자메일'; then
+        has_mail_context=1
+    fi
+    if printf '%s' "$lower_text" | grep -Eiq '보내|발송|send'; then
+        has_send_intent=1
+    fi
+    if printf '%s' "$lower_text" | grep -Eiq 'telegram|텔레그램|slack|디스코드|discord|notion|노션'; then
+        has_non_mail_send_context=1
+    fi
+
+    local recipients=""
+    recipients="$(extract_expected_recipients_from_request "$source_text" || true)"
+    if [ -n "$recipients" ]; then
+        return 0
+    fi
+
+    if [ "$has_mail_context" = "1" ] && [ "$has_send_intent" = "1" ]; then
+        return 0
+    fi
+    if [ "$has_send_intent" = "1" ] && [ "$has_non_mail_send_context" = "0" ] && [ "$has_mail_context" = "1" ]; then
+        return 0
+    fi
+    return 1
+}
+
+selected_scenarios_require_mail() {
+    local sid=""
+    for sid in ${SELECTED_SCENARIO_IDS}; do
+        if complex_scenario_required_artifacts "$sid" | grep -Fxq "mail_send"; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 SEMANTIC_CONTRACT_RUST_BIN=""
@@ -431,25 +557,42 @@ preflight_checks() {
         local focus_activate_out=""
         local focus_front_out=""
         local focus_front=""
-        if ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "Finder" to activate'; then
-            focus_activate_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
-            echo "❌ Preflight failed: Focus handoff activate(Finder) failed."
-            [ -n "$focus_activate_out" ] && echo "   Details: $focus_activate_out"
-            failed=1
-        elif ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true'; then
-            focus_front_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
-            echo "❌ Preflight failed: Focus handoff frontmost check failed."
-            [ -n "$focus_front_out" ] && echo "   Details: $focus_front_out"
-            failed=1
-        else
-            focus_front="$(printf '%s' "${RUN_TIMEOUT_STDOUT}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            if [ "$focus_front" != "Finder" ]; then
-                echo "❌ Preflight failed: Focus handoff check failed (expected=Finder actual=${focus_front:-unknown})."
-                echo "   Fix: 실행 중 전면 앱 충돌을 막기 위해 전용 데스크톱/사용자 세션에서 실행하세요."
-                failed=1
+        local focus_retries="${STEER_PREFLIGHT_FOCUS_RETRIES:-3}"
+        local focus_retry_sleep="${STEER_PREFLIGHT_FOCUS_RETRY_SLEEP_SEC:-0.25}"
+        local focus_attempt=1
+        local focus_ok=0
+        if ! [[ "$focus_retries" =~ ^[0-9]+$ ]] || [ "$focus_retries" -lt 1 ]; then
+            focus_retries=3
+        fi
+
+        while [ "$focus_attempt" -le "$focus_retries" ]; do
+            if ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "Finder" to activate'; then
+                focus_activate_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
+            elif ! run_cmd_with_timeout_capture "$preflight_timeout" osascript -e 'tell application "System Events" to return name of first application process whose frontmost is true'; then
+                focus_front_out="${RUN_TIMEOUT_STDERR:-$RUN_TIMEOUT_STDOUT}"
             else
-                echo "✅ Preflight: Focus handoff works (frontmost=Finder)."
+                focus_front="$(printf '%s' "${RUN_TIMEOUT_STDOUT}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                if [ "$focus_front" = "Finder" ]; then
+                    focus_ok=1
+                    break
+                fi
+                focus_front_out="expected=Finder actual=${focus_front:-unknown}"
             fi
+
+            if [ "$focus_attempt" -lt "$focus_retries" ]; then
+                sleep "$focus_retry_sleep"
+            fi
+            focus_attempt=$((focus_attempt + 1))
+        done
+
+        if [ "$focus_ok" -eq 1 ]; then
+            echo "✅ Preflight: Focus handoff works (frontmost=Finder, attempt=${focus_attempt}/${focus_retries})."
+        else
+            echo "❌ Preflight failed: Focus handoff check failed after ${focus_retries} attempts."
+            [ -n "$focus_activate_out" ] && echo "   activate details: $focus_activate_out"
+            [ -n "$focus_front_out" ] && echo "   frontmost details: $focus_front_out"
+            echo "   Fix: 실행 중 전면 앱 충돌을 막기 위해 전용 데스크톱/사용자 세션에서 실행하세요."
+            failed=1
         fi
     else
         echo "ℹ️ Preflight: Focus handoff check disabled (STEER_PREFLIGHT_FOCUS_HANDOFF=0)."
@@ -469,7 +612,11 @@ preflight_checks() {
         echo "ℹ️ Preflight: OPENAI_API_KEY not required in current mode (CLI/scenario path)."
     fi
 
-    if [ "${STEER_REQUIRE_MAIL_SEND:-1}" = "1" ] && [ -z "$MAIL_TO_TARGET" ]; then
+    local require_mail_send_preflight=0
+    if [ "${STEER_REQUIRE_MAIL_SEND:-0}" = "1" ] || selected_scenarios_require_mail; then
+        require_mail_send_preflight=1
+    fi
+    if [ "$require_mail_send_preflight" -eq 1 ] && [ -z "$MAIL_TO_TARGET" ]; then
         echo "❌ Preflight failed: mail send target is empty."
         echo "   Fix: STEER_DEFAULT_MAIL_TO 또는 git user.email 을 설정하세요."
         failed=1
@@ -538,16 +685,15 @@ compute_notifier_timeout() {
 compress_telegram_report() {
     local message="$1"
     local max_chars="${STEER_TELEGRAM_REPORT_MAX_CHARS:-3300}"
-    local max_evidence_lines="${STEER_TELEGRAM_EVIDENCE_MAX_LINES:-18}"
+    local max_evidence_lines="${STEER_TELEGRAM_EVIDENCE_MAX_LINES:-4}"
     if ! [[ "$max_chars" =~ ^[0-9]+$ ]]; then
         max_chars=3300
     fi
     if ! [[ "$max_evidence_lines" =~ ^[0-9]+$ ]]; then
-        max_evidence_lines=18
+        max_evidence_lines=4
     fi
     local compressed="$message"
-    if [ "${#compressed}" -gt "$max_chars" ]; then
-        compressed="$(printf '%s\n' "$compressed" | awk -v max_lines="$max_evidence_lines" '
+    compressed="$(printf '%s\n' "$compressed" | awk -v max_lines="$max_evidence_lines" '
 BEGIN { in_evidence=0; evidence_lines=0 }
 {
     if ($0 ~ /^근거:/) { in_evidence=1; print; next }
@@ -559,11 +705,42 @@ END {
         print "- ...(근거 축약, 상세는 로그/캡처 파일 참조)"
     }
 }')"
-    fi
     if [ "${#compressed}" -gt "$max_chars" ]; then
         compressed="${compressed:0:max_chars}"$'\n'"- ...(메시지 길이 축약)"
     fi
     printf '%s' "$compressed"
+}
+
+collect_diagnostic_event_lines() {
+    local limit="${STEER_DIAGNOSTIC_EVENT_TAIL:-8}"
+    local diag_path="${STEER_DIAGNOSTIC_EVENTS_PATH:-scenario_results/diagnostic_events.jsonl}"
+
+    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+        limit=8
+    fi
+    if [ "$limit" -le 0 ]; then
+        return 0
+    fi
+    if [ ! -f "$diag_path" ]; then
+        return 0
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        tail -n 240 "$diag_path" 2>/dev/null \
+            | jq -r '
+                select(
+                    .type == "run.attempt"
+                    or .type == "telegram.send.retry"
+                    or .type == "telegram.send.error"
+                    or .type == "n8n.http.retry"
+                    or .type == "scheduler.start.skipped"
+                )
+                | "- diag[" + (.type | tostring) + "] " + ((.payload | tostring) // "{}")
+            ' 2>/dev/null \
+            | tail -n "$limit"
+    else
+        tail -n "$limit" "$diag_path" 2>/dev/null | sed -E 's/^/- diag.raw /'
+    fi
 }
 
 log_run_attempt() {
@@ -709,13 +886,23 @@ run_surf_with_input_guard() {
     local poll_interval="${STEER_INPUT_POLL_SECONDS:-1}"
     local max_pauses="${STEER_INPUT_GUARD_MAX_PAUSES:-40}"
     local max_pause_seconds="${STEER_INPUT_GUARD_MAX_PAUSE_SECONDS:-300}"
+    local live_new_item_limit="${STEER_INPUT_GUARD_MAX_NEW_ITEMS:-${STEER_MAX_NEW_ITEM_ACTIONS:-6}}"
+    local live_new_item_pattern="Shortcut 'n'.*Created new item|mail_draft_ready|shortcut cmd\\+n"
     local paused=0
     local pause_count=0
     local pause_started_epoch=0
     local total_paused_seconds=0
     local run_pid=""
 
+    if ! [[ "$live_new_item_limit" =~ ^[0-9]+$ ]]; then
+        live_new_item_limit=6
+    fi
+    if [ "$live_new_item_limit" -lt 1 ]; then
+        live_new_item_limit=1
+    fi
+
     echo "🛡️ User-input guard enabled (mode=${STEER_USER_INPUT_GUARD_MODE:-all}, apps=${STEER_USER_ACTIVE_APPS:-Terminal,Codex,iTerm2}, active<=${active_threshold}s, resume>=${resume_idle}s, max_pauses=${max_pauses}, max_pause_seconds=${max_pause_seconds})"
+    echo "🛡️ Window flood guard enabled (new_item_limit=${live_new_item_limit})"
 
     if [ -n "$CLI_LLM_VALUE" ]; then
         STEER_SCENARIO_MODE="$SCENARIO_MODE_VALUE" \
@@ -742,6 +929,22 @@ run_surf_with_input_guard() {
     run_pid=$!
 
     while kill -0 "$run_pid" 2>/dev/null; do
+        if [ -f "$log_file" ]; then
+            local new_item_live_count=0
+            new_item_live_count="$(grep -Eic "$live_new_item_pattern" "$log_file" 2>/dev/null || true)"
+            if [ "${new_item_live_count:-0}" -gt "$live_new_item_limit" ]; then
+                CURRENT_INPUT_GUARD_ABORTED=1
+                CURRENT_INPUT_GUARD_ABORT_REASON="new_item_flood(${new_item_live_count}>${live_new_item_limit})"
+                echo "⛔️ [InputGuard] Abort run: ${CURRENT_INPUT_GUARD_ABORT_REASON}"
+                echo "⛔️ [InputGuard] Abort run: ${CURRENT_INPUT_GUARD_ABORT_REASON}" >> "$log_file"
+                kill -TERM "$run_pid" >/dev/null 2>&1 || true
+                pkill -TERM -P "$run_pid" >/dev/null 2>&1 || true
+                sleep 1
+                kill -KILL "$run_pid" >/dev/null 2>&1 || true
+                pkill -KILL -P "$run_pid" >/dev/null 2>&1 || true
+                break
+            fi
+        fi
         local idle_sec=""
         idle_sec="$(get_idle_seconds || true)"
         if [ -n "$idle_sec" ]; then
@@ -990,7 +1193,7 @@ token_presence_location() {
     local log_location=""
     local scoped_doc_location=""
     local skip_global_doc_scan="${STEER_SEMANTIC_DISABLE_GLOBAL_DOC_SCAN:-1}"
-    local skip_sent_mail_scan="${STEER_SEMANTIC_DISABLE_SENT_MAIL_SCAN:-1}"
+    local skip_sent_mail_scan="${STEER_SEMANTIC_DISABLE_SENT_MAIL_SCAN:-0}"
     local allow_log_evidence="${STEER_SEMANTIC_ALLOW_LOG_EVIDENCE:-0}"
 
     if [ "$require_marker" = "1" ] && [ -z "$marker" ]; then
@@ -1651,6 +1854,7 @@ capture_and_notify() {
     local fallback_screenshot="scenario_results/complex_scenario_${scenario_num}_${TIMESTAMP}.png"
     local telegram_main_image=""
     CURRENT_LOG_FILE="$log_file"
+    local terminal_status=""
 
     local semantic_lines=""
     local semantic_missing=0
@@ -1733,6 +1937,39 @@ capture_and_notify() {
         [ -z "$token" ] && continue
         expected_tokens+=("$token")
     done < <(printf '%s\n' "${merged_tokens[@]}" | awk 'NF > 0 && !seen[$0]++')
+    local token_truncated=0
+    local default_token_cap=384
+    local request_len=${#scenario_request}
+    local token_cap=0
+    if [ "$request_len" -gt 2400 ]; then
+        default_token_cap=640
+    fi
+    token_cap="${STEER_SEMANTIC_MAX_TOKENS:-$default_token_cap}"
+    if ! [[ "$token_cap" =~ ^[0-9]+$ ]]; then
+        token_cap="$default_token_cap"
+    fi
+    if [ "$token_cap" -lt 0 ]; then
+        token_cap=0
+    fi
+    if [ "$token_cap" -gt 0 ] && [ "${#expected_tokens[@]}" -gt "$token_cap" ]; then
+        token_truncated=1
+        expected_tokens=("${expected_tokens[@]:0:$token_cap}")
+    fi
+    if [ -n "$CURRENT_SCENARIO_MARKER" ]; then
+        local marker_kept=0
+        for token in "${expected_tokens[@]}"; do
+            if [ "$token" = "$CURRENT_SCENARIO_MARKER" ]; then
+                marker_kept=1
+                break
+            fi
+        done
+        if [ "$marker_kept" -eq 0 ]; then
+            if [ "$token_cap" -gt 0 ] && [ "${#expected_tokens[@]}" -ge "$token_cap" ]; then
+                expected_tokens=("${expected_tokens[@]:0:$((token_cap - 1))}")
+            fi
+            expected_tokens+=("$CURRENT_SCENARIO_MARKER")
+        fi
+    fi
     for artifact in "${required_artifacts[@]}"; do
         case "$artifact" in
             semantic_tokens)
@@ -1780,6 +2017,11 @@ capture_and_notify() {
                     location="$(token_presence_location "$normalized_token" "$CURRENT_SCENARIO_MARKER" "$CURRENT_SCENARIO_START_EPOCH")"
                 fi
             fi
+            if [ "${STEER_SEMANTIC_REQUIRE_APP_SCOPE:-1}" = "1" ] && semantic_location_is_log "$location"; then
+                if ! semantic_log_location_allowed_as_app_scope "$location"; then
+                    location="LOG_ONLY_BLOCKED(${location})"
+                fi
+            fi
             if semantic_location_missing "$location"; then
                 semantic_missing=$((semantic_missing + 1))
                 semantic_lines="${semantic_lines}- 의미검증 ❌ \"${token}\" (location=${location})"$'\n'
@@ -1788,6 +2030,13 @@ capture_and_notify() {
             fi
         done
         semantic_lines="${semantic_lines}- 의미검증 토큰 수: ${semantic_checked}"$'\n'
+        if [ "$token_truncated" -eq 1 ]; then
+            semantic_lines="${semantic_lines}- 의미검증 토큰이 상한(${token_cap})으로 잘렸습니다(STEER_SEMANTIC_MAX_TOKENS 조정 필요)"$'\n'
+            if [ "${STEER_SEMANTIC_FAIL_ON_TRUNCATION:-1}" = "1" ]; then
+                status="failed"
+                semantic_lines="${semantic_lines}- 계약 위반: 토큰 절단 발생으로 최종 상태를 failed로 강등"$'\n'
+            fi
+        fi
         if [ "$require_semantic_tokens" -eq 1 ] && [ "$semantic_checked" -eq 0 ]; then
             status="failed"
             semantic_lines="${semantic_lines}- 계약 위반: semantic token 계약이 비어 있습니다"$'\n'
@@ -1808,7 +2057,11 @@ capture_and_notify() {
         fi
     fi
 
-    if [ "$require_mail_send" -eq 1 ] || [ "${STEER_REQUIRE_MAIL_SEND:-1}" = "1" ]; then
+    local request_requires_mail=0
+    if request_requires_mail_send "$scenario_request"; then
+        request_requires_mail=1
+    fi
+    if [ "$require_mail_send" -eq 1 ] || [ "${STEER_REQUIRE_MAIL_SEND:-0}" = "1" ] || [ "$request_requires_mail" -eq 1 ]; then
         local mail_send_logged=0
         local mail_log_status="${mail_proof_status:-}"
         local mail_log_recipient="${mail_proof_recipient:-}"
@@ -1950,6 +2203,32 @@ capture_and_notify() {
                 mail_body_location="LOG_MAIL_BODY_LEN"
             fi
         fi
+        if [ "${STEER_SEMANTIC_REQUIRE_APP_SCOPE:-1}" = "1" ]; then
+            if semantic_location_is_log "$mail_sent_location"; then
+                if ! semantic_log_location_allowed_as_app_scope "$mail_sent_location"; then
+                    mail_sent_ok=0
+                    mail_sent_location="LOG_ONLY_BLOCKED(${mail_sent_location})"
+                fi
+            fi
+            if [ "$mail_subject_ok" -eq 1 ] && semantic_location_is_log "$mail_subject_location"; then
+                if ! semantic_log_location_allowed_as_app_scope "$mail_subject_location"; then
+                    mail_subject_ok=0
+                    mail_subject_location="LOG_ONLY_BLOCKED(${mail_subject_location})"
+                fi
+            fi
+            if [ "$mail_recipient_ok" -eq 1 ] && semantic_location_is_log "$mail_recipient_location"; then
+                if ! semantic_log_location_allowed_as_app_scope "$mail_recipient_location"; then
+                    mail_recipient_ok=0
+                    mail_recipient_location="LOG_ONLY_BLOCKED(${mail_recipient_location})"
+                fi
+            fi
+            if [ "$mail_body_ok" -eq 1 ] && semantic_location_is_log "$mail_body_location"; then
+                if ! semantic_log_location_allowed_as_app_scope "$mail_body_location"; then
+                    mail_body_ok=0
+                    mail_body_location="LOG_ONLY_BLOCKED(${mail_body_location})"
+                fi
+            fi
+        fi
         local mail_mailbox_evidence_ok=0
         local mail_mailbox_evidence_location="$mail_sent_location"
         case "$mail_sent_location" in
@@ -1988,16 +2267,20 @@ capture_and_notify() {
 
     # Build concise evidence lines from log for detailed Telegram report.
     local key_logs=""
-    key_logs=$(grep -En "Goal completed by planner|Surf failed|Supervisor escalated|Preflight failed|Execution Error|SCHEMA_ERROR|PLAN_REJECTED|LLM Refused|fallback action|FALLBACK_ACTION:|Node evidence|MAIL_SEND_PROOF\\||EVIDENCE\\|" "$log_file" 2>/dev/null | tail -n 8 | sed -E 's/^[0-9]+://')
+    key_logs=$(grep -En "Goal completed by planner|Surf failed|Supervisor escalated|Preflight failed|Execution Error|SCHEMA_ERROR|PLAN_REJECTED|LLM Refused|fallback action|FALLBACK_ACTION:|MAIL_SEND_PROOF\\||EVIDENCE\\|target=mail\\|event=send\\|" "$log_file" 2>/dev/null | tail -n 6 | sed -E 's/^[0-9]+://')
     if [ -z "$key_logs" ]; then
         key_logs=$(tail -n 3 "$log_file" 2>/dev/null | sed -E 's/^[[:space:]]+//')
     fi
 
     local evidence_lines=""
     local fallback_hit=0
+    local cmd_n_guard_count=0
+    local cmd_n_window_flood_guard_count=0
     if grep -Eiq "fallback action|FALLBACK_ACTION:" "$log_file" 2>/dev/null; then
         fallback_hit=1
     fi
+    cmd_n_guard_count=$(grep -Ec 'cmd_n_loop_guard_block' "$log_file" 2>/dev/null || true)
+    cmd_n_window_flood_guard_count=$(grep -Ec 'cmd_n_window_flood_block' "$log_file" 2>/dev/null || true)
     while IFS= read -r line; do
         if [ -n "$line" ]; then
             evidence_lines="${evidence_lines}- ${line}"$'\n'
@@ -2013,11 +2296,26 @@ capture_and_notify() {
     evidence_lines="${evidence_lines}- STEER_REQUIRE_MAIL_BODY=${REQUIRE_MAIL_BODY_VALUE}"$'\n'
     evidence_lines="${evidence_lines}- STEER_REQUIRE_MAIL_SUBJECT=${REQUIRE_MAIL_SUBJECT_VALUE}"$'\n'
     evidence_lines="${evidence_lines}- STEER_REQUIRE_SENT_MAILBOX_EVIDENCE=${REQUIRE_SENT_MAILBOX_EVIDENCE_VALUE}"$'\n'
+    evidence_lines="${evidence_lines}- STEER_SEMANTIC_FAIL_ON_TRUNCATION=${STEER_SEMANTIC_FAIL_ON_TRUNCATION}"$'\n'
+    evidence_lines="${evidence_lines}- STEER_SEMANTIC_REQUIRE_APP_SCOPE=${STEER_SEMANTIC_REQUIRE_APP_SCOPE}"$'\n'
+    local diag_lines=""
+    diag_lines="$(collect_diagnostic_event_lines || true)"
+    if [ -n "$diag_lines" ]; then
+        evidence_lines="${evidence_lines}- diagnostics tail (${STEER_DIAGNOSTIC_EVENTS_PATH:-scenario_results/diagnostic_events.jsonl})"$'\n'"${diag_lines}"$'\n'
+    fi
     if [ "$fallback_hit" -eq 1 ]; then
         evidence_lines="${evidence_lines}- fallback 액션 감지됨(fallback action/FALLBACK_ACTION)"$'\n'
         if [ "$FAIL_ON_FALLBACK_VALUE" = "1" ]; then
             evidence_lines="${evidence_lines}- 정책상 fallback 감지 시 실패 처리(STEER_FAIL_ON_FALLBACK=1)"$'\n'
         fi
+    fi
+    if [ "$cmd_n_guard_count" -gt 0 ]; then
+        status="failed"
+        evidence_lines="${evidence_lines}- cmd+n 루프 가드 발동 횟수=${cmd_n_guard_count}"$'\n'
+    fi
+    if [ "$cmd_n_window_flood_guard_count" -gt 0 ]; then
+        status="failed"
+        evidence_lines="${evidence_lines}- cmd+n 창 폭증 가드 발동 횟수=${cmd_n_window_flood_guard_count}"$'\n'
     fi
     if [ "${CURRENT_INPUT_GUARD_ABORTED:-0}" = "1" ]; then
         evidence_lines="${evidence_lines}- 입력 가드 중단: ${CURRENT_INPUT_GUARD_ABORT_REASON:-unknown}"$'\n'
@@ -2159,18 +2457,58 @@ capture_and_notify() {
         elif [ "${fallback_hit:-0}" -eq 1 ]; then
             fail_primary_reason="fallback_detected"
             retry_guide="fallback 유도 원인(포커스/권한/플랜)을 먼저 제거하세요."
+        elif [ "${cmd_n_window_flood_guard_count:-0}" -gt 0 ]; then
+            fail_primary_reason="cmd_n_window_flood_guard"
+            retry_guide="생성된 새 창을 정리한 뒤 재실행하세요."
+        elif [ "${cmd_n_guard_count:-0}" -gt 0 ]; then
+            fail_primary_reason="cmd_n_loop_guard"
+            retry_guide="cmd+n 연속 시도를 줄이도록 플랜/앱 상태를 정리한 뒤 재실행하세요."
         else
             fail_primary_reason="evidence_or_runtime_failure"
             retry_guide="실패 근거 라인 기준으로 실패 단계만 수정 후 재실행하세요."
         fi
     fi
 
+    local brief_mail_result_line="- 메일 발송 증거: 확인 필요"
+    if [ "${mail_proof_status:-}" = "sent_confirmed" ]; then
+        brief_mail_result_line="- 메일 정상 발송 완료 (${mail_proof_recipient:-unknown})"
+    fi
+    local brief_final_line="- 문제가 있어 재실행 필요 -> 실패"
+    if [ "$status" = "success" ]; then
+        brief_final_line="- 문제 없음 -> 성공"
+    fi
+
+    local workflow_label
+    workflow_label="$(complex_scenario_workflow_label "$scenario_num")"
+
     local telegram_message
-    telegram_message=$(cat <<EOF
-작업: 시나리오 ${scenario_num} - ${scenario_name}
-요청: ${scenario_goal}
-수행: 자동 시나리오 실행 및 결과 캡처/검증
-결과: ${result_info}
+    if [ "$status" = "success" ] && [ "$COMPACT_SUCCESS_REPORT_VALUE" = "1" ]; then
+        telegram_message=$(cat <<EOF
+📌 시나리오 ${scenario_num} - 성공 요약
+
+🔄 워크플로우
+- ${workflow_label}
+
+✅ 결과
+- ${result_info}
+${brief_mail_result_line}
+- 문제 없음 -> 성공
+EOF
+)
+    else
+        telegram_message=$(cat <<EOF
+📌 시나리오 ${scenario_num} - 쉽게 말한 요약
+
+🔄 뭘 했는지
+- 요청한 자동 실행 체인을 끝까지 수행했고
+- 단계별 캡처/실행 증거를 수집했고
+- 결과를 검증 규칙으로 최종 판정했어요.
+
+✅ 결과
+- ${result_info}
+${brief_mail_result_line}
+${brief_final_line}
+
 상태: ${status_label}
 판정:
 - ${judgement_summary}
@@ -2181,6 +2519,7 @@ capture_and_notify() {
 ${evidence_lines}- 로그: $(basename "$log_file")
 EOF
 )
+    fi
     telegram_message="$(compress_telegram_report "$telegram_message")"
 
     # Keep local audit copy of the raw pre-rewrite message.
@@ -2288,15 +2627,15 @@ else
     echo "⏭️  Scenario 1 skipped (STEER_SCENARIO_IDS=${SELECTED_SCENARIO_IDS})"
 fi
 
-# Scenario 2: Finder -> TextEdit -> Notes
+# Scenario 2: Finder -> Notes -> TextEdit -> Mail
 if should_run_scenario 2; then
     echo "---------------------------------------------------"
-    echo "📂 Scenario 2: Finder → TextEdit → Notes"
+    echo "📂 Scenario 2: Finder → Notes → TextEdit → Mail"
     LOG_FILE="scenario_results/complex_scenario_2_${TIMESTAMP}.log"
-    SCENARIO_GOAL="Finder/TextEdit/Notes/Mail transfer chain."
+    SCENARIO_GOAL="Finder/Notes/TextEdit/Mail transfer chain."
     CURRENT_SCENARIO_MARKER="$MARKER_S2"
     echo "Goal: ${SCENARIO_GOAL}"
-    CMD="Finder를 열어 Downloads 폴더로 이동하세요. TextEdit를 열어 새 문서(Cmd+N)를 만들고 제목 \"${SUBJECT_S2}\"를 입력한 뒤 아래 3줄을 그대로 입력하세요: \"1. invoice.pdf\", \"2. screenshot.png\", \"3. notes.txt\". 다음 줄에 \"${MARKER_S2}\"를 정확히 입력하세요. 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. Notes를 열어 새 메모(Cmd+N)를 만들고 붙여넣기(Cmd+V)하세요. 다시 전체 선택(Cmd+A) 후 복사(Cmd+C)하고 Mail을 열어 새 이메일(Cmd+N) 초안을 만든 뒤 제목 \"${SUBJECT_S2}\"를 입력하고 본문에 붙여넣기(Cmd+V)하세요. 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요."
+    CMD="아래 순서를 정확히 지키세요. 1) Finder를 열고 Downloads 폴더를 전면으로 가져오세요. 2) Notes를 열고 새 메모(Cmd+N)를 만든 뒤 제목을 \"${SUBJECT_S2}\"로 입력하세요. 3) 본문에 다음 4줄을 그대로 입력하세요: \"1. invoice.pdf\", \"2. screenshot.png\", \"3. notes.txt\", \"${MARKER_S2}\". 4) 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 5) TextEdit를 열고 새 문서(Cmd+N)에 붙여넣기(Cmd+V)한 뒤 다음 줄에 \"Shared via Notes\"를 입력하세요. 6) 다시 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 7) Mail을 열고 새 이메일(Cmd+N) 초안을 만든 뒤 제목 \"${SUBJECT_S2}\"를 입력하고 본문에 붙여넣기(Cmd+V)하세요. 8) 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요. 9) 전송이 끝나면 done으로 종료하세요."
 
     scenario_status="failed"
     if run_agent_scenario "$CMD" "$LOG_FILE" 2; then
@@ -2314,15 +2653,15 @@ else
     echo "⏭️  Scenario 2 skipped (STEER_SCENARIO_IDS=${SELECTED_SCENARIO_IDS})"
 fi
 
-# Scenario 3: Safari -> Calculator -> Notes
+# Scenario 3: Calculator -> Notes -> TextEdit -> Mail
 if should_run_scenario 3; then
     echo "---------------------------------------------------"
-    echo "📈 Scenario 3: Safari → Calculator → Notes"
+    echo "📈 Scenario 3: Calculator → Notes → TextEdit → Mail"
     LOG_FILE="scenario_results/complex_scenario_3_${TIMESTAMP}.log"
-    SCENARIO_GOAL="Browser + calculation + document handoff chain."
+    SCENARIO_GOAL="Calculation + document handoff + mail send chain."
     CURRENT_SCENARIO_MARKER="$MARKER_S3"
     echo "Goal: ${SCENARIO_GOAL}"
-    CMD="Safari를 열고 https://www.google.com 으로 이동하세요. 새 탭(Cmd+T)을 열고 https://www.wikipedia.org 로 이동하세요. Calculator를 열어 \"120*1300=\" 을 입력해 계산한 뒤 복사(Cmd+C)하세요. Notes를 열어 새 메모(Cmd+N)를 만들고 제목 \"${SUBJECT_S3}\"를 입력한 뒤 다음 줄에 \"120*1300=\"를 입력하고 다음 줄에 붙여넣기(Cmd+V)하세요. TextEdit를 열어 새 문서(Cmd+N)에 방금 메모 내용을 붙여넣기(Cmd+V)하고 마지막 줄에 \"Done\"을 입력하세요. 다음 줄에 \"${MARKER_S3}\"를 정확히 입력하세요. Mail을 열어 새 이메일(Cmd+N) 초안을 만들고 제목 \"${SUBJECT_S3}\"를 입력한 뒤 본문에 붙여넣기(Cmd+V)하세요. 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요."
+    CMD="아래 순서를 정확히 지키세요. 1) Calculator를 열고 \"120*1300=\" 를 입력해 계산 화면을 준비하세요. 2) Notes를 열고 새 메모(Cmd+N)를 만든 뒤 제목을 \"${SUBJECT_S3}\"로 입력하세요. 3) 본문에 다음 3줄을 그대로 입력하세요: \"120*1300=\", \"Done\", \"${MARKER_S3}\". 4) 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 5) TextEdit를 열고 새 문서(Cmd+N)에 붙여넣기(Cmd+V)한 뒤 다음 줄에 \"Calc verified\"를 입력하세요. 6) 다시 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 7) Mail을 열고 새 이메일(Cmd+N) 초안을 만든 뒤 제목 \"${SUBJECT_S3}\"를 입력하고 본문에 붙여넣기(Cmd+V)하세요. 8) 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요. 9) 전송이 끝나면 done으로 종료하세요."
 
     scenario_status="failed"
     if run_agent_scenario "$CMD" "$LOG_FILE" 3; then
@@ -2340,15 +2679,15 @@ else
     echo "⏭️  Scenario 3 skipped (STEER_SCENARIO_IDS=${SELECTED_SCENARIO_IDS})"
 fi
 
-# Scenario 4: Notes -> Safari -> TextEdit
+# Scenario 4: Calendar -> Notes -> TextEdit -> Mail
 if should_run_scenario 4; then
     echo "---------------------------------------------------"
-    echo "🧠 Scenario 4: Notes → Safari → TextEdit"
+    echo "🧠 Scenario 4: Calendar → Notes → TextEdit → Mail"
     LOG_FILE="scenario_results/complex_scenario_4_${TIMESTAMP}.log"
-    SCENARIO_GOAL="Idea note -> web query -> report -> mail draft chain."
+    SCENARIO_GOAL="Idea note -> report -> mail send chain."
     CURRENT_SCENARIO_MARKER="$MARKER_S4"
     echo "Goal: ${SCENARIO_GOAL}"
-    CMD="Notes를 열어 새 메모(Cmd+N)를 만들고 아래 3줄을 그대로 입력하세요: \"focus music\", \"pomodoro timer\", \"daily review template\". 다음 줄에 \"${MARKER_S4}\"를 정확히 입력하세요. 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. Safari를 열고 https://www.google.com 으로 이동한 뒤 붙여넣기(Cmd+V)하고 Enter를 누르세요. 주소창에 포커스(Cmd+L) 후 복사(Cmd+C)하세요. TextEdit를 열어 새 문서(Cmd+N)에 \"${SUBJECT_S4}\" 제목을 입력하고 다음 줄에 붙여넣기(Cmd+V)하세요. Mail을 열어 새 이메일(Cmd+N) 초안을 만들고 제목 \"${SUBJECT_S4}\"를 입력한 뒤 본문에 붙여넣기(Cmd+V)하세요. 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요."
+    CMD="아래 순서를 정확히 지키세요. 1) Calendar를 열어 전면으로 가져오세요. 2) Notes를 열고 새 메모(Cmd+N)를 만든 뒤 제목을 \"${SUBJECT_S4}\"로 입력하세요. 3) 본문에 다음 4줄을 그대로 입력하세요: \"focus music\", \"pomodoro timer\", \"daily review template\", \"${MARKER_S4}\". 4) 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 5) TextEdit를 열고 새 문서(Cmd+N)에 붙여넣기(Cmd+V)한 뒤 다음 줄에 \"Research shortlist ready\"를 입력하세요. 6) 다시 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 7) Mail을 열고 새 이메일(Cmd+N) 초안을 만든 뒤 제목 \"${SUBJECT_S4}\"를 입력하고 본문에 붙여넣기(Cmd+V)하세요. 8) 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요. 9) 전송이 끝나면 done으로 종료하세요."
 
     scenario_status="failed"
     if run_agent_scenario "$CMD" "$LOG_FILE" 4; then
@@ -2366,15 +2705,15 @@ else
     echo "⏭️  Scenario 4 skipped (STEER_SCENARIO_IDS=${SELECTED_SCENARIO_IDS})"
 fi
 
-# Scenario 5: Safari -> Calculator -> Notes -> Mail
+# Scenario 5: Finder -> Calculator -> Notes -> TextEdit -> Mail
 if should_run_scenario 5; then
     echo "---------------------------------------------------"
-    echo "💱 Scenario 5: Safari → Calculator → Notes → Mail"
+    echo "💱 Scenario 5: Finder → Calculator → Notes → TextEdit → Mail"
     LOG_FILE="scenario_results/complex_scenario_5_${TIMESTAMP}.log"
-    SCENARIO_GOAL="Finder/Calculator/Notes/Mail budget draft chain."
+    SCENARIO_GOAL="Finder/Calculator/Notes/TextEdit/Mail budget draft chain."
     CURRENT_SCENARIO_MARKER="$MARKER_S5"
     echo "Goal: ${SCENARIO_GOAL}"
-    CMD="Finder를 열어 Desktop으로 이동하세요. Calculator를 열어 \"120*1450=\" 을 입력해 계산하고 결과를 복사(Cmd+C)하세요. Notes를 열어 새 메모(Cmd+N)를 만들고 제목 \"${SUBJECT_S5}\"를 입력한 뒤 다음 줄에 \"Base: 120 USD\"를 입력하고 다음 줄에 붙여넣기(Cmd+V)하세요. 다음 줄에 \"${MARKER_S5}\"를 정확히 입력하세요. 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. Mail을 열어 새 이메일(Cmd+N) 초안을 만들고 제목 \"${SUBJECT_S5}\"를 입력한 다음 본문에 붙여넣기(Cmd+V)하세요. 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요."
+    CMD="아래 순서를 정확히 지키세요. 1) Finder를 열고 Desktop을 전면으로 가져오세요. 2) Calculator를 열고 \"120*1450=\" 를 입력해 계산 화면을 준비하세요. 3) Notes를 열고 새 메모(Cmd+N)를 만든 뒤 제목을 \"${SUBJECT_S5}\"로 입력하세요. 4) 본문에 다음 3줄을 그대로 입력하세요: \"Base: 120 USD\", \"120*1450=\", \"${MARKER_S5}\". 5) 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 6) TextEdit를 열고 새 문서(Cmd+N)에 붙여넣기(Cmd+V)한 뒤 다음 줄에 \"Budget draft ready\"를 입력하세요. 7) 다시 전체 선택(Cmd+A) 후 복사(Cmd+C)하세요. 8) Mail을 열고 새 이메일(Cmd+N) 초안을 만든 뒤 제목 \"${SUBJECT_S5}\"를 입력하고 본문에 붙여넣기(Cmd+V)하세요. 9) 받는 사람에 \"${MAIL_TO_TARGET}\"를 입력하고 보내기(Cmd+Shift+D)로 발송하세요. 10) 전송이 끝나면 done으로 종료하세요."
 
     scenario_status="failed"
     if run_agent_scenario "$CMD" "$LOG_FILE" 5; then

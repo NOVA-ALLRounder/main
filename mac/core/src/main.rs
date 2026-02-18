@@ -600,13 +600,19 @@ async fn main() -> anyhow::Result<()> {
     println!("🤖 Local OS Agent (Rust Native Mode) Started!");
     // [Phase 4] Self-Diagnosis: Check Accessibility Permissions
     println!("🔍 Checking Accessibility Permissions...");
-    let ax_check = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to return name of first application process")
-        .output();
+    let ax_check = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("osascript")
+                .arg("-e")
+                .arg("tell application \"System Events\" to return name of first application process")
+                .output()
+        }),
+    )
+    .await;
 
     match ax_check {
-        Ok(output) if output.status.success() => {
+        Ok(Ok(Ok(output))) if output.status.success() => {
             println!("✅ Accessibility Permissions: GRANTED.");
         }
         _ => {
@@ -701,11 +707,19 @@ async fn main() -> anyhow::Result<()> {
         info!("🧠 Brain Routine Scheduler Active.");
     }
 
-    // 2.5 Init MCP
-    if let Err(e) = mcp_client::init_mcp() {
-        warn!("⚠️ Failed to init MCP: {}", e);
-    } else {
-        info!("🔌 MCP System Initialized.");
+    // 2.5 Init MCP (non-blocking guard)
+    // MCP server handshakes can stall in headless launchd sessions.
+    // Bound initialization time so API startup is never blocked.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        tokio::task::spawn_blocking(mcp_client::init_mcp),
+    )
+    .await
+    {
+        Ok(Ok(Ok(()))) => info!("🔌 MCP System Initialized."),
+        Ok(Ok(Err(e))) => warn!("⚠️ Failed to init MCP: {}", e),
+        Ok(Err(e)) => warn!("⚠️ MCP init join error: {}", e),
+        Err(_) => warn!("⚠️ MCP init timeout (continuing without blocking startup)"),
     }
 
     // 1. Start Native Event Tap (replaces IPC Adapter)
@@ -747,21 +761,32 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // 5. Start File Watcher
-    // Watch Downloads folder
-    let home = std::env::var("HOME").unwrap_or("/".to_string());
-    let downloads = format!("{}/Downloads", home);
-
-    // We reuse log_tx to send file events to Analyzer
-    if let Err(e) = monitor::spawn_file_watcher(downloads.clone(), log_tx.clone()) {
-        println!("⚠️  Failed to watch {}: {}", downloads, e);
+    // 5. Start File Watcher (Downloads or override path)
+    if env_flag("STEER_DISABLE_DOWNLOAD_WATCHER") {
+        println!("ℹ️  Downloads watcher disabled via STEER_DISABLE_DOWNLOAD_WATCHER.");
     } else {
-        println!("👀 Watching for changes in {}", downloads);
+        let home = std::env::var("HOME").unwrap_or("/".to_string());
+        let downloads = std::env::var("STEER_DOWNLOADS_DIR")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("{}/Downloads", home));
+
+        // Reuse log_tx to send file events to Analyzer.
+        if let Err(e) = monitor::spawn_file_watcher(downloads.clone(), log_tx.clone()) {
+            println!("⚠️  Failed to watch {}: {}", downloads, e);
+        } else {
+            println!("👀 Watching for changes in {}", downloads);
+        }
     }
 
     // 6. Start App Watcher (Active Window Poller)
-    monitor::spawn_app_watcher(log_tx.clone());
-    println!("👀 Watching for active application changes...");
+    if env_flag("STEER_DISABLE_APP_WATCHER") {
+        println!("ℹ️  App watcher disabled via STEER_DISABLE_APP_WATCHER.");
+    } else {
+        monitor::spawn_app_watcher(log_tx.clone());
+        println!("👀 Watching for active application changes...");
+    }
 
     let mut policy = policy::PolicyEngine::new(); // Starts LOCKED
     let mut res_mon = monitor::ResourceMonitor::new();

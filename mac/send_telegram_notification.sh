@@ -19,6 +19,7 @@ TELEGRAM_RETRY_COUNT="${TELEGRAM_RETRY_COUNT:-3}"
 TELEGRAM_RETRY_DELAY_SEC="${TELEGRAM_RETRY_DELAY_SEC:-1}"
 TELEGRAM_VALIDATE_REPORT="${TELEGRAM_VALIDATE_REPORT:-0}"
 TELEGRAM_MAX_TEXT_LEN="${TELEGRAM_MAX_TEXT_LEN:-3800}"
+TELEGRAM_EXTRA_IMAGE_MAX="${TELEGRAM_EXTRA_IMAGE_MAX:-1}"
 
 MESSAGE="$1"
 IMAGE_PATH="$2"
@@ -63,17 +64,41 @@ validate_report_message() {
     local evidence_count
     local has_status
     local has_evidence_header
+    local has_workflow_header
+    local has_result_header
+    local has_success_word
 
     has_status=0
     has_evidence_header=0
+    has_workflow_header=0
+    has_result_header=0
+    has_success_word=0
     if printf '%s\n' "$text" | grep -Eq "^상태:[[:space:]]*(✅|❌)"; then
         has_status=1
     fi
     if printf '%s\n' "$text" | grep -Eq "^근거:"; then
         has_evidence_header=1
     fi
+    if printf '%s\n' "$text" | grep -Eq "^🔄[[:space:]]*워크플로우"; then
+        has_workflow_header=1
+    fi
+    if printf '%s\n' "$text" | grep -Eq "^✅[[:space:]]*결과"; then
+        has_result_header=1
+    fi
+    if printf '%s\n' "$text" | grep -Eq "문제 없음 -> 성공|완료 판정되었습니다"; then
+        has_success_word=1
+    fi
     evidence_count="$(printf '%s\n' "$text" | grep -Ec "^- ")"
     evidence_count="${evidence_count:-0}"
+
+    # Detailed report format (status + evidence) remains valid.
+    if [ "$has_status" -eq 1 ] && [ "$has_evidence_header" -eq 1 ] && [ "$evidence_count" -ge 3 ]; then
+        return 0
+    fi
+    # Compact success format (workflow + result) is also valid.
+    if [ "$has_workflow_header" -eq 1 ] && [ "$has_result_header" -eq 1 ] && [ "$has_success_word" -eq 1 ]; then
+        return 0
+    fi
 
     if [ "$has_status" -eq 0 ] || [ "$has_evidence_header" -eq 0 ] || [ "$evidence_count" -lt 3 ]; then
         echo "❌ Telegram report validation failed (status=$has_status evidence_header=$has_evidence_header bullets=$evidence_count)"
@@ -326,6 +351,17 @@ send_extra_images() {
     if [ -z "$list_file" ] || [ ! -f "$list_file" ]; then
         return 0
     fi
+    local max_extra="$TELEGRAM_EXTRA_IMAGE_MAX"
+    if ! [[ "$max_extra" =~ ^[0-9]+$ ]]; then
+        max_extra=1
+    fi
+    if [ "$max_extra" -le 0 ]; then
+        return 0
+    fi
+
+    local send_list
+    send_list="$(mktemp -t steer_tg_extra_list.XXXXXX)"
+    tail -n "$max_extra" "$list_file" > "$send_list" 2>/dev/null || cp "$list_file" "$send_list"
 
     while IFS= read -r line || [ -n "$line" ]; do
         [ -z "$line" ] && continue
@@ -336,9 +372,11 @@ send_extra_images() {
         fi
         if ! send_photo_with_caption "$image_path" "$caption"; then
             echo "Failed to send extra node image: $image_path"
+            rm -f "$send_list"
             return 1
         fi
-    done < "$list_file"
+    done < "$send_list"
+    rm -f "$send_list"
     return 0
 }
 
