@@ -1,4 +1,5 @@
 pub mod action_schema;
+pub mod ai_digest;
 pub mod analyzer;
 pub mod applescript;
 pub mod approval_gate;
@@ -79,6 +80,7 @@ pub mod error;
 pub mod cli_llm;
 pub mod config_manager;
 pub mod content_extractor;
+pub mod llama_local;
 pub mod macos;
 pub mod reality_check;
 pub mod screen_recorder;

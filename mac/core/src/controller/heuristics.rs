@@ -1,5 +1,4 @@
 use crate::applescript;
-use crate::visual_driver::VisualDriver;
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
@@ -37,15 +36,74 @@ pub fn preflight_permissions() -> Result<()> {
 }
 
 pub fn verify_screen_capture() -> Result<()> {
-    // Preflight: verify Screen Recording can capture the screen
-    if let Err(e) = VisualDriver::capture_screen() {
-        println!("❌ Preflight failed: Screen capture unavailable (check Screen Recording permission). Error: {}", e);
+    // Keep execution-path behavior aligned with API preflight toggle.
+    // If disabled, do not hard-fail planner execution on screen-capture precheck.
+    if !env_truthy_default("STEER_PREFLIGHT_SCREEN_CAPTURE", true) {
+        return Ok(());
+    }
+
+    // 1) First, rely on the native macOS permission check.
+    // 2) Also run an actual screencapture probe because native check can report
+    // false negatives in some bundle/runtime combinations.
+    let native_granted = crate::permission_manager::PermissionManager::check_screen_recording();
+
+    // 2. We can optionally do a quick probe if we want to ensure the binary is able to write,
+    // but the native check passing is the real source of truth for "vision permission".
+    let shot_path = format!(
+        "/tmp/steer_preflight_capture_{}_{}.png",
+        std::process::id(),
+        chrono::Utc::now().timestamp_millis()
+    );
+
+    let probe_status = std::process::Command::new("screencapture")
+        .args(["-x", shot_path.as_str()])
+        .status();
+
+    // Clean up if it worked
+    let exists = std::fs::metadata(&shot_path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
+    if exists {
+        let _ = std::fs::remove_file(&shot_path);
+    }
+    let _ = std::fs::remove_file(&shot_path);
+
+    // If native check says denied but probe succeeded, accept it as a practical pass.
+    if !native_granted && exists {
+        return Ok(());
+    }
+
+    if !native_granted {
         return Err(anyhow::anyhow!(
-            "Screen capture unavailable (permission missing): {}",
-            e
+            "Screen capture unavailable (Native permission missing). {}",
+            permission_help()
         ));
     }
+
+    // Native says granted, but probe failed: surface command status for diagnosis.
+    if !exists {
+        let probe_hint = match probe_status {
+            Ok(status) => format!("status={}", status),
+            Err(err) => format!("spawn_error={}", err),
+        };
+        return Err(anyhow::anyhow!(
+            "Screen capture probe produced no file ({}). {}",
+            probe_hint,
+            permission_help()
+        ));
+    }
+
     Ok(())
+}
+
+fn env_truthy_default(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| {
+            let n = v.trim().to_ascii_lowercase();
+            matches!(n.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(default)
 }
 
 pub fn extract_best_number(text: &str) -> Option<String> {

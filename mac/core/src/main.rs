@@ -1,7 +1,8 @@
 use local_os_agent::{
-    analyzer, api_server, applescript, bash_executor, db, dependency_check, feedback_collector,
-    integrations, llm_gateway, mcp_client, monitor, orchestrator, pattern_detector, policy,
-    recommendation, recommendation_executor, scheduler, security, workflow_intake,
+    ai_digest, analyzer, api_server, applescript, bash_executor, db, dependency_check,
+    feedback_collector, integrations, llm_gateway, mcp_client, monitor, orchestrator,
+    pattern_detector, policy, recommendation, recommendation_executor, scheduler, security,
+    workflow_intake,
 };
 
 use local_os_agent::env_flag;
@@ -700,6 +701,22 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if args.len() >= 2 && (args[1] == "telegram_listen" || args[1] == "telegram-listen") {
+        if let Some(llm) = llm_client.clone() {
+            if let Some(bot) = local_os_agent::telegram::TelegramBot::from_env(llm, None) {
+                println!("🤖 Telegram listener mode started. Waiting for commands...");
+                std::sync::Arc::new(bot).start_polling().await;
+            } else {
+                eprintln!(
+                    "❌ Telegram listener requires TELEGRAM_BOT_TOKEN (optional: TELEGRAM_USER_ID)."
+                );
+            }
+        } else {
+            eprintln!("❌ LLM not available for Telegram listener.");
+        }
+        return Ok(());
+    }
+
     // 2. Start Scheduler (Brain)
     if let Some(llm) = &llm_client {
         let scheduler = scheduler::Scheduler::new(llm.clone());
@@ -724,7 +741,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Start Native Event Tap (replaces IPC Adapter)
     // [Paranoid Audit] Increased capacity to 1000 to prevent dropping mouse bursts
-    let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(1000);
+    let (log_tx, log_rx) = tokio::sync::mpsc::channel::<String>(1000);
 
     #[cfg(target_os = "macos")]
     {
@@ -736,18 +753,26 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 2. Start "Shadow Analyzer" (Decoupled Module)
-    // CRITICAL FIX: Always consume log_rx, even without LLM
-    if let Some(c) = llm_client.clone() {
-        analyzer::spawn(log_rx, c);
-    } else {
-        // Fallback: Just save events to DB without LLM analysis
+    // CRITICAL FIX: Always consume log_rx, even when analyzer is disabled.
+    let spawn_event_persist_only = |mut rx: tokio::sync::mpsc::Receiver<String>| {
         tokio::spawn(async move {
-            while let Some(log_json) = log_rx.recv().await {
+            while let Some(log_json) = rx.recv().await {
                 if let Err(e) = db::insert_event(&log_json) {
                     eprintln!("DB insert error: {}", e);
                 }
             }
         });
+    };
+
+    if let Some(c) = llm_client.clone() {
+        if env_flag("STEER_DISABLE_ANALYZER") {
+            spawn_event_persist_only(log_rx);
+            println!("⚠️  Shadow Analyzer disabled via STEER_DISABLE_ANALYZER=1 (events still saved)");
+        } else {
+            analyzer::spawn(log_rx, c);
+        }
+    } else {
+        spawn_event_persist_only(log_rx);
         println!("⚠️  Running in lite mode (no LLM, events still saved)");
     }
 
@@ -788,6 +813,27 @@ async fn main() -> anyhow::Result<()> {
         println!("👀 Watching for active application changes...");
     }
 
+    let mut telegram_listener_started = false;
+    if env_flag("STEER_TELEGRAM_POLLING") {
+        if let Some(llm) = llm_client.clone() {
+            if let Some(bot) =
+                local_os_agent::telegram::TelegramBot::from_env(llm, Some(log_tx.clone()))
+            {
+                println!("🤖 Telegram polling enabled (STEER_TELEGRAM_POLLING=1).");
+                tokio::spawn(async move {
+                    std::sync::Arc::new(bot).start_polling().await;
+                });
+                telegram_listener_started = true;
+            } else {
+                println!(
+                    "⚠️  STEER_TELEGRAM_POLLING=1 but TELEGRAM_BOT_TOKEN is missing; listener not started."
+                );
+            }
+        } else {
+            println!("⚠️  STEER_TELEGRAM_POLLING=1 but LLM is unavailable; listener not started.");
+        }
+    }
+
     let mut policy = policy::PolicyEngine::new(); // Starts LOCKED
     let mut res_mon = monitor::ResourceMonitor::new();
 
@@ -804,7 +850,13 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if reader.read_line(&mut buffer).await? == 0 {
-            // EOF - keep server running (headless mode)
+            // Optional test/batch mode: exit on EOF instead of switching to headless API loop.
+            if env_flag("STEER_EXIT_ON_EOF") {
+                println!("👋 EOF received. Exiting by STEER_EXIT_ON_EOF=1.");
+                break;
+            }
+
+            // Default behavior: keep server running in headless mode.
             println!("📡 Running in headless mode (API only)...");
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
@@ -839,7 +891,10 @@ async fn main() -> anyhow::Result<()> {
                 );
                 println!("  analyze_patterns      - Detect behavior patterns and generate recommendations");
                 println!("  quality               - Show workflow quality metrics");
+                println!("  ai_digest [msg]       - Trigger n8n News Digest via program webhook");
+                println!("  news_digest [msg]     - Alias of ai_digest (natural-language topic)");
                 println!("  telegram <msg>        - Send Telegram message");
+                println!("  telegram_listen       - Start Telegram natural-language listener");
                 println!("  notion <title>|<body> - Create Notion page");
                 println!("  gmail list [N]        - List recent N emails");
                 println!("  gmail read <id>       - Read email by ID");
@@ -1336,6 +1391,18 @@ async fn main() -> anyhow::Result<()> {
                     Err(e) => println!("❌ Failed to queue workflow recommendation: {}", e),
                 }
             }
+            "ai_digest" | "ai-digest" | "news_digest" | "news-digest" | "digest" => {
+                let request = if parts.len() >= 2 {
+                    parts[1..].join(" ")
+                } else {
+                    ai_digest::default_request_text().to_string()
+                };
+                println!("📰 Triggering news digest workflow...");
+                match ai_digest::trigger_program_webhook(&request, None).await {
+                    Ok(result) => println!("{}", ai_digest::format_human_summary(&result)),
+                    Err(e) => println!("❌ News digest trigger failed: {}", e),
+                }
+            }
             "telegram" => {
                 if parts.len() < 2 {
                     println!("Usage: telegram <message>");
@@ -1349,6 +1416,29 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => println!("❌ Failed: {}", e),
                     },
                     Err(e) => println!("⚠️  Telegram not configured: {}", e),
+                }
+            }
+            "telegram_listen" | "telegram-listen" => {
+                if telegram_listener_started {
+                    println!("ℹ️  Telegram listener is already running.");
+                    continue;
+                }
+                if let Some(llm) = llm_client.clone() {
+                    if let Some(bot) =
+                        local_os_agent::telegram::TelegramBot::from_env(llm, Some(log_tx.clone()))
+                    {
+                        println!("🤖 Telegram listener started.");
+                        tokio::spawn(async move {
+                            std::sync::Arc::new(bot).start_polling().await;
+                        });
+                        telegram_listener_started = true;
+                    } else {
+                        println!(
+                            "⚠️  Telegram listener requires TELEGRAM_BOT_TOKEN (optional: TELEGRAM_USER_ID)."
+                        );
+                    }
+                } else {
+                    println!("⚠️  LLM Client not available.");
                 }
             }
             "notion" => {
@@ -1551,7 +1641,10 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(orch) = orchestrator::Orchestrator::new().await {
                     info!("🤖 Super Agent: Processing '{}'...", input);
                     match orch.handle_request(input).await {
-                        Ok(resp) => info!("{}", resp),
+                        Ok(resp) => {
+                            println!("{}", resp);
+                            info!("{}", resp);
+                        }
                         Err(e) => error!("❌ Super Agent Error: {}", e),
                     }
                 } else {

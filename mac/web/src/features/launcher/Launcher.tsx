@@ -18,6 +18,8 @@ import {
 import {
     sendChatMessage,
     approveRecommendation,
+    agentGoalRun,
+    executeGoal,
     agentIntent,
     agentPlan,
     agentExecute,
@@ -27,6 +29,7 @@ import {
     runAgentPreflightFix,
     recordAgentRecoveryEvent,
     fetchTaskRuns,
+    fetchTaskRun,
     fetchTaskRunStages,
     fetchTaskRunAssertions,
     fetchTaskRunArtifacts,
@@ -36,7 +39,9 @@ import type {
     AgentPreflightCheck,
     ExecutionProfile,
     LockMetrics,
+    Recommendation,
     TaskRunArtifact,
+    TaskRun,
     TaskStageAssertion,
     TaskStageRun,
 } from "@/lib/types";
@@ -238,6 +243,104 @@ const profileLabel = (profile: ExecutionProfile): string => {
     return found?.label ?? profile;
 };
 
+const isGoalRunEndpointUnavailable = (error: unknown): boolean => {
+    if (!axios.isAxiosError(error)) return false;
+    const status = error.response?.status;
+    if (status === 404 || status === 405 || status === 501) return true;
+    const responseData = error.response?.data as { error?: unknown } | undefined;
+    const text = [
+        error.message ?? "",
+        String(responseData ?? ""),
+        String(responseData?.error ?? ""),
+    ]
+        .join(" ")
+        .toLowerCase();
+    return (
+        text.includes("goal/run") ||
+        text.includes("goal-run") ||
+        text.includes("not found") ||
+        text.includes("no route")
+    );
+};
+
+const isNlChatFallbackEnabled = (): boolean => {
+    if (typeof import.meta === "undefined") return false;
+    // Default ON in demo builds: if NL execution path fails, degrade gracefully to chat reply.
+    // Set VITE_ENABLE_NL_CHAT_FALLBACK=0 to force strict failure.
+    return import.meta.env.VITE_ENABLE_NL_CHAT_FALLBACK !== "0";
+};
+
+const isLegacyGoalFallbackEnabled = (): boolean => {
+    if (typeof import.meta === "undefined") return false;
+    // Default OFF: keep routing on modern goal-run / intent-plan-execute path unless explicitly enabled.
+    return import.meta.env.VITE_ENABLE_LEGACY_GOAL_FALLBACK === "1";
+};
+
+const shouldTryNlChatFallback = (error: unknown): boolean => {
+    if (!isNlChatFallbackEnabled()) return false;
+    if (!axios.isAxiosError(error)) return false;
+    const status = error.response?.status;
+    if (status == null) return true; // transient network issue
+    if (status === 404 || status === 405 || status === 501) return true; // route unavailable
+    const payload = error.response?.data as
+        | { error?: unknown; message?: unknown; detail?: unknown }
+        | undefined;
+    const text = [
+        String(payload?.error ?? ""),
+        String(payload?.message ?? ""),
+        String(payload?.detail ?? ""),
+        error.message ?? "",
+    ]
+        .join(" ")
+        .toLowerCase();
+    return (
+        (text.includes("goal/run") || text.includes("goal-run")) &&
+        (text.includes("not found") || text.includes("no route"))
+    );
+};
+
+const TERMINAL_RUN_STATUSES = new Set([
+    "business_completed",
+    "business_failed",
+    "failed",
+    "error",
+    "blocked",
+    "approval_required",
+    "manual_required",
+    "completed",
+    "success",
+]);
+
+const IN_PROGRESS_RUN_STATUSES = new Set([
+    "accepted",
+    "busy",
+    "queued",
+    "running",
+    "started",
+    "retrying",
+    "business_incomplete",
+]);
+
+const N8N_EDITOR_BASE_URL = (() => {
+    if (typeof import.meta !== "undefined") {
+        const raw = import.meta.env.VITE_N8N_EDITOR_URL as string | undefined;
+        const trimmed = raw?.trim().replace(/\/+$/, "");
+        if (trimmed) return trimmed;
+    }
+    return "http://localhost:5678";
+})();
+
+const resolveRecommendationWorkflowUrl = (
+    rec?: Pick<Recommendation, "workflow_url" | "workflow_id"> | null,
+    workflowIdFallback?: string | null
+): string | null => {
+    const explicitUrl = rec?.workflow_url?.trim();
+    if (explicitUrl) return explicitUrl;
+    const workflowId = rec?.workflow_id?.trim() || workflowIdFallback?.trim();
+    if (!workflowId) return null;
+    return `${N8N_EDITOR_BASE_URL}/workflow/${encodeURIComponent(workflowId)}`;
+};
+
 const markdownComponents: Components = {
     code({ children, ...props }) {
         const inline = 'inline' in props && props.inline;
@@ -255,6 +358,8 @@ const markdownComponents: Components = {
 
 export default function Launcher() {
     const [input, setInput] = useState("");
+    const [isComposing, setIsComposing] = useState(false);
+    const composingSinceRef = useRef<number>(0);
     const [composerMode, setComposerMode] = useState<ComposerMode>("nl");
     const [executionProfile, setExecutionProfile] =
         useState<ExecutionProfile>("strict");
@@ -295,6 +400,7 @@ export default function Launcher() {
     const [dispatchBlockedUntilMs, setDispatchBlockedUntilMs] = useState<number | null>(null);
     const [dispatchNowMs, setDispatchNowMs] = useState<number>(Date.now());
     const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
+    const [goalRunAvailable, setGoalRunAvailable] = useState<boolean | null>(null);
     const [runSnapshot, setRunSnapshot] = useState<ExecutionSnapshot | null>(null);
     const [stageRuns, setStageRuns] = useState<TaskStageRun[]>([]);
     const [stageAssertions, setStageAssertions] = useState<TaskStageAssertion[]>([]);
@@ -333,13 +439,16 @@ export default function Launcher() {
     const [lockMetricsError, setLockMetricsError] = useState<string | null>(null);
     const [artifactOpenBusy, setArtifactOpenBusy] = useState<string | null>(null);
     const [artifactActionMessage, setArtifactActionMessage] = useState<string | null>(null);
+    const [n8nOpenBusyKey, setN8nOpenBusyKey] = useState<string | null>(null);
     const [recoveryActionBusyKey, setRecoveryActionBusyKey] = useState<string | null>(null);
     const [manualChecklist, setManualChecklist] = useState<ManualResumeChecklist>({
         focusReady: false,
         manualStepDone: false,
         handsOffReady: false,
     });
+    const runPollTokenRef = useRef(0);
     const lastDispatchRef = useRef<{ promptKey: string; ts: number } | null>(null);
+    const sendThrottleRef = useRef<number>(0);
     const inputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const { data: recs, refetch } = useRecommendations();
@@ -347,6 +456,12 @@ export default function Launcher() {
     // Auto-focus input on mount
     useEffect(() => {
         inputRef.current?.focus();
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            runPollTokenRef.current += 1;
+        };
     }, []);
 
     useEffect(() => {
@@ -898,8 +1013,16 @@ export default function Launcher() {
             setRunPhase("manual_required");
             return;
         }
+        if (IN_PROGRESS_RUN_STATUSES.has(statusLower)) {
+            setRunPhase("running");
+            return;
+        }
         if (["failed", "error", "blocked"].includes(statusLower)) {
             setRunPhase("failed");
+            return;
+        }
+        if (statusLower === "business_completed") {
+            setRunPhase("completed");
             return;
         }
         if ((statusLower === "completed" || statusLower === "success") && snapshot.verifyOk) {
@@ -1154,6 +1277,67 @@ export default function Launcher() {
         }
     }, []);
 
+    const toSnapshotFromTaskRun = (run: TaskRun): ExecutionSnapshot => {
+        const statusLower = run.status.toLowerCase();
+        const verifyOk = run.business_complete || statusLower === "business_completed";
+        return {
+            status: run.status,
+            runId: run.run_id,
+            resumeToken: null,
+            plannerComplete: !!run.planner_complete,
+            executionComplete: !!run.execution_complete,
+            businessComplete: !!run.business_complete,
+            verifyOk,
+            verifyIssues: verifyOk ? [] : [`status=${run.status}`],
+            completionScore: null,
+        };
+    };
+
+    const pollRunStatusUntilTerminal = useCallback(
+        async (runId: string) => {
+            if (!runId) return;
+            const token = Date.now();
+            runPollTokenRef.current = token;
+
+            for (let i = 0; i < 60; i += 1) {
+                if (runPollTokenRef.current !== token) return;
+                try {
+                    const run = await fetchTaskRun(runId);
+                    if (runPollTokenRef.current !== token) return;
+                    setLastStatus(run.status);
+                    updateExecutionState(toSnapshotFromTaskRun(run));
+
+                    if (i % 2 === 0) {
+                        await loadRunDiagnostics(runId);
+                    }
+
+                    const statusLower = run.status.toLowerCase();
+                    if (TERMINAL_RUN_STATUSES.has(statusLower)) {
+                        await loadRunDiagnostics(runId);
+                        await loadDodHistory();
+                        if (statusLower === "business_completed") {
+                            triggerSuccess();
+                        } else if (!["approval_required", "manual_required"].includes(statusLower)) {
+                            triggerError();
+                        }
+                        return;
+                    }
+                } catch (error) {
+                    // transient read failure while run is still being updated
+                    console.warn("run polling failed", error);
+                }
+                await new Promise((resolve) => window.setTimeout(resolve, 1500));
+            }
+        },
+        [
+            loadDodHistory,
+            loadRunDiagnostics,
+            updateExecutionState,
+            triggerError,
+            triggerSuccess,
+        ]
+    );
+
     const runPreflightCheck = useCallback(async (silent: boolean = false): Promise<boolean> => {
         setPreflightLoading(true);
         setPreflightError(null);
@@ -1333,6 +1517,25 @@ export default function Launcher() {
             setArtifactOpenBusy(null);
         }
     }, [recordRecoveryAction]);
+
+    const openExternalTarget = useCallback(async (target: string) => {
+        const candidate = target.trim();
+        if (!candidate) {
+            throw new Error("empty target");
+        }
+        const tauriMeta =
+            (window as WindowWithTauriMeta).__TAURI_METADATA__ ||
+            (window as WindowWithTauriMeta).__TAURI__?.metadata ||
+            (window as WindowWithTauriMeta).__TAURI_INTERNALS__?.metadata;
+        if (tauriMeta) {
+            await invoke<string>("open_external_target", { target: candidate });
+            return;
+        }
+        const popup = window.open(candidate, "_blank", "noopener,noreferrer");
+        if (!popup) {
+            throw new Error("popup_blocked");
+        }
+    }, []);
 
     const copyArtifactPayload = useCallback(async (artifact: TaskRunArtifact) => {
         const payload = JSON.stringify(
@@ -1691,6 +1894,136 @@ export default function Launcher() {
         }
 
         try {
+            const useGoalRunPath =
+                (composerMode === "nl" || composerMode === "program") &&
+                goalRunAvailable !== false;
+            let fallbackToLegacyFromGoalRun = false;
+            if (useGoalRunPath) {
+                try {
+                    const goalRes = await agentGoalRun(prompt);
+                    if (goalRunAvailable !== true) {
+                        setGoalRunAvailable(true);
+                    }
+                    const goalStatusLower = goalRes.status.toLowerCase();
+                    const goalStatusInProgress = IN_PROGRESS_RUN_STATUSES.has(goalStatusLower);
+                    setLastPlanId(null);
+                    setLastStatus(goalRes.status);
+                    updateExecutionState({
+                        status: goalRes.status,
+                        runId: goalRes.run_id,
+                        resumeToken: null,
+                        plannerComplete: !!goalRes.planner_complete,
+                        executionComplete: !!goalRes.execution_complete,
+                        businessComplete: !!goalRes.business_complete,
+                        verifyOk: !!goalRes.business_complete,
+                        verifyIssues: goalRes.business_complete ? [] : ["business_complete=false"],
+                        completionScore: null,
+                    });
+                    await loadRunDiagnostics(goalRes.run_id);
+                    await loadDodHistory();
+
+                    const summaryLines = [
+                        `**Mode**: goal-run (${composerMode})`,
+                        `**Status**: ${goalRes.status}`,
+                        `**Run ID**: ${goalRes.run_id}`,
+                        `**Planner Complete**: ${goalRes.planner_complete ? "yes" : "no"}`,
+                        `**Execution Complete**: ${goalRes.execution_complete ? "yes" : "no"}`,
+                        `**Business Complete**: ${goalRes.business_complete ? "yes" : "no"}`,
+                        goalRes.summary ? `**Summary**: ${goalRes.summary}` : "",
+                    ];
+
+                    setResults([{
+                        type:
+                            goalRes.business_complete ||
+                            goalStatusInProgress ||
+                            goalStatusLower === "approval_required" ||
+                            goalStatusLower === "manual_required"
+                                ? "response"
+                                : "error",
+                        content: summaryLines.filter(Boolean).join("\n"),
+                    }]);
+                    setInput("");
+
+                    if (goalStatusLower === "approval_required") {
+                        setRunPhase("approval_required");
+                    } else if (goalStatusLower === "manual_required") {
+                        setRunPhase("manual_required");
+                    } else if (
+                        goalRes.business_complete ||
+                        goalStatusLower === "business_completed"
+                    ) {
+                        setRunPhase("completed");
+                        triggerSuccess();
+                    } else if (goalStatusInProgress) {
+                        setRunPhase("running");
+                        void pollRunStatusUntilTerminal(goalRes.run_id);
+                    } else {
+                        setRunPhase("failed");
+                        triggerError();
+                    }
+                    return;
+                } catch (goalRunError) {
+                    if (!isGoalRunEndpointUnavailable(goalRunError)) {
+                        throw goalRunError;
+                    }
+                    setGoalRunAvailable(false);
+                    if (isLegacyGoalFallbackEnabled()) {
+                        fallbackToLegacyFromGoalRun = true;
+                        console.warn(
+                            "goal-run endpoint unavailable. Falling back to legacy goal path.",
+                            goalRunError
+                        );
+                    } else {
+                        console.warn(
+                            "goal-run endpoint unavailable. Legacy fallback disabled; using intent/plan/execute path.",
+                            goalRunError
+                        );
+                    }
+                }
+            }
+
+            if (fallbackToLegacyFromGoalRun) {
+                try {
+                    const legacyRes = await executeGoal(prompt);
+                    const legacyStatus = (legacyRes.status || "started").toLowerCase();
+                    setLastPlanId(null);
+                    setLastStatus(legacyRes.status);
+                    setRunSnapshot({
+                        status: legacyRes.status || "started",
+                        runId: null,
+                        resumeToken: null,
+                        plannerComplete: legacyStatus !== "error",
+                        executionComplete: false,
+                        businessComplete: false,
+                        verifyOk: legacyStatus !== "error",
+                        verifyIssues: legacyStatus === "error" ? [legacyRes.message] : [],
+                        completionScore: null,
+                    });
+                    setResults([{
+                        type: legacyStatus === "error" ? "error" : "response",
+                        content: [
+                            `**Mode**: legacy-goal (${composerMode})`,
+                            `**Status**: ${legacyRes.status || "started"}`,
+                            `**Message**: ${legacyRes.message || "Goal started."}`,
+                        ].join("\n"),
+                    }]);
+                    if (legacyStatus === "error") {
+                        setRunPhase("failed");
+                        triggerError();
+                    } else {
+                        setRunPhase("running");
+                        triggerSuccess();
+                        setInput("");
+                    }
+                    return;
+                } catch (legacyGoalError) {
+                    console.warn(
+                        "legacy goal endpoint failed. Trying intent/plan/execute fallback.",
+                        legacyGoalError
+                    );
+                }
+            }
+
             const intentRes = await agentIntent(prompt);
             if (intentRes.missing_slots && intentRes.missing_slots.length > 0) {
                 const followUp = intentRes.follow_up || "추가 정보가 필요합니다.";
@@ -1732,6 +2065,9 @@ export default function Launcher() {
             await loadDodHistory();
 
             const summaryLines = [
+                fallbackToLegacyFromGoalRun
+                    ? `**Mode**: legacy fallback (${composerMode})`
+                    : "",
                 `**Intent**: ${intentRes.intent} (${Math.round(intentRes.confidence * 100)}%)`,
                 `**Status**: ${execRes.status}`,
                 `**Profile**: ${execRes.profile ?? effectiveProfile}${execRes.collision_policy ? ` (collision=${execRes.collision_policy})` : ""}`,
@@ -1798,6 +2134,7 @@ export default function Launcher() {
                     data?: {
                         error?: string;
                         message?: string;
+                        detail?: string;
                         lock_scope?: string;
                         active_plan_id?: string;
                     };
@@ -1835,17 +2172,44 @@ export default function Launcher() {
                 triggerError();
                 return;
             }
-            try {
-                const res = await sendChatMessage(prompt);
-                setResults([{ type: 'response', content: res.response }]);
-                setInput("");
-                setRunPhase("completed");
-                triggerSuccess();
-            } catch {
-                setResults([{ type: 'error', content: "Failed to reach agent." }]);
-                setRunPhase("failed");
-                triggerError();
+            if (shouldTryNlChatFallback(error)) {
+                try {
+                    const res = await sendChatMessage(prompt);
+                    setResults([{ type: 'response', content: res.response }]);
+                    setInput("");
+                    setRunPhase("completed");
+                    triggerSuccess();
+                    return;
+                } catch {
+                    // fall through to explicit error below
+                }
             }
+            const statusCode = maybe.response?.status;
+            const errorDetail =
+                maybe.response?.data?.detail &&
+                typeof maybe.response.data.detail === "string"
+                    ? maybe.response.data.detail
+                    : "";
+            const lowerErr = `${maybe.response?.data?.error ?? ""} ${errorDetail} ${maybe.message ?? ""}`.toLowerCase();
+            const detailMsg =
+                errorDetail ||
+                maybe.response?.data?.message ||
+                maybe.response?.data?.error ||
+                maybe.message ||
+                "Failed to reach agent.";
+            const normalizedMsg =
+                lowerErr.includes("screen capture unavailable") ||
+                lowerErr.includes("permission missing")
+                    ? "화면 캡처 권한이 없어 실행이 중단됐습니다. 시스템 설정에서 Steer OS/Terminal의 화면 기록 권한을 켠 뒤 다시 시도하세요."
+                    : detailMsg;
+            setResults([
+                {
+                    type: "error",
+                    content: `실행 실패${statusCode ? ` (${statusCode})` : ""}: ${normalizedMsg}`,
+                },
+            ]);
+            setRunPhase("failed");
+            triggerError();
         } finally {
             setLoading(false);
         }
@@ -1866,16 +2230,72 @@ export default function Launcher() {
     }, [pendingDispatch]);
 
     const handleSend = async () => {
-        await dispatchPrompt(input);
+        const prompt = input.trim();
+        if (!prompt || loading || isExecutionLocked) {
+            return;
+        }
+        // IME composition state가 드물게 고착되는 케이스를 방어한다.
+        if (isComposing) {
+            const composingMs = Date.now() - (composingSinceRef.current || Date.now());
+            if (composingMs < 1500) {
+                return;
+            }
+            setIsComposing(false);
+            composingSinceRef.current = 0;
+        }
+        if (isComposing) {
+            return;
+        }
+        const now = Date.now();
+        if (now - sendThrottleRef.current < 650) {
+            return;
+        }
+        sendThrottleRef.current = now;
+        await dispatchPrompt(prompt);
     };
 
     const handleSuggestionClick = (suggestion: string) => {
+        setIsComposing(false);
         setInput(suggestion);
         inputRef.current?.focus();
     };
 
     const handleQuickProgramAction = async (action: QuickProgramAction) => {
         await dispatchPrompt(action.prompt);
+    };
+
+    const handleTelegramListenerCommand = async (
+        command: "telegram listener start" | "telegram listener status"
+    ) => {
+        if (loading || isExecutionLocked) return;
+        setShowDetailPanel(true);
+        setLoading(true);
+        setRunPhase("running");
+        setPendingApproval(null);
+        setRecoveryActionBusyKey(null);
+        try {
+            const res = await sendChatMessage(command);
+            setResults([
+                {
+                    type: "response",
+                    content: [
+                        "**Telegram Listener**",
+                        `- 요청: \`${command}\``,
+                        `- 응답: ${res.response}`,
+                    ].join("\n"),
+                },
+            ]);
+            setRunPhase("completed");
+            triggerSuccess();
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Telegram listener command failed.";
+            setResults([{ type: "error", content: message }]);
+            setRunPhase("failed");
+            triggerError();
+        } finally {
+            setLoading(false);
+        }
     };
 
     const extractErrorMessage = (error: unknown) => {
@@ -2155,7 +2575,52 @@ export default function Launcher() {
         });
         setApprovingIds(prev => new Set(prev).add(id));
         try {
-            await approveRecommendation(id);
+            const approved = await approveRecommendation(id);
+            const sourceRec = (recs ?? []).find((rec) => rec.id === id);
+            const workflowId = approved.workflow_id?.trim() || approved.id?.trim() || sourceRec?.workflow_id?.trim() || null;
+            const workflowUrl = approved.workflow_url?.trim() || resolveRecommendationWorkflowUrl(sourceRec ?? null, workflowId);
+
+            if (workflowUrl) {
+                const busyKey = `approve:${id}`;
+                setN8nOpenBusyKey(busyKey);
+                try {
+                    await openExternalTarget(workflowUrl);
+                    setResults([
+                        {
+                            type: "response",
+                            content: [
+                                "**Workflow 승인 완료**",
+                                `- recommendation_id: \`${id}\``,
+                                workflowId ? `- workflow_id: \`${workflowId}\`` : "",
+                                `- n8n 편집기: ${workflowUrl}`,
+                                "- n8n 화면을 열어 생성 결과를 바로 확인하세요.",
+                            ]
+                                .filter(Boolean)
+                                .join("\n"),
+                        },
+                    ]);
+                } catch (openError) {
+                    const openMsg =
+                        openError instanceof Error ? openError.message : String(openError);
+                    setResults([
+                        {
+                            type: "response",
+                            content: [
+                                "**Workflow 승인 완료 (열기 실패)**",
+                                `- recommendation_id: \`${id}\``,
+                                workflowId ? `- workflow_id: \`${workflowId}\`` : "",
+                                `- n8n URL: ${workflowUrl}`,
+                                `- 열기 오류: ${openMsg}`,
+                            ]
+                                .filter(Boolean)
+                                .join("\n"),
+                        },
+                    ]);
+                } finally {
+                    setShowDetailPanel(true);
+                    setN8nOpenBusyKey(null);
+                }
+            }
             triggerSuccess();
         } catch (e) {
             console.error("Approve failed", e);
@@ -2190,7 +2655,17 @@ export default function Launcher() {
     };
 
     // Keyboard Handler
-    const handleKeyDown = async (e: React.KeyboardEvent) => {
+    const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+        const nativeEvent = e.nativeEvent as KeyboardEvent;
+        const composingMs = Date.now() - (composingSinceRef.current || Date.now());
+        const composingHot = isComposing && composingMs < 1500;
+        if (composingHot || nativeEvent.isComposing || nativeEvent.keyCode === 229) {
+            return;
+        }
+        if (isComposing && !composingHot) {
+            setIsComposing(false);
+            composingSinceRef.current = 0;
+        }
         if (isExecutionLocked && e.key === "Enter") {
             e.preventDefault();
             return;
@@ -2204,8 +2679,8 @@ export default function Launcher() {
             e.preventDefault();
             setSelectedIndex(prev => (prev - 1 + navigableItems.length) % navigableItems.length);
         } else if (e.key === "Enter") {
-            if (input.trim() && navigableItems.length === 0) {
-                e.preventDefault();
+            e.preventDefault();
+            if (input.trim()) {
                 await handleSend();
                 return;
             }
@@ -2213,14 +2688,32 @@ export default function Launcher() {
             if (navigableItems.length > 0) {
                 const selected = navigableItems[selectedIndex];
                 if (selected && selected.type === 'recommendation') {
-                    e.preventDefault();
                     const rec = selected.data as { id: number; title: string; summary: string; status: string };
                     await handleApprove(rec.id);
                 }
-            } else if (input.trim()) {
-                await handleSend();
             }
         }
+    };
+
+    const handleInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+        const pasted = e.clipboardData.getData("text");
+        if (!pasted) return;
+        e.preventDefault();
+        const normalized = pasted.replace(/\s+/g, " ").trim();
+        const target = e.currentTarget;
+        const start = target.selectionStart ?? target.value.length;
+        const end = target.selectionEnd ?? target.value.length;
+        const nextValue =
+            target.value.slice(0, start) + normalized + target.value.slice(end);
+        setInput(nextValue);
+        requestAnimationFrame(() => {
+            const caret = start + normalized.length;
+            try {
+                target.setSelectionRange(caret, caret);
+            } catch {
+                // no-op
+            }
+        });
     };
 
     const handleBackgroundClick = async (e: React.MouseEvent) => {
@@ -2266,7 +2759,10 @@ export default function Launcher() {
                     <div className="flex items-center gap-3">
                         <div className="inline-flex items-center gap-1 rounded-xl bg-white/6 p-1 shrink-0">
                             <button
-                                onClick={() => setComposerMode("nl")}
+                                onClick={() => {
+                                    setIsComposing(false);
+                                    setComposerMode("nl");
+                                }}
                                 disabled={isExecutionLocked}
                                 className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${composerMode === "nl"
                                     ? "bg-white/15 text-white"
@@ -2276,7 +2772,10 @@ export default function Launcher() {
                                 자연어
                             </button>
                             <button
-                                onClick={() => setComposerMode("chat")}
+                                onClick={() => {
+                                    setIsComposing(false);
+                                    setComposerMode("chat");
+                                }}
                                 disabled={isExecutionLocked}
                                 className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${composerMode === "chat"
                                     ? "bg-white/15 text-white"
@@ -2286,7 +2785,10 @@ export default function Launcher() {
                                 대화
                             </button>
                             <button
-                                onClick={() => setComposerMode("program")}
+                                onClick={() => {
+                                    setIsComposing(false);
+                                    setComposerMode("program");
+                                }}
                                 disabled={isExecutionLocked}
                                 className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${composerMode === "program"
                                     ? "bg-white/15 text-white"
@@ -2413,15 +2915,28 @@ export default function Launcher() {
                                 }
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
+                                onCompositionStart={() => {
+                                    composingSinceRef.current = Date.now();
+                                    setIsComposing(true);
+                                }}
+                                onCompositionEnd={() => {
+                                    composingSinceRef.current = 0;
+                                    setIsComposing(false);
+                                }}
+                                onBlur={() => setIsComposing(false)}
+                                onPaste={handleInputPaste}
                                 onKeyDown={handleKeyDown}
-                                disabled={isExecutionLocked}
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
                                 autoFocus
                             />
                         </div>
 
                         <button
                             onClick={handleSend}
-                            disabled={!input.trim() || isExecutionLocked}
+                            disabled={!input.trim() || isExecutionLocked || loading}
                             className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white/18 hover:bg-white/30 disabled:opacity-40 text-white flex items-center justify-center transition-colors"
                         >
                             {loading ? (
@@ -2522,6 +3037,24 @@ export default function Launcher() {
                                                         className="px-2 py-1 rounded border border-amber-300/40 bg-amber-400/20 hover:bg-amber-400/30 disabled:opacity-50"
                                                     >
                                                         {preflightFixBusy === "open_screen_capture_settings" ? "처리 중..." : "화면 기록 설정 열기"}
+                                                    </button>
+                                                )}
+                                                {screenCapturePreflight && !screenCapturePreflight.ok && (
+                                                    <button
+                                                        onClick={() => void handlePreflightFix("reveal_core_binary")}
+                                                        disabled={!!preflightFixBusy || preflightLoading || isExecutionLocked}
+                                                        className="px-2 py-1 rounded border border-amber-300/40 bg-amber-400/20 hover:bg-amber-400/30 disabled:opacity-50"
+                                                    >
+                                                        {preflightFixBusy === "reveal_core_binary" ? "처리 중..." : "코어 파일 보기"}
+                                                    </button>
+                                                )}
+                                                {screenCapturePreflight && !screenCapturePreflight.ok && (
+                                                    <button
+                                                        onClick={() => void handlePreflightFix("request_screen_capture_access")}
+                                                        disabled={!!preflightFixBusy || preflightLoading || isExecutionLocked}
+                                                        className="px-2 py-1 rounded border border-amber-300/40 bg-amber-400/20 hover:bg-amber-400/30 disabled:opacity-50"
+                                                    >
+                                                        {preflightFixBusy === "request_screen_capture_access" ? "처리 중..." : "권한 요청"}
                                                     </button>
                                                 )}
                                             </div>
@@ -2657,6 +3190,22 @@ export default function Launcher() {
                                 title="대화 모드"
                             >
                                 <MessageCircle className="w-4 h-4" />
+                            </button>
+                            <button
+                                onClick={() => void handleTelegramListenerCommand("telegram listener start")}
+                                disabled={loading || isExecutionLocked}
+                                className="text-[11px] px-2.5 py-1 rounded-full border border-sky-400/30 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="텔레그램 리스너 시작"
+                            >
+                                TG 시작
+                            </button>
+                            <button
+                                onClick={() => void handleTelegramListenerCommand("telegram listener status")}
+                                disabled={loading || isExecutionLocked}
+                                className="text-[11px] px-2.5 py-1 rounded-full border border-white/20 bg-white/5 text-gray-200 hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="텔레그램 리스너 상태"
+                            >
+                                TG 상태
                             </button>
                             <span className="text-xl font-semibold text-gray-300 ml-1">5.2</span>
                         </div>
@@ -3388,6 +3937,7 @@ export default function Launcher() {
                                         </div>
                                         {pendingRecs.map((rec, idx) => {
                                             const isSel = navigableItems[selectedIndex]?.id === `rec-${rec.id}`;
+                                            const recWorkflowUrl = resolveRecommendationWorkflowUrl(rec);
                                             return (
                                                 <div
                                                     key={rec.id}
@@ -3431,6 +3981,49 @@ export default function Launcher() {
                                                         >
                                                             <Pin className="w-3 h-3" />
                                                         </button>
+
+                                                        {recWorkflowUrl && (
+                                                            <button
+                                                                onClick={async (e) => {
+                                                                    e.stopPropagation();
+                                                                    const busyKey = `rec:${rec.id}`;
+                                                                    setN8nOpenBusyKey(busyKey);
+                                                                    try {
+                                                                        await openExternalTarget(recWorkflowUrl);
+                                                                        setResults([
+                                                                            {
+                                                                                type: "response",
+                                                                                content: [
+                                                                                    "**n8n 편집기 열기**",
+                                                                                    `- recommendation_id: \`${rec.id}\``,
+                                                                                    rec.workflow_id ? `- workflow_id: \`${rec.workflow_id}\`` : "",
+                                                                                    `- URL: ${recWorkflowUrl}`,
+                                                                                ]
+                                                                                    .filter(Boolean)
+                                                                                    .join("\n"),
+                                                                            },
+                                                                        ]);
+                                                                        setShowDetailPanel(true);
+                                                                    } catch (openError) {
+                                                                        const openMsg =
+                                                                            openError instanceof Error ? openError.message : String(openError);
+                                                                        setApproveErrors((prev) => ({
+                                                                            ...prev,
+                                                                            [rec.id]: `n8n 열기 실패: ${openMsg}`,
+                                                                        }));
+                                                                    } finally {
+                                                                        setN8nOpenBusyKey(null);
+                                                                    }
+                                                                }}
+                                                                disabled={n8nOpenBusyKey === `rec:${rec.id}`}
+                                                                className={`text-xs px-2 py-1 rounded transition-colors border ${isSel
+                                                                    ? 'bg-sky-500 text-white border-sky-400'
+                                                                    : 'text-sky-200 bg-sky-500/20 border-sky-400/30 hover:bg-sky-500/30'
+                                                                    } ${n8nOpenBusyKey === `rec:${rec.id}` ? 'opacity-60 cursor-wait' : ''}`}
+                                                            >
+                                                                {n8nOpenBusyKey === `rec:${rec.id}` ? '열기…' : 'n8n'}
+                                                            </button>
+                                                        )}
 
                                                         <button
                                                             onClick={(e) => {

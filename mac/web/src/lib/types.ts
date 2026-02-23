@@ -32,6 +32,18 @@ export const RecommendationSchema = z.object({
     confidence: z.number(),
     evidence: z.array(z.string()).optional(), // [NEW] Explainability
     last_error: z.string().nullable().optional(),
+    workflow_id: z.string().nullable().optional(),
+    workflow_url: z.string().nullable().optional(),
+});
+
+export const ApproveRecommendationResponseSchema = z.object({
+    status: z.string(),
+    id: z.string().nullable().optional(),
+    workflow_id: z.string().nullable().optional(),
+    workflow_url: z.string().nullable().optional(),
+    approved_now: z.boolean().optional(),
+    reused_existing: z.boolean().optional(),
+    message: z.string().optional(),
 });
 
 export const RecommendationMetricsSchema = z.object({
@@ -282,6 +294,15 @@ export const AgentApproveResponseSchema = z.object({
     policy: z.string(),
 });
 
+export const AgentGoalRunResponseSchema = z.object({
+    run_id: z.string(),
+    planner_complete: z.boolean(),
+    execution_complete: z.boolean(),
+    business_complete: z.boolean(),
+    status: z.string(),
+    summary: z.string().nullable().optional(),
+});
+
 export const ApprovalPolicySchema = z.object({
     policy_key: z.string(),
     decision: z.string(),
@@ -428,6 +449,7 @@ export type SystemStatus = z.infer<typeof SystemStatusSchema>;
 export type LogEntry = z.infer<typeof LogEntrySchema>;
 export type Routine = z.infer<typeof RoutineSchema>;
 export type Recommendation = z.infer<typeof RecommendationSchema>;
+export type ApproveRecommendationResponse = z.infer<typeof ApproveRecommendationResponseSchema>;
 export type RecommendationMetrics = z.infer<typeof RecommendationMetricsSchema>;
 export type ExecApproval = z.infer<typeof ExecApprovalSchema>;
 export type ExecAllowlistEntry = z.infer<typeof ExecAllowlistSchema>;
@@ -449,6 +471,7 @@ export type ExecutionProfile = z.infer<typeof ExecutionProfileSchema>;
 export type AgentExecuteResponse = z.infer<typeof AgentExecuteResponseSchema>;
 export type AgentVerifyResponse = z.infer<typeof AgentVerifyResponseSchema>;
 export type AgentApproveResponse = z.infer<typeof AgentApproveResponseSchema>;
+export type AgentGoalRunResponse = z.infer<typeof AgentGoalRunResponseSchema>;
 export type ApprovalPolicy = z.infer<typeof ApprovalPolicySchema>;
 export type NLRunMetrics = z.infer<typeof NLRunMetricsSchema>;
 export type NLRun = z.infer<typeof NLRunSchema>;
