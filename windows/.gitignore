@@ -39,5 +39,3 @@ scenario_results/
 core/steer_mem/context_logs.lance/_transactions/
 core/steer_mem/context_logs.lance/_versions/
 core/steer_mem/context_logs.lance/data/
-
-.claude/
