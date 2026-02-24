@@ -1,0 +1,16 @@
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":18824,"scope":"cwd-6924fb7c8b05","seq":1,"ts":"2026-02-23T01:46:41.278168300+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:18824:1771811201947","seq":2,"tick_seconds":60,"ts":"2026-02-23T01:46:41.947933700+00:00","type":"scheduler.start"}
+{"owner_dead":true,"owner_pid":18824,"owner_reused":false,"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","scope":"cwd-6924fb7c8b05","seq":1,"stale":false,"ts":"2026-02-23T01:47:02.910404100+00:00","type":"singleton_lock.stale_recovered"}
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":9440,"scope":"cwd-6924fb7c8b05","seq":2,"ts":"2026-02-23T01:47:02.923668100+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:9440:1771811223314","seq":3,"tick_seconds":60,"ts":"2026-02-23T01:47:03.314464500+00:00","type":"scheduler.start"}
+{"owner_dead":true,"owner_pid":9440,"owner_reused":false,"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","scope":"cwd-6924fb7c8b05","seq":1,"stale":true,"ts":"2026-02-23T02:08:47.263993400+00:00","type":"singleton_lock.stale_recovered"}
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":28528,"scope":"cwd-6924fb7c8b05","seq":2,"ts":"2026-02-23T02:08:47.264702200+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:28528:1771812527745","seq":3,"tick_seconds":60,"ts":"2026-02-23T02:08:47.745800400+00:00","type":"scheduler.start"}
+{"owner_dead":true,"owner_pid":28528,"owner_reused":false,"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","scope":"cwd-6924fb7c8b05","seq":1,"stale":false,"ts":"2026-02-23T02:12:14.907690+00:00","type":"singleton_lock.stale_recovered"}
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":24844,"scope":"cwd-6924fb7c8b05","seq":2,"ts":"2026-02-23T02:12:14.908341700+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:24844:1771812735309","seq":3,"tick_seconds":60,"ts":"2026-02-23T02:12:15.309684300+00:00","type":"scheduler.start"}
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":31784,"scope":"cwd-6924fb7c8b05","seq":1,"ts":"2026-02-23T07:28:53.356122300+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:31784:1771831733766","seq":2,"tick_seconds":60,"ts":"2026-02-23T07:28:53.766740+00:00","type":"scheduler.start"}
+{"owner_dead":true,"owner_pid":31784,"owner_reused":false,"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","scope":"cwd-6924fb7c8b05","seq":1,"stale":false,"ts":"2026-02-23T07:42:54.891022600+00:00","type":"singleton_lock.stale_recovered"}
+{"path":"C:\\Users\\Admin\\.steer\\locks\\steer.cwd-6924fb7c8b05.lock","pid":32700,"scope":"cwd-6924fb7c8b05","seq":2,"ts":"2026-02-23T07:42:54.891729800+00:00","type":"singleton_lock.acquired"}
+{"claim_owner":"scheduler:32700:1771832575330","seq":3,"tick_seconds":60,"ts":"2026-02-23T07:42:55.331329+00:00","type":"scheduler.start"}
