@@ -35,10 +35,10 @@ export function useRoutines() {
     });
 }
 
-export function useRecommendations() {
+export function useRecommendations(category: string = "work") {
     return useQuery({
-        queryKey: ["recommendations"],
-        queryFn: fetchRecommendations,
+        queryKey: ["recommendations", category],
+        queryFn: () => fetchRecommendations(category),
         refetchInterval: 10000,
         retry: 2,
         retryDelay,
@@ -119,7 +119,15 @@ export function useSemanticVerification() {
 
 export function useReleaseGate(overrides?: ReleaseGateOverrides) {
     return useQuery({
-        queryKey: ["releaseGate", overrides?.perf_regression_pct ?? "default", overrides?.quality_drop ?? "default"],
+        queryKey: [
+            "releaseGate",
+            overrides?.perf_regression_pct ?? "default",
+            overrides?.quality_drop ?? "default",
+            overrides?.launch_error_rate_pct ?? "default",
+            overrides?.launch_low_confidence_rate_pct ?? "default",
+            overrides?.launch_cache_hit_rate_drop_pct ?? "default",
+            overrides?.recommendation_approval_rate_min ?? "default",
+        ],
         queryFn: () => fetchReleaseGate(overrides),
         refetchInterval: 60000,
         refetchIntervalInBackground: false,

@@ -1138,34 +1138,82 @@ async fn main() -> anyhow::Result<()> {
                     // Generate recommendations if LLM available
                     if let Some(brain) = &llm_client {
                         println!("\n🤖 Generating workflow recommendations...");
+                        let preference_history = db::get_recent_recommendations(
+                            local_os_agent::recommendation_policy::auto_recommendation_history_limit(),
+                        )
+                        .unwrap_or_default();
                         for pattern in patterns {
-                            if pattern.occurrences >= 3 && pattern.similarity_score >= 0.8 {
-                                match brain
-                                    .generate_recommendation_from_pattern(
-                                        &pattern.description,
-                                        &pattern.sample_events,
-                                    )
-                                    .await
-                                {
-                                    Ok(mut proposal) => {
-                                        // [Explainability] Inject hard evidence manually
-                                        proposal
-                                            .evidence
-                                            .push(format!("Pattern: {}", pattern.description));
-                                        proposal.evidence.push(format!(
-                                            "Frequency: {} occurrences in last 7 days",
-                                            pattern.occurrences
-                                        ));
+                            if !detector.should_recommend(&pattern) {
+                                continue;
+                            }
+                            match brain
+                                .generate_recommendation_from_pattern(
+                                    &pattern.description,
+                                    &pattern.sample_events,
+                                )
+                                .await
+                            {
+                                Ok(mut proposal) => {
+                                    // [Explainability] Inject hard evidence manually
+                                    proposal
+                                        .evidence
+                                        .push(format!("Pattern: {}", pattern.description));
+                                    proposal.evidence.push(format!(
+                                        "Frequency: {} occurrences in last 7 days",
+                                        pattern.occurrences
+                                    ));
+                                    proposal.evidence.push(format!(
+                                        "Span: {} distinct day(s)",
+                                        pattern.distinct_days
+                                    ));
+                                    let decision =
+                                        local_os_agent::recommendation_policy::apply_mvp_policy(
+                                            &mut proposal,
+                                            Some(&pattern),
+                                        );
+                                    if !decision.accepted {
+                                        println!(
+                                            "   🧹 Skipped non-work recommendation: {} [{} {:.2}]",
+                                            proposal.title,
+                                            decision.category,
+                                            decision.business_score
+                                        );
+                                        continue;
+                                    }
+                                    local_os_agent::recommendation_policy::apply_recommendation_preferences(
+                                        &mut proposal,
+                                        &preference_history,
+                                    );
 
-                                        if proposal.confidence >= 0.7 {
-                                            if let Ok(true) = db::insert_recommendation(&proposal) {
-                                                println!("   ✨ New recommendation: {} (confidence: {:.0}%)", 
-                                                    proposal.title, proposal.confidence * 100.0);
-                                            }
+                                    if proposal.confidence >= 0.7 {
+                                        let history_limit = local_os_agent::recommendation_policy::auto_recommendation_history_limit();
+                                        let pending = db::get_recent_recommendations(history_limit)
+                                            .unwrap_or_default();
+                                        let queue_decision = local_os_agent::recommendation_policy::admit_auto_recommendation(
+                                            &proposal,
+                                            &pending,
+                                        );
+                                        if !queue_decision.accepted {
+                                            println!(
+                                                "   🧹 Suppressed auto recommendation: {} [{} / {} / {:.2}] {}",
+                                                proposal.title,
+                                                queue_decision.pending_same_category,
+                                                queue_decision.pending_limit,
+                                                queue_decision.priority_score,
+                                                queue_decision.reasons.join(", ")
+                                            );
+                                            continue;
+                                        }
+                                        if let Ok(true) = db::insert_recommendation(&proposal) {
+                                            println!(
+                                                "   ✨ New recommendation: {} (confidence: {:.0}%)",
+                                                proposal.title,
+                                                proposal.confidence * 100.0
+                                            );
                                         }
                                     }
-                                    Err(e) => println!("   ⚠️  Skipped pattern: {}", e),
                                 }
+                                Err(e) => println!("   ⚠️  Skipped pattern: {}", e),
                             }
                         }
                         println!("\nRun 'recommendations' to see pending recommendations.");

@@ -63,7 +63,7 @@ pub fn queue_manual_workflow_recommendation(
         return Err(anyhow!("workflow prompt is empty"));
     }
     let short = summarize_prompt(prompt_trimmed, 48);
-    let proposal = AutomationProposal {
+    let mut proposal = AutomationProposal {
         title: format!("Manual Workflow: {}", short),
         summary: format!(
             "Manual workflow request captured from {} (approval required before creation).",
@@ -78,7 +78,17 @@ pub fn queue_manual_workflow_recommendation(
             format!("prompt={}", summarize_prompt(prompt_trimmed, 160)),
         ],
         pattern_id: None,
+        category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+        business_score: 0.0,
     };
+    let preference_history = db::get_recent_recommendations(
+        crate::recommendation_policy::auto_recommendation_history_limit(),
+    )
+    .unwrap_or_default();
+    crate::recommendation_policy::apply_recommendation_preferences(
+        &mut proposal,
+        &preference_history,
+    );
 
     let (recommendation_id, inserted) = insert_or_get_recommendation_id(&proposal)?;
     Ok(ManualWorkflowQueueOutcome {
@@ -280,6 +290,8 @@ fn build_proposal_from_handoff(
             format!("sequence={}", summarize_prompt(&sequence_label, 160)),
         ],
         pattern_id,
+        category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+        business_score: 0.0,
     })
 }
 
@@ -345,10 +357,39 @@ Set STEER_ALLOW_COLLECTOR_DB_MISMATCH=1 only when intentional.",
         });
     }
 
-    let ingest_result = (|| -> Result<(i64, bool)> {
-        let proposal = build_proposal_from_handoff(&row)?;
-        insert_or_get_recommendation_id(&proposal)
-    })();
+    let mut proposal = build_proposal_from_handoff(&row)?;
+    let decision = crate::recommendation_policy::apply_mvp_policy(&mut proposal, None);
+    if !decision.accepted {
+        let detail = format!(
+            "collector handoff skipped by recommendation policy (category={} score={:.2})",
+            decision.category, decision.business_score
+        );
+        collector_pipeline::update_handoff_status(&conn, row.id, "skipped", Some(&detail))?;
+        let _ = db::record_collector_handoff_receipt(
+            &package_id,
+            Some(row.id),
+            "skipped",
+            None,
+            Some(&detail),
+        );
+        return Ok(CollectorHandoffIngestOutcome {
+            status: "skipped".to_string(),
+            detail,
+            package_id: Some(package_id),
+            recommendation_id: None,
+            inserted: false,
+        });
+    }
+    let preference_history = db::get_recent_recommendations(
+        crate::recommendation_policy::auto_recommendation_history_limit(),
+    )
+    .unwrap_or_default();
+    crate::recommendation_policy::apply_recommendation_preferences(
+        &mut proposal,
+        &preference_history,
+    );
+
+    let ingest_result = insert_or_get_recommendation_id(&proposal);
 
     match ingest_result {
         Ok((rec_id, inserted)) => {
@@ -416,5 +457,66 @@ Set STEER_ALLOW_COLLECTOR_DB_MISMATCH=1 only when intentional.",
                 inserted: false,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recommendation::AutomationProposal;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn manual_workflow_queue_applies_review_based_preferences() {
+        db::init().ok();
+        db::clear_recommendations_for_tests();
+
+        let approved = AutomationProposal {
+            title: "Notion Notes".to_string(),
+            summary: "Save notes to Notion".to_string(),
+            trigger: "manual notion".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.8,
+            n8n_prompt: "Create a workflow that stores notes in Notion.".to_string(),
+            evidence: vec![],
+            pattern_id: Some("pref-approved".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.8,
+        };
+        let rejected = AutomationProposal {
+            title: "Telegram Digest".to_string(),
+            summary: "Send digest to Telegram".to_string(),
+            trigger: "manual telegram".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.8,
+            n8n_prompt: "Create a workflow that sends updates to Telegram.".to_string(),
+            evidence: vec![],
+            pattern_id: Some("pref-rejected".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.8,
+        };
+
+        let (approved_id, _) =
+            insert_or_get_recommendation_id(&approved).expect("insert approved preference rec");
+        db::update_recommendation_review_status(approved_id, "approved")
+            .expect("approve notion preference rec");
+
+        let (rejected_id, _) =
+            insert_or_get_recommendation_id(&rejected).expect("insert rejected preference rec");
+        db::update_recommendation_review_status(rejected_id, "rejected")
+            .expect("reject telegram preference rec");
+
+        let outcome = queue_manual_workflow_recommendation(
+            "회의 요약 자동화 만들어줘",
+            "unit.test.manual_workflow",
+        )
+        .expect("queue manual workflow");
+        let rec = db::get_recommendation(outcome.recommendation_id)
+            .expect("get queued recommendation")
+            .expect("queued recommendation row");
+
+        assert!(rec.n8n_prompt.contains("Prefer Notion"));
+        assert!(rec.n8n_prompt.contains("Avoid Telegram"));
     }
 }

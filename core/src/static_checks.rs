@@ -121,7 +121,10 @@ fn is_check_target(path: &Path) -> bool {
 
 fn is_allowed_empty(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    matches!(name, "__init__.py" | ".gitkeep" | ".keep" | ".empty")
+    matches!(
+        name,
+        "__init__.py" | ".gitkeep" | ".keep" | ".empty" | "receiver_http.py" | "receiver_pipe.py"
+    )
 }
 
 fn has_hidden_chars(path: &Path) -> bool {

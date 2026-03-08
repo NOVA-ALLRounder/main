@@ -1,17 +1,63 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Sparkles, Clock, Zap, X } from "lucide-react";
+import { Send, Bot, User, Sparkles, Clock, Zap, X, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { sendChatMessage, createRoutine } from "@/lib/api";
+import { sendChatMessage, createRoutine, submitChatFeedback } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
+import type { ChatRouteMeta } from "@/lib/types";
 
 interface Message {
+    id: number;
     role: "user" | "assistant";
     text: string;
     command?: string;
+    routeMeta?: ChatRouteMeta;
     showRoutineCard?: boolean; // NEW: Flag to show inline routine creation
     routineHint?: string; // Hint from user's message
+    sourceRequest?: string;
+    feedbackSentiment?: "positive" | "negative";
+    feedbackStatus?: string;
+}
+
+function routeKindLabel(routeKind: string): string {
+    switch (routeKind) {
+        case "request_memory":
+            return "request-cache";
+        case "execution_memory":
+            return "execution-cache";
+        case "intent_memory":
+            return "intent-cache";
+        case "deterministic":
+            return "deterministic";
+        case "llm":
+            return "llm";
+        case "ai_digest_auto":
+            return "digest-auto";
+        case "ai_digest_explicit":
+            return "digest-explicit";
+        case "local_command":
+            return "local";
+        case "system_command":
+            return "system";
+        case "low_confidence":
+            return "low-confidence";
+        default:
+            return routeKind;
+    }
+}
+
+function routeMetaBadges(meta: ChatRouteMeta): string[] {
+    const badges = [routeKindLabel(meta.route_kind)];
+    if (meta.request_memory_hit) badges.push("req-hit");
+    if (meta.execution_memory_hit) badges.push("exec-hit");
+    if (meta.intent_memory_hit) badges.push("intent-hit");
+    if (meta.deterministic_used) badges.push("deterministic");
+    if (meta.llm_used) badges.push("llm");
+    if (meta.ai_digest_used) badges.push("digest");
+    if (meta.freshness_bypassed) badges.push("fresh");
+    if (meta.local_only) badges.push("local-only");
+    return [...new Set(badges)];
 }
 
 // Keywords that trigger routine creation UI
@@ -105,28 +151,80 @@ function InlineRoutineCard({ hint, onClose, onCreated, onError }: { hint: string
 export default function ChatPanel() {
     const [input, setInput] = useState("");
     const [messages, setMessages] = useState<Message[]>([
-        { role: "assistant", text: "Hello! I am AllvIa. Try saying '매일 아침 뉴스 요약 해줘' to create a routine!" }
+        { id: 0, role: "assistant", text: "Hello! I am AllvIa. Try saying '매일 아침 뉴스 요약 해줘' to create a routine!" }
     ]);
     const [showRoutineCard, setShowRoutineCard] = useState(false);
     const [routineHint, setRoutineHint] = useState("");
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const nextMessageId = useRef(1);
     const queryClient = useQueryClient();
+
+    const pushMessage = (message: Omit<Message, "id">) => {
+        setMessages(prev => [...prev, { ...message, id: nextMessageId.current++ }]);
+    };
 
     const mutation = useMutation({
         mutationFn: sendChatMessage,
-        onSuccess: (data) => {
+        onSuccess: (data, requestText) => {
             const text =
                 typeof data.response === "string" && data.response.trim().length > 0
                     ? data.response
                     : "✅ 요청을 받았어요. 한 문장만 더 구체적으로 말해주면 바로 도와줄게요.";
-            setMessages(prev => [...prev, { role: "assistant", text, command: data.command }]);
+            pushMessage({
+                role: "assistant",
+                text,
+                command: data.command,
+                routeMeta: data.routeMeta,
+                sourceRequest: requestText,
+            });
             if (data.command === "analyze_patterns") {
                 queryClient.invalidateQueries({ queryKey: ["recommendations"] });
             }
         },
         onError: () => {
-            setMessages(prev => [...prev, { role: "assistant", text: "❌ Failed to reach the brain. Is Core running?" }]);
+            pushMessage({ role: "assistant", text: "❌ Failed to reach the brain. Is Core running?" });
         }
+    });
+
+    const feedbackMutation = useMutation({
+        mutationFn: ({
+            requestText,
+            responseText,
+            command,
+            sentiment,
+        }: {
+            messageId: number;
+            requestText: string;
+            responseText: string;
+            command?: string;
+            sentiment: "positive" | "negative";
+        }) => submitChatFeedback(requestText, responseText, sentiment, command),
+        onSuccess: (data, variables) => {
+            setMessages(prev =>
+                prev.map(msg =>
+                    msg.id === variables.messageId
+                        ? {
+                              ...msg,
+                              feedbackSentiment: variables.sentiment,
+                              feedbackStatus: data.ok
+                                  ? variables.sentiment === "negative" && data.reuse_suppressed
+                                      ? "다음에는 이 응답 캐시를 재사용하지 않음"
+                                      : "피드백 저장됨"
+                                  : "피드백 저장 실패",
+                          }
+                        : msg
+                )
+            );
+        },
+        onError: (_error, variables) => {
+            setMessages(prev =>
+                prev.map(msg =>
+                    msg.id === variables.messageId
+                        ? { ...msg, feedbackStatus: "피드백 저장 실패" }
+                        : msg
+                )
+            );
+        },
     });
 
     const handleSend = () => {
@@ -135,17 +233,17 @@ export default function ChatPanel() {
         const routineIntent = detectRoutineIntent(input);
 
         // Add user message
-        setMessages(prev => [...prev, { role: "user", text: input }]);
+        pushMessage({ role: "user", text: input });
 
         if (routineIntent) {
             // Show inline routine card instead of just sending to backend
             setRoutineHint(routineIntent);
             setShowRoutineCard(true);
-            setMessages(prev => [...prev, {
+            pushMessage({
                 role: "assistant",
                 text: "📋 Got it! I've prepared a routine creation form for you. Fill in the details below:",
                 showRoutineCard: true
-            }]);
+            });
         } else {
             // Normal chat flow
             mutation.mutate(input);
@@ -156,10 +254,10 @@ export default function ChatPanel() {
 
     const handleRoutineCreated = () => {
         setShowRoutineCard(false);
-        setMessages(prev => [...prev, {
+        pushMessage({
             role: "assistant",
             text: "✅ Routine created successfully! Check the Routines tab to see it."
-        }]);
+        });
     };
 
     useEffect(() => {
@@ -177,8 +275,8 @@ export default function ChatPanel() {
             <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
                 {/* Messages Area */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {messages.map((msg, idx) => (
-                        <div key={idx} className={cn("flex w-full gap-3", msg.role === "user" ? "justify-end" : "justify-start")}>
+                    {messages.map((msg) => (
+                        <div key={msg.id} className={cn("flex w-full gap-3", msg.role === "user" ? "justify-end" : "justify-start")}>
                             {msg.role === "assistant" && (
                                 <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
                                     <Bot className="w-4 h-4 text-primary" />
@@ -194,6 +292,77 @@ export default function ChatPanel() {
                                 {msg.command && (
                                     <div className="mt-2 pt-2 border-t border-white/10 text-xs font-mono text-muted-foreground">
                                         Executed: {msg.command}
+                                    </div>
+                                )}
+                                {msg.routeMeta && (
+                                    <div className="mt-2 pt-2 border-t border-white/10 text-[11px] text-muted-foreground">
+                                        <div className="flex flex-wrap gap-1">
+                                            {routeMetaBadges(msg.routeMeta).map((badge) => (
+                                                <span
+                                                    key={`${msg.id}-${badge}`}
+                                                    className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono"
+                                                >
+                                                    {badge}
+                                                </span>
+                                            ))}
+                                            {typeof msg.routeMeta.confidence === "number" && (
+                                                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono">
+                                                    conf {msg.routeMeta.confidence.toFixed(2)}
+                                                </span>
+                                            )}
+                                        </div>
+                                        {msg.routeMeta.note && (
+                                            <div className="mt-1 opacity-80">{msg.routeMeta.note}</div>
+                                        )}
+                                    </div>
+                                )}
+                                {msg.role === "assistant" && msg.sourceRequest && (
+                                    <div className="mt-2 pt-2 border-t border-white/10 flex items-center gap-2 text-xs text-muted-foreground">
+                                        <button
+                                            onClick={() =>
+                                                feedbackMutation.mutate({
+                                                    messageId: msg.id,
+                                                    requestText: msg.sourceRequest!,
+                                                    responseText: msg.text,
+                                                    command: msg.command,
+                                                    sentiment: "positive",
+                                                })
+                                            }
+                                            disabled={feedbackMutation.isPending}
+                                            className={cn(
+                                                "inline-flex items-center gap-1 rounded-md px-2 py-1 transition-colors",
+                                                msg.feedbackSentiment === "positive"
+                                                    ? "bg-emerald-500/20 text-emerald-300"
+                                                    : "bg-white/5 hover:bg-white/10"
+                                            )}
+                                        >
+                                            <ThumbsUp className="w-3 h-3" />
+                                            <span>좋아요</span>
+                                        </button>
+                                        <button
+                                            onClick={() =>
+                                                feedbackMutation.mutate({
+                                                    messageId: msg.id,
+                                                    requestText: msg.sourceRequest!,
+                                                    responseText: msg.text,
+                                                    command: msg.command,
+                                                    sentiment: "negative",
+                                                })
+                                            }
+                                            disabled={feedbackMutation.isPending}
+                                            className={cn(
+                                                "inline-flex items-center gap-1 rounded-md px-2 py-1 transition-colors",
+                                                msg.feedbackSentiment === "negative"
+                                                    ? "bg-rose-500/20 text-rose-300"
+                                                    : "bg-white/5 hover:bg-white/10"
+                                            )}
+                                        >
+                                            <ThumbsDown className="w-3 h-3" />
+                                            <span>별로</span>
+                                        </button>
+                                        {msg.feedbackStatus && (
+                                            <span className="text-[11px] opacity-80">{msg.feedbackStatus}</span>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -218,7 +387,7 @@ export default function ChatPanel() {
                                     onCreated={handleRoutineCreated}
                                     onError={(msg) => {
                                         setShowRoutineCard(false);
-                                        setMessages(prev => [...prev, { role: "assistant", text: `❌ ${msg}` }]);
+                                        pushMessage({ role: "assistant", text: `❌ ${msg}` });
                                     }}
                                 />
                             </div>

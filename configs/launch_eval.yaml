@@ -1,0 +1,465 @@
+report_dir: reports/launch_eval
+include_paths:
+  - launch_eval.generated.yaml
+scenarios:
+  - id: help-local
+    kind: chat
+    description: "Static local help should resolve deterministically without LLM."
+    request:
+      message: "도움말"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-help"
+    expect:
+      command: "help_local"
+      response_contains:
+        - "뉴스 5개 요약해서 노션에 정리해줘"
+
+  - id: workflow-build-deterministic
+    kind: chat
+    description: "Explicit workflow creation should use the deterministic workflow path."
+    request:
+      message: "노션에 회의록 정리하는 워크플로우 만들어줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-workflow"
+    expect:
+      command: "build_workflow"
+      response_contains:
+        - "워크플로우 제안을"
+
+  - id: ai-digest-web-fallback
+    kind: chat
+    description: "Digest-style news requests should auto-route only after the shared chat engine path."
+    request:
+      message: "AI 뉴스 5개 요약해서 노션에 정리해줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-digest"
+    ai_digest_mock:
+      notion_url: "https://www.notion.so/launch-eval-digest"
+      top_headlines_text: "1. 헤드라인 A\n2. 헤드라인 B"
+    expect:
+      command: "ai_digest_program"
+      response_contains:
+        - "노션 링크: https://www.notion.so/launch-eval-digest"
+        - "헤드라인 A"
+
+  - id: calendar-today-deterministic
+    kind: chat
+    description: "Calendar today requests should resolve to the shared deterministic calendar path."
+    request:
+      message: "오늘 일정 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-calendar-today"
+    expect:
+      command: "calendar_today"
+      response_contains_any:
+        - "📅 오늘 일정:"
+        - "📅 오늘 일정이 없습니다."
+        - "Calendar 인증 실패"
+        - "일정 확인 실패"
+
+  - id: calendar-week-deterministic
+    kind: chat
+    description: "Calendar week requests should resolve to the shared deterministic weekly calendar path."
+    request:
+      message: "이번 주 일정 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-calendar-week"
+    expect:
+      command: "calendar_week"
+      response_contains_any:
+        - "📅 이번 주 일정:"
+        - "📅 이번 주 일정이 없습니다."
+        - "Calendar 인증 실패"
+        - "일정 확인 실패"
+
+  - id: gmail-list-deterministic-default
+    kind: chat
+    description: "Mail listing requests should resolve to the shared deterministic Gmail path."
+    request:
+      message: "최근 이메일 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-gmail-default"
+    expect:
+      command: "gmail_list"
+      response_contains_any:
+        - "📧 최근 이메일 5건:"
+        - "📭 새 메일이 없습니다."
+        - "Gmail 인증 실패"
+        - "이메일 가져오기 실패"
+
+  - id: gmail-list-deterministic-count-10
+    kind: chat
+    description: "Parameterized Gmail requests should preserve count correctly."
+    request:
+      message: "최근 이메일 10개 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-gmail-ten"
+    expect:
+      command: "gmail_list"
+      response_contains_any:
+        - "📧 최근 이메일 10건:"
+        - "📭 새 메일이 없습니다."
+        - "Gmail 인증 실패"
+        - "이메일 가져오기 실패"
+
+  - id: analyze-patterns-local
+    kind: chat
+    description: "Pattern analysis requests should stay in the shared local analyzer path."
+    request:
+      message: "패턴 분석"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-analyze-patterns"
+    expect:
+      command: "analyze_patterns"
+      response_contains:
+        - "🔍 분석 완료!"
+
+  - id: request-memory-reuse-help
+    kind: request_memory_reuse
+    description: "Safe static responses should be reusable from scoped request memory."
+    seed:
+      request_text: "도움말"
+      command: "help_local"
+      response_text: "HELP_CACHE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.request_seed"
+    request:
+      message: "도움말"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-request-memory"
+    expect:
+      command: "help_local"
+      response_contains:
+        - "HELP_CACHE_MARKER"
+
+  - id: execution-memory-reuse-gmail
+    kind: execution_memory_reuse
+    description: "Safe read-only Gmail retrieval should reuse execution memory when params match."
+    seed:
+      original_request: "최근 이메일 5개 보여줘"
+      command: "gmail_list"
+      params:
+        count: 5
+      response_text: "📧 EXECUTION_CACHE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.execution_seed"
+      ttl_seconds: 20
+    request:
+      message: "최근 이메일 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-execution-memory"
+    expect:
+      command: "gmail_list"
+      response_contains:
+        - "EXECUTION_CACHE_MARKER"
+
+  - id: request-memory-scope-isolation
+    kind: memory_scope_isolation
+    description: "Scoped request memory must not leak across senders."
+    seed:
+      request_text: "도움말"
+      command: "help_local"
+      response_text: "PRIVATE_SCOPE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.scope_seed"
+      scope:
+        channel: "web"
+        chat_type: "direct"
+        sender: "alice"
+    request:
+      message: "도움말"
+      channel: "web"
+      chat_type: "direct"
+      sender: "bob"
+    expect:
+      command: "help_local"
+      response_contains:
+        - "뉴스 5개 요약해서 노션에 정리해줘"
+      response_not_contains:
+        - "PRIVATE_SCOPE_MARKER"
+
+  - id: request-memory-fresh-bypass
+    kind: request_memory_policy
+    description: "Fresh wording must bypass request response cache for dynamic calendar data."
+    seed:
+      request_text: "오늘 일정 보여줘"
+      command: "calendar_today"
+      response_text: "📅 REQUEST_CACHE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.request_policy"
+    request:
+      message: "지금 오늘 일정 새로고침해서 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-request-fresh"
+    mode: "response"
+    expect_cached: false
+
+  - id: request-memory-negative-feedback-blocks-response
+    kind: request_memory_policy
+    description: "Negative feedback must suppress request response cache reuse."
+    seed:
+      request_text: "오늘 일정 보여줘"
+      command: "calendar_today"
+      response_text: "📅 REQUEST_NEGATIVE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.request_policy"
+    request:
+      message: "오늘 일정 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-request-negative"
+    mode: "response"
+    feedback: "negative"
+    expect_cached: false
+
+  - id: request-memory-negative-feedback-blocks-intent
+    kind: request_memory_policy
+    description: "Negative feedback must suppress request intent reuse as well."
+    seed:
+      request_text: "오늘 일정 보여줘"
+      command: "calendar_today"
+      response_text: "📅 REQUEST_INTENT_NEGATIVE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.request_policy"
+      response_mode: "intent_only"
+    request:
+      message: "오늘 일정 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-request-intent-negative"
+    mode: "intent"
+    feedback: "negative"
+    expect_cached: false
+
+  - id: request-memory-suppressed-record-blocks-response
+    kind: request_memory_policy
+    description: "Operator-suppressed request memory must stay out of reuse."
+    seed:
+      request_text: "오늘 일정 보여줘"
+      command: "calendar_today"
+      response_text: "📅 REQUEST_SUPPRESSED_MARKER"
+      confidence: 0.95
+      source: "launch.eval.request_policy"
+    request:
+      message: "오늘 일정 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-request-suppressed"
+    mode: "response"
+    suppress: true
+    expect_cached: false
+
+  - id: execution-memory-fresh-bypass
+    kind: execution_memory_policy
+    description: "Fresh wording must bypass execution cache for Gmail reads."
+    seed:
+      original_request: "최근 이메일 5개 보여줘"
+      command: "gmail_list"
+      params:
+        count: 5
+      response_text: "📧 EXECUTION_FRESH_MARKER"
+      confidence: 0.95
+      source: "launch.eval.execution_policy"
+      ttl_seconds: 20
+    request:
+      message: "지금 최근 이메일 5개 새로고침"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-execution-fresh"
+    expect_cached: false
+
+  - id: execution-memory-negative-feedback-blocks-reuse
+    kind: execution_memory_policy
+    description: "Negative feedback must suppress execution cache reuse."
+    seed:
+      original_request: "최근 이메일 5개 보여줘"
+      command: "gmail_list"
+      params:
+        count: 5
+      response_text: "📧 EXECUTION_NEGATIVE_MARKER"
+      confidence: 0.95
+      source: "launch.eval.execution_policy"
+      ttl_seconds: 20
+    request:
+      message: "최근 이메일 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-execution-negative"
+    feedback: "negative"
+    expect_cached: false
+
+  - id: execution-memory-count-mismatch-blocks-reuse
+    kind: execution_memory_policy
+    description: "Execution cache must not cross numeric parameter boundaries."
+    seed:
+      original_request: "최근 이메일 5개 보여줘"
+      command: "gmail_list"
+      params:
+        count: 5
+      response_text: "📧 EXECUTION_COUNT_FIVE"
+      confidence: 0.95
+      source: "launch.eval.execution_policy"
+      ttl_seconds: 20
+    request:
+      message: "최근 이메일 10개 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-execution-count"
+    lookup_params:
+      count: 10
+    expect_cached: false
+
+  - id: execution-memory-suppressed-record-blocks-reuse
+    kind: execution_memory_policy
+    description: "Operator-suppressed execution memory must stay out of reuse."
+    seed:
+      original_request: "최근 이메일 5개 보여줘"
+      command: "gmail_list"
+      params:
+        count: 5
+      response_text: "📧 EXECUTION_SUPPRESSED_MARKER"
+      confidence: 0.95
+      source: "launch.eval.execution_policy"
+      ttl_seconds: 20
+    request:
+      message: "최근 이메일 보여줘"
+      channel: "web"
+      chat_type: "direct"
+      sender: "launch-eval-execution-suppressed"
+    suppress: true
+    expect_cached: false
+
+  - id: business-contract-structured-write-pass
+    kind: business_contract
+    description: "Structured evidence should satisfy write-action business contract for mail, notion, telegram, and textedit."
+    plan:
+      intent: "generic_task"
+      descriptions:
+        - "Mail에서 qed4950@gmail.com으로 결과를 보내세요."
+        - "Notion에 요약을 작성하세요."
+        - "텔레그램으로 전송하세요."
+        - "TextEdit에 저장하세요."
+    logs:
+      - "RUN_SCOPE|run_id=launch-eval-write-pass|plan_id=launch-eval-write-pass"
+      - "EVIDENCE|target=mail|event=send|status=sent_confirmed|recipient=qed4950@gmail.com|subject=Digest|body_len=120|run_id=launch-eval-write-pass"
+      - "EVIDENCE|target=notion|event=write|status=confirmed|page_id=abcd1234|run_id=launch-eval-write-pass"
+      - "EVIDENCE|target=telegram|event=send|status=sent|message_id=123|run_id=launch-eval-write-pass"
+      - "EVIDENCE|target=textedit|event=write|status=confirmed|doc_id=doc-1|body_len=42|run_id=launch-eval-write-pass"
+      - "EVIDENCE|target=textedit|event=save|status=confirmed|doc_id=doc-1|run_id=launch-eval-write-pass"
+      - "Summary: integrations completed with structured evidence"
+    expect_ok: true
+    expect_assertions:
+      - key: "artifact.mail_sent_confirmed"
+        passed: true
+      - key: "artifact.notion_write_confirmed"
+        passed: true
+      - key: "artifact.telegram_delivery_confirmed"
+        passed: true
+
+  - id: business-contract-missing-write-artifacts
+    kind: business_contract
+    description: "Missing write artifacts must fail the business contract."
+    plan:
+      intent: "generic_task"
+      descriptions:
+        - "Mail에서 qed4950@gmail.com으로 결과를 보내세요."
+        - "Notion에 요약을 작성하세요."
+        - "텔레그램으로 전송하세요."
+    logs:
+      - "Summary: requested integrations done"
+    expect_ok: false
+    expect_detail_contains:
+      - "contract_missing_mail_send_confirmation"
+      - "contract_missing_mail_recipient=qed4950@gmail.com"
+      - "contract_missing_notion_write_confirmation"
+      - "contract_missing_telegram_send_confirmation"
+    expect_assertions:
+      - key: "artifact.mail_sent_confirmed"
+        passed: false
+      - key: "artifact.notion_write_confirmed"
+        passed: false
+      - key: "artifact.telegram_delivery_confirmed"
+        passed: false
+
+  - id: business-contract-missing-write-ids
+    kind: business_contract
+    description: "Structured write evidence without required IDs must fail."
+    plan:
+      intent: "generic_task"
+      descriptions:
+        - "Notion에 요약을 작성하고 텔레그램으로 전송하세요."
+    logs:
+      - "RUN_SCOPE|run_id=launch-eval-write-ids|plan_id=launch-eval-write-ids"
+      - "EVIDENCE|target=notion|event=write|status=confirmed|page_id=|run_id=launch-eval-write-ids"
+      - "EVIDENCE|target=telegram|event=send|status=sent|message_id=|run_id=launch-eval-write-ids"
+      - "Summary: integrations completed"
+    expect_ok: false
+    expect_detail_contains:
+      - "contract_missing_notion_page_id"
+      - "contract_missing_telegram_message_id"
+    expect_assertions:
+      - key: "artifact.notion_page_id_present"
+        passed: false
+      - key: "artifact.telegram_message_id_present"
+        passed: false
+
+  - id: recommendation-auto-queue-pass
+    kind: recommendation_gate
+    description: "Strong work recommendations should pass queue readiness and admission."
+    stage: auto_queue
+    proposal:
+      title: "Ready Launch Eval Candidate"
+      summary: "Detected 6 repeats across 4 distinct day(s)."
+      trigger: "ready-launch-eval"
+      actions:
+        - "n8n Workflow"
+      confidence: 0.88
+      n8n_prompt: "Create a workflow for a repeated work routine."
+      evidence:
+        - "Frequency: Found 6 occurrences"
+        - "Span: 4 distinct day(s)"
+        - "policy.reason=strong_work_signals=slack,calendar"
+        - "policy.reason=pattern.context_score=0.82"
+        - "policy.reason=pattern.work_context=strong"
+      pattern_id: "ready-launch-eval-pattern"
+      category: "work"
+      business_score: 0.82
+    expect_ready: true
+
+  - id: recommendation-approval-block
+    kind: recommendation_gate
+    description: "Weak work recommendations must fail approval readiness."
+    stage: approval
+    proposal:
+      title: "Weak Launch Eval Candidate"
+      summary: "Detected 3 repeats across 1 distinct day(s)."
+      trigger: "weak-launch-eval"
+      actions:
+        - "n8n Workflow"
+      confidence: 0.74
+      n8n_prompt: "Create a workflow for a weak candidate."
+      evidence:
+        - "Frequency: Found 3 occurrences"
+        - "Span: 1 distinct day(s)"
+        - "policy.reason=support_work_signals=vscode,terminal"
+      pattern_id: "weak-launch-eval-pattern"
+      category: "work"
+      business_score: 0.61
+    expect_ready: false
+    expect_reasons_contains:
+      - "Business score"
+      - "Confidence"
+      - "Pattern frequency"
+      - "Pattern span"
+      - "Missing strong work evidence"

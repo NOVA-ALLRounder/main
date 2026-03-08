@@ -9,6 +9,25 @@ use tokio::time::{self, Duration};
 
 static SCHEDULER_STARTED: AtomicBool = AtomicBool::new(false);
 
+fn auto_recommendation_allowed(proposal: &crate::recommendation::AutomationProposal) -> bool {
+    let history_limit = crate::recommendation_policy::auto_recommendation_history_limit();
+    let recent = db::get_recent_recommendations(history_limit).unwrap_or_default();
+    let decision = crate::recommendation_policy::admit_auto_recommendation(proposal, &recent);
+    if decision.accepted {
+        return true;
+    }
+
+    println!(
+        "🧹 [Scheduler] Suppressing auto recommendation: {} [{} / {} / {:.2}] {}",
+        proposal.title,
+        decision.pending_same_category,
+        decision.pending_limit,
+        decision.priority_score,
+        decision.reasons.join(", ")
+    );
+    false
+}
+
 struct RoutineClaimGuard {
     routine_id: i64,
     owner: String,
@@ -304,28 +323,47 @@ impl Scheduler {
                 let detector = crate::pattern_detector::PatternDetector::new();
                 let patterns = detector.analyze();
 
+                let preference_history = db::get_recent_recommendations(
+                    crate::recommendation_policy::auto_recommendation_history_limit(),
+                )
+                .unwrap_or_default();
                 for pattern in patterns {
-                    // High confidence/occurrence only for auto-notification
-                    if pattern.occurrences >= 5 && pattern.similarity_score >= 0.85 {
-                        let brain = &llm_for_analysis;
-                        if let Ok(proposal) = brain
-                            .generate_recommendation_from_pattern(
-                                &pattern.description,
-                                &pattern.sample_events,
-                            )
-                            .await
-                        {
-                            if proposal.confidence >= 0.8 {
-                                // Check if already recommended to avoid spam
-                                if let Ok(true) = db::insert_recommendation(&proposal) {
-                                    let _ = crate::notifier::send(
-                                        "💡 New Workflow Idea",
-                                        &format!(
-                                            "I noticed you do '{}' a lot. Shall I automate it?",
-                                            proposal.title
-                                        ),
-                                    );
-                                }
+                    if !detector.should_recommend(&pattern) {
+                        continue;
+                    }
+                    let brain = &llm_for_analysis;
+                    if let Ok(proposal) = brain
+                        .generate_recommendation_from_pattern(
+                            &pattern.description,
+                            &pattern.sample_events,
+                        )
+                        .await
+                    {
+                        let mut proposal = proposal;
+                        let decision = crate::recommendation_policy::apply_mvp_policy(
+                            &mut proposal,
+                            Some(&pattern),
+                        );
+                        if !decision.accepted {
+                            continue;
+                        }
+                        crate::recommendation_policy::apply_recommendation_preferences(
+                            &mut proposal,
+                            &preference_history,
+                        );
+                        if proposal.confidence >= 0.8 {
+                            if !auto_recommendation_allowed(&proposal) {
+                                continue;
+                            }
+                            // Check if already recommended to avoid spam
+                            if let Ok(true) = db::insert_recommendation(&proposal) {
+                                let _ = crate::notifier::send(
+                                    "💡 New Workflow Idea",
+                                    &format!(
+                                        "I noticed you do '{}' a lot. Shall I automate it?",
+                                        proposal.title
+                                    ),
+                                );
                             }
                         }
                     }

@@ -5,7 +5,16 @@ import {
     LogEntrySchema,
     RecommendationSchema,
     ApproveRecommendationResponseSchema,
+    RecommendationFeedbackResponseSchema,
     RecommendationMetricsSchema,
+    RecommendationReviewEventRecordSchema,
+    LaunchOpsResponseSchema,
+    ChatMessageResponseSchema,
+    LaunchEvalCandidateSchema,
+    LaunchEvalCandidateSnapshotSchema,
+    LaunchEvalCandidateSnapshotInfoSchema,
+    MemoryAdminActionResponseSchema,
+    MemoryRecordsResponseSchema,
     WorkflowProvisionOpSchema,
     ExecApprovalSchema,
     ExecAllowlistSchema,
@@ -19,6 +28,10 @@ import {
     RuntimeVerifySchema,
     ReleaseBaselineSchema,
     ReleaseGateSchema,
+    ReleaseReadinessSchema,
+    ReleaseReadinessHistoryEntrySchema,
+    HttpE2EReportSchema,
+    HttpE2EHistoryEntrySchema,
     VerificationRunSchema,
     AgentIntentResponseSchema,
     AgentPlanResponseSchema,
@@ -46,7 +59,15 @@ import {
     type LogEntry,
     type Recommendation,
     type ApproveRecommendationResponse,
+    type RecommendationFeedbackResponse,
     type RecommendationMetrics,
+    type RecommendationReviewEventRecord,
+    type LaunchOpsResponse,
+    type LaunchEvalCandidate,
+    type LaunchEvalCandidateSnapshot,
+    type LaunchEvalCandidateSnapshotInfo,
+    type MemoryAdminActionResponse,
+    type MemoryRecordsResponse,
     type WorkflowProvisionOp,
     type ExecApproval,
     type ExecAllowlistEntry,
@@ -60,6 +81,10 @@ import {
     type RuntimeVerifyResult,
     type ReleaseBaseline,
     type ReleaseGate,
+    type ReleaseReadiness,
+    type ReleaseReadinessHistoryEntry,
+    type HttpE2EReport,
+    type HttpE2EHistoryEntry,
     type VerificationRun,
     type AgentIntentResponse,
     type AgentPlanResponse,
@@ -72,6 +97,7 @@ import {
     type AgentPreflightFixResponse,
     type AgentRecoveryEventResponse,
     type ApprovalPolicy,
+    type ChatRouteMeta,
     type NLRunMetrics,
     type NLRun,
     type TaskRun,
@@ -100,6 +126,30 @@ const api = axios.create({
     timeout: 5000,
 });
 
+const CHAT_CLIENT_ID_STORAGE_KEY = "steer.chat_client_id";
+
+function buildChatClientId(): string {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return `web-${crypto.randomUUID()}`;
+    }
+    return `web-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getChatClientId(): string {
+    if (typeof window === "undefined") {
+        return "web-anonymous";
+    }
+
+    const existing = window.localStorage.getItem(CHAT_CLIENT_ID_STORAGE_KEY)?.trim();
+    if (existing) {
+        return existing;
+    }
+
+    const created = buildChatClientId();
+    window.localStorage.setItem(CHAT_CLIENT_ID_STORAGE_KEY, created);
+    return created;
+}
+
 // Paranoid: Validate all responses with Zod
 export async function fetchSystemStatus(): Promise<SystemStatus> {
     const { data } = await api.get("/status");
@@ -109,6 +159,32 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
 export async function fetchLockMetrics(): Promise<LockMetrics> {
     const { data } = await api.get("/system/lock-metrics");
     return LockMetricsSchema.parse(data);
+}
+
+export async function fetchLaunchEvalCandidates(
+    limit: number = 12,
+    provenance: "real" | "synthetic" | "all" = "real",
+): Promise<LaunchEvalCandidate[]> {
+    const { data } = await api.get(`/launch/eval-candidates?limit=${limit}&provenance=${provenance}`);
+    return z.array(LaunchEvalCandidateSchema).parse(data);
+}
+
+export async function snapshotLaunchEvalCandidates(
+    limit: number = 12,
+    provenance: "real" | "synthetic" | "all" = "real",
+): Promise<LaunchEvalCandidateSnapshot> {
+    const { data } = await api.post("/launch/eval-candidates/snapshot", {
+        limit,
+        provenance,
+    });
+    return LaunchEvalCandidateSnapshotSchema.parse(data);
+}
+
+export async function fetchLaunchEvalCandidateSnapshotInfo(
+    provenance: "real" | "synthetic" | "all" = "real",
+): Promise<LaunchEvalCandidateSnapshotInfo> {
+    const { data } = await api.get(`/launch/eval-candidates/snapshot?provenance=${provenance}`);
+    return LaunchEvalCandidateSnapshotInfoSchema.parse(data);
 }
 
 export async function fetchRuntimeInfo(): Promise<RuntimeInfo> {
@@ -135,13 +211,26 @@ export async function toggleRoutine(id: number, enabled: boolean): Promise<void>
 }
 
 // Workflows / Recommendations
-export async function fetchRecommendations(): Promise<Recommendation[]> {
-    const { data } = await api.get("/recommendations?status=all");
+export async function fetchRecommendations(category: string = "work"): Promise<Recommendation[]> {
+    const params = new URLSearchParams();
+    params.set("status", "all");
+    if (category.trim()) {
+        params.set("category", category.trim());
+    }
+    const { data } = await api.get(`/recommendations?${params.toString()}`);
     return z.array(RecommendationSchema).parse(data);
 }
 
-export async function approveRecommendation(id: number): Promise<ApproveRecommendationResponse> {
-    const { data } = await api.post(`/recommendations/${id}/approve`, undefined, { timeout: 8000 });
+export async function approveRecommendation(
+    id: number,
+    actor: string = "web_ui",
+    note?: string
+): Promise<ApproveRecommendationResponse> {
+    const { data } = await api.post(
+        `/recommendations/${id}/approve`,
+        { actor, note },
+        { timeout: 8000 }
+    );
     return ApproveRecommendationResponseSchema.parse(data);
 }
 
@@ -165,21 +254,139 @@ export async function fetchWorkflowProvisionOps(
     return z.array(WorkflowProvisionOpSchema).parse(data);
 }
 
-export async function rejectRecommendation(id: number): Promise<void> {
-    await api.post(`/recommendations/${id}/reject`);
+export async function rejectRecommendation(id: number, actor: string = "web_ui", note?: string): Promise<void> {
+    await api.post(`/recommendations/${id}/reject`, { actor, note });
 }
 
-export async function laterRecommendation(id: number): Promise<void> {
-    await api.post(`/recommendations/${id}/later`);
+export async function sendRecommendationFeedback(
+    id: number,
+    feedback: string,
+    actor: string = "web_ui"
+): Promise<RecommendationFeedbackResponse> {
+    const { data } = await api.post(`/recommendations/${id}/feedback`, { feedback, actor });
+    return RecommendationFeedbackResponseSchema.parse(data);
 }
 
-export async function restoreRecommendation(id: number): Promise<void> {
-    await api.post(`/recommendations/${id}/restore`);
+export async function laterRecommendation(id: number, actor: string = "web_ui", note?: string): Promise<void> {
+    await api.post(`/recommendations/${id}/later`, { actor, note });
+}
+
+export async function restoreRecommendation(id: number, actor: string = "web_ui", note?: string): Promise<void> {
+    await api.post(`/recommendations/${id}/restore`, { actor, note });
 }
 
 export async function fetchRecommendationMetrics(): Promise<RecommendationMetrics> {
     const { data } = await api.get("/recommendations/metrics");
     return RecommendationMetricsSchema.parse(data);
+}
+
+export async function fetchRecommendationReviewEvents(
+    limit: number = 12
+): Promise<RecommendationReviewEventRecord[]> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    const { data } = await api.get(`/recommendations/review-events?${params.toString()}`);
+    return z.array(RecommendationReviewEventRecordSchema).parse(data);
+}
+
+export async function fetchLaunchOps(limit: number = 200): Promise<LaunchOpsResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    const { data } = await api.get(`/launch/ops?${params.toString()}`);
+    return LaunchOpsResponseSchema.parse(data);
+}
+
+export async function fetchMemoryRecords(
+    limit: number = 12,
+    includeSuppressed: boolean = true
+): Promise<MemoryRecordsResponse> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("include_suppressed", includeSuppressed ? "true" : "false");
+    const { data } = await api.get(`/memory/records?${params.toString()}`);
+    return MemoryRecordsResponseSchema.parse(data);
+}
+
+export async function suppressRequestMemory(
+    requestText: string,
+    memoryScope?: string,
+    reason?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/request/suppress", {
+        request_text: requestText,
+        memory_scope: memoryScope,
+        reason,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
+}
+
+export async function restoreRequestMemory(
+    requestText: string,
+    memoryScope?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/request/restore", {
+        request_text: requestText,
+        memory_scope: memoryScope,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
+}
+
+export async function deleteRequestMemory(
+    requestText: string,
+    memoryScope?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/request/delete", {
+        request_text: requestText,
+        memory_scope: memoryScope,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
+}
+
+export async function suppressExecutionMemory(
+    intentCommand: string,
+    paramsKey: string,
+    memoryScope?: string,
+    reason?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/execution/suppress", {
+        intent_command: intentCommand,
+        params_key: paramsKey,
+        memory_scope: memoryScope,
+        reason,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
+}
+
+export async function restoreExecutionMemory(
+    intentCommand: string,
+    paramsKey: string,
+    memoryScope?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/execution/restore", {
+        intent_command: intentCommand,
+        params_key: paramsKey,
+        memory_scope: memoryScope,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
+}
+
+export async function deleteExecutionMemory(
+    intentCommand: string,
+    paramsKey: string,
+    memoryScope?: string
+): Promise<MemoryAdminActionResponse> {
+    const { data } = await api.post("/memory/execution/delete", {
+        intent_command: intentCommand,
+        params_key: paramsKey,
+        memory_scope: memoryScope,
+        actor: "web_settings",
+    });
+    return MemoryAdminActionResponseSchema.parse(data);
 }
 
 export async function fetchExecApprovals(status: string = "pending"): Promise<ExecApproval[]> {
@@ -318,6 +525,10 @@ export async function runJudgment(
 export type ReleaseGateOverrides = {
     perf_regression_pct?: number;
     quality_drop?: number;
+    launch_error_rate_pct?: number;
+    launch_low_confidence_rate_pct?: number;
+    launch_cache_hit_rate_drop_pct?: number;
+    recommendation_approval_rate_min?: number;
 };
 
 export async function fetchReleaseGate(overrides?: ReleaseGateOverrides): Promise<ReleaseGate> {
@@ -328,13 +539,101 @@ export async function fetchReleaseGate(overrides?: ReleaseGateOverrides): Promis
     if (overrides?.quality_drop !== undefined) {
         payload.quality_drop = overrides.quality_drop;
     }
+    if (overrides?.launch_error_rate_pct !== undefined) {
+        payload.launch_error_rate_pct = overrides.launch_error_rate_pct;
+    }
+    if (overrides?.launch_low_confidence_rate_pct !== undefined) {
+        payload.launch_low_confidence_rate_pct = overrides.launch_low_confidence_rate_pct;
+    }
+    if (overrides?.launch_cache_hit_rate_drop_pct !== undefined) {
+        payload.launch_cache_hit_rate_drop_pct = overrides.launch_cache_hit_rate_drop_pct;
+    }
+    if (overrides?.recommendation_approval_rate_min !== undefined) {
+        payload.recommendation_approval_rate_min = overrides.recommendation_approval_rate_min;
+    }
     const { data } = await api.post("/release/gate", payload);
     return ReleaseGateSchema.parse(data);
 }
 
-export async function setReleaseBaseline(options: PerformanceVerifyOptions = {}): Promise<ReleaseBaseline> {
-    const { data } = await api.post("/release/baseline", options);
+export async function setReleaseBaseline(): Promise<ReleaseBaseline> {
+    const { data } = await api.post("/release/baseline", {});
     return ReleaseBaselineSchema.parse(data);
+}
+
+export type ReleaseReadinessOptions = {
+    candidate_limit?: number;
+};
+
+export async function runReleaseReadiness(
+    options: ReleaseReadinessOptions = {}
+): Promise<ReleaseReadiness> {
+    const { data } = await api.post("/release/readiness", options);
+    return ReleaseReadinessSchema.parse(data);
+}
+
+export async function fetchLatestReleaseReadiness(
+    workdir?: string
+): Promise<ReleaseReadiness | null> {
+    const params = new URLSearchParams();
+    if (workdir) {
+        params.set("workdir", workdir);
+    }
+    const query = params.toString();
+    const { data } = await api.get(`/release/readiness${query ? `?${query}` : ""}`);
+    if (!data) {
+        return null;
+    }
+    return ReleaseReadinessSchema.parse(data);
+}
+
+export async function fetchReleaseReadinessHistory(
+    limit: number = 10,
+    workdir?: string
+): Promise<ReleaseReadinessHistoryEntry[]> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (workdir) {
+        params.set("workdir", workdir);
+    }
+    const { data } = await api.get(`/release/readiness/history?${params.toString()}`);
+    return z.array(ReleaseReadinessHistoryEntrySchema).parse(data);
+}
+
+export async function fetchLatestHttpE2E(
+    workdir?: string
+): Promise<HttpE2EReport | null> {
+    const params = new URLSearchParams();
+    if (workdir) {
+        params.set("workdir", workdir);
+    }
+    const query = params.toString();
+    const { data } = await api.get(`/http-e2e/latest${query ? `?${query}` : ""}`);
+    if (!data) {
+        return null;
+    }
+    return HttpE2EReportSchema.parse(data);
+}
+
+export async function runHttpE2E(
+    workdir?: string
+): Promise<HttpE2EReport> {
+    const { data } = await api.post("/http-e2e/run", {
+        workdir,
+    });
+    return HttpE2EReportSchema.parse(data);
+}
+
+export async function fetchHttpE2EHistory(
+    limit: number = 10,
+    workdir?: string
+): Promise<HttpE2EHistoryEntry[]> {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (workdir) {
+        params.set("workdir", workdir);
+    }
+    const { data } = await api.get(`/http-e2e/history?${params.toString()}`);
+    return z.array(HttpE2EHistoryEntrySchema).parse(data);
 }
 
 export async function fetchVerificationRuns(limit: number = 20): Promise<VerificationRun[]> {
@@ -525,20 +824,40 @@ export async function analyzePatterns(): Promise<string[]> {
     return z.array(z.string()).parse(data);
 }
 
-export async function sendChatMessage(message: string): Promise<{ response: string; command?: string }> {
+export async function sendChatMessage(
+    message: string
+): Promise<{ response: string; command?: string; routeMeta?: ChatRouteMeta }> {
     try {
-        const { data } = await api.post("/chat", { message }, { timeout: 30000 });
-        const response =
-            typeof data?.response === "string" && data.response.trim().length > 0
-                ? data.response
-                : typeof data?.message === "string" && data.message.trim().length > 0
-                  ? data.message
-                  : "✅ 요청을 받았어요. 한 문장만 더 구체적으로 말해주면 바로 도와줄게요.";
-        const command =
-            typeof data?.command === "string" && data.command.trim().length > 0
-                ? data.command
-                : undefined;
-        return { response, command };
+        const sender = getChatClientId();
+        const { data } = await api.post(
+            "/chat",
+            {
+                message,
+                channel: "web",
+                chat_type: "direct",
+                sender,
+            },
+            { timeout: 30000 },
+        );
+        const fallbackPayload = {
+            response:
+                typeof data?.response === "string" && data.response.trim().length > 0
+                    ? data.response
+                    : typeof data?.message === "string" && data.message.trim().length > 0
+                      ? data.message
+                      : "✅ 요청을 받았어요. 한 문장만 더 구체적으로 말해주면 바로 도와줄게요.",
+            command:
+                typeof data?.command === "string" && data.command.trim().length > 0
+                    ? data.command
+                    : undefined,
+            route_meta: data?.route_meta,
+        };
+        const parsed = ChatMessageResponseSchema.parse(fallbackPayload);
+        return {
+            response: parsed.response,
+            command: parsed.command,
+            routeMeta: parsed.route_meta,
+        };
     } catch (e) {
         if (axios.isAxiosError(e)) {
             const status = e.response?.status;
@@ -554,4 +873,26 @@ export async function sendChatMessage(message: string): Promise<{ response: stri
         }
         throw new Error("Unknown chat error");
     }
+}
+
+export async function submitChatFeedback(
+    requestText: string,
+    responseText: string,
+    sentiment: "positive" | "negative",
+    command?: string,
+): Promise<{ ok: boolean; reuse_suppressed: boolean }> {
+    const sender = getChatClientId();
+    const { data } = await api.post("/chat/feedback", {
+        request_text: requestText,
+        response_text: responseText,
+        sentiment,
+        command,
+        channel: "web",
+        chat_type: "direct",
+        sender,
+    });
+    return {
+        ok: Boolean(data?.ok),
+        reuse_suppressed: Boolean(data?.reuse_suppressed),
+    };
 }

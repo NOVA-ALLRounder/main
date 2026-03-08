@@ -15,6 +15,14 @@ pub struct AutomationProposal {
     pub evidence: Vec<String>,
     #[serde(default)]
     pub pattern_id: Option<String>,
+    #[serde(default = "default_category")]
+    pub category: String,
+    #[serde(default)]
+    pub business_score: f64,
+}
+
+fn default_category() -> String {
+    crate::recommendation_policy::CATEGORY_UNKNOWN.to_string()
 }
 
 impl Default for AutomationProposal {
@@ -28,6 +36,8 @@ impl Default for AutomationProposal {
             n8n_prompt: "".to_string(),
             evidence: vec![],
             pattern_id: None,
+            category: default_category(),
+            business_score: 0.0,
         }
     }
 }
@@ -212,6 +222,11 @@ impl TemplateMatcher {
                 let evidence = vec![
                     format!("Pattern: {}", pattern.description),
                     format!("Frequency: Found {} occurrences", pattern.occurrences),
+                    format!("Span: {} distinct day(s)", pattern.distinct_days),
+                    format!(
+                        "Work context: weekday {} / work-hour {} occurrences",
+                        pattern.weekday_occurrences, pattern.work_hour_occurrences
+                    ),
                     format!("Matched: {}", matched_keywords.join(", ")),
                 ];
 
@@ -224,6 +239,8 @@ impl TemplateMatcher {
                     n8n_prompt: tmpl.n8n_prompt.to_string(),
                     evidence,
                     pattern_id: Some(pattern.pattern_id.clone()),
+                    category: default_category(),
+                    business_score: 0.0,
                 });
             }
         }
@@ -307,6 +324,9 @@ mod tests {
             pattern_type: PatternType::KeywordRepeat,
             description: "Repeated keyword: 'invoice'".to_string(),
             occurrences: 5,
+            distinct_days: 2,
+            weekday_occurrences: 0,
+            work_hour_occurrences: 0,
             similarity_score: 1.0,
             sample_events: vec![
                 json!({"type": "key_input", "data": {"text": "check invoice"}}).to_string(),
@@ -334,6 +354,9 @@ mod tests {
             pattern_type: PatternType::KeywordRepeat,
             description: "Repeated usage of 'invoice'".to_string(),
             occurrences: 10,
+            distinct_days: 3,
+            weekday_occurrences: 0,
+            work_hour_occurrences: 0,
             similarity_score: 0.9,
             sample_events: vec![
                 json!({"type": "ui.type", "data": {"text": "sending invoice"}}).to_string(),

@@ -5923,7 +5923,9 @@ mod tests {
     #[test]
     fn infer_news_item_count_respects_goal_count_and_default() {
         assert_eq!(
-            ActionRunner::infer_news_item_count("최근 ai 트렌드 중요한거 5개 llm으로 요약해서 노션에 정리해줘"),
+            ActionRunner::infer_news_item_count(
+                "최근 ai 트렌드 중요한거 5개 llm으로 요약해서 노션에 정리해줘"
+            ),
             5
         );
         assert_eq!(

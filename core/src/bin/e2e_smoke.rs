@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use local_os_agent::{db, pattern_detector, recommendation, schema};
 use recommendation::TemplateMatcher;
 use schema::{EventEnvelope, ResourceContext};
@@ -56,15 +56,16 @@ fn main() {
 }
 
 fn build_sample_events() -> Vec<EventEnvelope> {
-    let now = Utc::now().to_rfc3339();
+    let base = Utc::now();
     let mut events = Vec::new();
 
     // App switch flow (Slack <-> Chrome) repeated to trigger AppSequence
-    for _ in 0..5 {
+    for day_offset in 0..5 {
+        let ts = (base - Duration::days(day_offset)).to_rfc3339();
         events.push(EventEnvelope {
             schema_version: "1.0".to_string(),
             event_id: uuid::Uuid::new_v4().to_string(),
-            ts: now.clone(),
+            ts: ts.clone(),
             source: "e2e_smoke".to_string(),
             app: "Slack".to_string(),
             event_type: "app_switch".to_string(),
@@ -84,7 +85,7 @@ fn build_sample_events() -> Vec<EventEnvelope> {
         events.push(EventEnvelope {
             schema_version: "1.0".to_string(),
             event_id: uuid::Uuid::new_v4().to_string(),
-            ts: now.clone(),
+            ts: ts.clone(),
             source: "e2e_smoke".to_string(),
             app: "Chrome".to_string(),
             event_type: "app_switch".to_string(),
@@ -103,12 +104,13 @@ fn build_sample_events() -> Vec<EventEnvelope> {
         });
     }
 
-    // File pattern (3 pdfs)
-    for i in 1..=3 {
+    // File pattern across multiple days
+    for i in 1..=4 {
+        let ts = (base - Duration::days((i - 1) as i64)).to_rfc3339();
         events.push(EventEnvelope {
             schema_version: "1.0".to_string(),
             event_id: uuid::Uuid::new_v4().to_string(),
-            ts: now.clone(),
+            ts,
             source: "e2e_smoke".to_string(),
             app: "Finder".to_string(),
             event_type: "file_created".to_string(),
@@ -127,12 +129,13 @@ fn build_sample_events() -> Vec<EventEnvelope> {
         });
     }
 
-    // Keyword repeat (5 occurrences)
-    for _ in 0..5 {
+    // Keyword repeat across multiple days
+    for day_offset in 0..5 {
+        let ts = (base - Duration::days(day_offset)).to_rfc3339();
         events.push(EventEnvelope {
             schema_version: "1.0".to_string(),
             event_id: uuid::Uuid::new_v4().to_string(),
-            ts: now.clone(),
+            ts,
             source: "e2e_smoke".to_string(),
             app: "Mail".to_string(),
             event_type: "key_input".to_string(),

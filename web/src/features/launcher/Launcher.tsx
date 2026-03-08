@@ -2850,10 +2850,12 @@ export default function Launcher() {
         if (error && typeof error === "object") {
             const maybe = error as {
                 message?: unknown;
-                response?: { data?: { error?: unknown } };
+                response?: { data?: { error?: unknown; details?: unknown } };
             };
             const responseError = maybe.response?.data?.error;
             if (typeof responseError === "string") return responseError;
+            const responseDetails = maybe.response?.data?.details;
+            if (typeof responseDetails === "string") return responseDetails;
             if (typeof maybe.message === "string") return maybe.message;
         }
         return "Approve failed";
@@ -3109,6 +3111,23 @@ export default function Launcher() {
     };
 
     const handleApprove = async (id: number) => {
+        const sourceRec = (recs ?? []).find((rec) => rec.id === id) ?? null;
+        if (sourceRec && !sourceRec.approval_ready) {
+            const detail = sourceRec.approval_reasons.join(" ") || "Needs more evidence before approval.";
+            setApproveErrors(prev => ({ ...prev, [id]: detail }));
+            setResults([
+                {
+                    type: "response",
+                    content: [
+                        "**승인 보류**",
+                        `- recommendation_id: \`${id}\``,
+                        `- 사유: ${detail}`,
+                    ].join("\n"),
+                },
+            ]);
+            setShowDetailPanel(true);
+            return;
+        }
         const now = Date.now();
         const last = approveCooldowns[id] ?? 0;
         if (now - last < 3000) {
@@ -3121,14 +3140,13 @@ export default function Launcher() {
             return next;
         });
         setApprovingIds(prev => new Set(prev).add(id));
-        const sourceRec = (recs ?? []).find((rec) => rec.id === id) ?? null;
         addWatchRecommendation(id, sourceRec);
         setProvisioningUiState(id, "provisioning", {
             opId: provisioningUiByRecId[id]?.opId ?? null,
             detail: "requested",
         });
         try {
-            const approved = await approveRecommendation(id);
+            const approved = await approveRecommendation(id, "web_launcher");
             const workflowId = approved.workflow_id?.trim() || approved.id?.trim() || sourceRec?.workflow_id?.trim() || null;
             const workflowUrl = approved.workflow_url?.trim() || resolveRecommendationWorkflowUrl(sourceRec ?? null, workflowId);
             const provisionOpId = approved.provision_op_id ?? null;
@@ -4617,7 +4635,13 @@ export default function Launcher() {
                                                 uiProvision?.detail === "created";
                                             const canRetryProvision =
                                                 uiProvision?.phase === "failed" || rec.status === "failed";
-                                            const canApprove = rec.status === "pending" || canRetryProvision;
+                                            const approvalBlockedReason =
+                                                !rec.approval_ready && rec.approval_reasons.length > 0
+                                                    ? rec.approval_reasons.join(" ")
+                                                    : null;
+                                            const canApprove =
+                                                (rec.status === "pending" || canRetryProvision) &&
+                                                rec.approval_ready;
                                             const recN8nTarget =
                                                 recWorkflowUrl ||
                                                 (isProvisioning || canRetryProvision ? N8N_EDITOR_BASE_URL : null);
@@ -4676,6 +4700,11 @@ export default function Launcher() {
                                                             {(approveErrors[rec.id] || uiProvision?.phase === "failed") && (
                                                                 <div className="mt-1 text-[10px] text-rose-300">
                                                                     {approveErrors[rec.id] || uiProvision?.detail}
+                                                                </div>
+                                                            )}
+                                                            {approvalBlockedReason && rec.status === "pending" && (
+                                                                <div className="mt-1 text-[10px] text-amber-300">
+                                                                    {approvalBlockedReason}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -4748,6 +4777,7 @@ export default function Launcher() {
                                                                 handleApprove(rec.id);
                                                             }}
                                                             disabled={approvingIds.has(rec.id) || !canApprove}
+                                                            title={approvalBlockedReason ?? undefined}
                                                             className={`text-xs px-3 py-1.5 rounded transition-colors border ${isSel
                                                                 ? 'bg-blue-500 text-white border-blue-400'
                                                                 : 'text-gray-200 bg-white/10 border-white/10 hover:bg-white/20'
@@ -4757,6 +4787,8 @@ export default function Launcher() {
                                                                 ? 'Approving…'
                                                                 : isProvisioning
                                                                     ? 'Provisioning…'
+                                                                    : !rec.approval_ready && rec.status === "pending"
+                                                                    ? 'Needs Evidence'
                                                                     : !canApprove
                                                                     ? 'Approved'
                                                                     : canRetryProvision || approveErrors[rec.id]

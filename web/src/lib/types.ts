@@ -30,10 +30,15 @@ export const RecommendationSchema = z.object({
     summary: z.string(),
     status: z.string(),
     confidence: z.number(),
+    category: z.string().optional().default("unknown"),
+    business_score: z.number().optional().default(0),
     evidence: z.array(z.string()).optional(), // [NEW] Explainability
     last_error: z.string().nullable().optional(),
     workflow_id: z.string().nullable().optional(),
     workflow_url: z.string().nullable().optional(),
+    snoozed_until: z.string().nullable().optional(),
+    approval_ready: z.boolean().optional().default(true),
+    approval_reasons: z.array(z.string()).optional().default([]),
 });
 
 export const ApproveRecommendationResponseSchema = z.object({
@@ -48,6 +53,14 @@ export const ApproveRecommendationResponseSchema = z.object({
     approved_now: z.boolean().optional(),
     reused_existing: z.boolean().optional(),
     message: z.string().optional(),
+});
+
+export const RecommendationFeedbackResponseSchema = z.object({
+    ok: z.boolean(),
+    sentiment: z.string(),
+    status: z.string(),
+    message: z.string(),
+    suppressed_similar: z.boolean(),
 });
 
 export const WorkflowProvisionOpSchema = z.object({
@@ -72,6 +85,254 @@ export const RecommendationMetricsSchema = z.object({
     legacy_other: z.number().optional(),
     approval_rate: z.number(),
     last_created_at: z.string().nullable().optional(),
+});
+
+export const RecommendationReviewMetricsSchema = z.object({
+    window_size: z.number(),
+    total_events: z.number(),
+    approve_actions: z.number(),
+    reject_actions: z.number(),
+    later_actions: z.number(),
+    restore_actions: z.number(),
+    feedback_positive: z.number(),
+    feedback_refine: z.number(),
+    feedback_negative: z.number(),
+    failed_actions: z.number(),
+    action_failure_rate: z.number(),
+    non_positive_feedback_rate: z.number(),
+    last_event_at: z.string().nullable().optional(),
+});
+
+export const RecommendationReviewEventRecordSchema = z.object({
+    id: z.number(),
+    created_at: z.string(),
+    recommendation_id: z.number(),
+    recommendation_title: z.string(),
+    status_after: z.string().nullable().optional(),
+    category: z.string().nullable().optional(),
+    action: z.string(),
+    actor: z.string().nullable().optional(),
+    note: z.string().nullable().optional(),
+    ok: z.boolean(),
+    message: z.string().nullable().optional(),
+});
+
+export const RequestMemoryRecordSchema = z.object({
+    normalized_request: z.string(),
+    memory_scope: z.string(),
+    original_request: z.string(),
+    request_signature: z.string().nullable().optional(),
+    intent_json: z.string().nullable().optional(),
+    intent_command: z.string().nullable().optional(),
+    response_text: z.string().nullable().optional(),
+    response_mode: z.string(),
+    source: z.string(),
+    confidence: z.number(),
+    positive_feedback_count: z.number(),
+    negative_feedback_count: z.number(),
+    last_feedback_at: z.string().nullable().optional(),
+    suppressed: z.boolean().optional().default(false),
+    suppressed_reason: z.string().nullable().optional(),
+    suppressed_at: z.string().nullable().optional(),
+    use_count: z.number(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    last_used_at: z.string(),
+});
+
+export const ExecutionMemoryRecordSchema = z.object({
+    id: z.number(),
+    memory_scope: z.string(),
+    intent_command: z.string(),
+    params_key: z.string(),
+    params_json: z.string().nullable().optional(),
+    request_signature: z.string().nullable().optional(),
+    response_text: z.string(),
+    source: z.string(),
+    tool_path: z.string(),
+    freshness_ttl_seconds: z.number(),
+    success: z.boolean(),
+    positive_feedback_count: z.number(),
+    negative_feedback_count: z.number(),
+    last_feedback_at: z.string().nullable().optional(),
+    suppressed: z.boolean().optional().default(false),
+    suppressed_reason: z.string().nullable().optional(),
+    suppressed_at: z.string().nullable().optional(),
+    use_count: z.number(),
+    created_at: z.string(),
+    updated_at: z.string(),
+    last_used_at: z.string(),
+});
+
+export const MemoryOpsMetricsSchema = z.object({
+    request_active: z.number(),
+    request_suppressed: z.number(),
+    execution_active: z.number(),
+    execution_suppressed: z.number(),
+    last_request_used_at: z.string().nullable().optional(),
+    last_execution_used_at: z.string().nullable().optional(),
+});
+
+export const MemoryAdminEventRecordSchema = z.object({
+    id: z.number(),
+    created_at: z.string(),
+    kind: z.string(),
+    action: z.string(),
+    memory_scope: z.string().nullable().optional(),
+    target_key: z.string(),
+    reason: z.string().nullable().optional(),
+    actor: z.string().nullable().optional(),
+    ok: z.boolean(),
+    message: z.string().nullable().optional(),
+});
+
+export const MemoryRecordsResponseSchema = z.object({
+    metrics: MemoryOpsMetricsSchema,
+    request_memory: z.array(RequestMemoryRecordSchema),
+    execution_memory: z.array(ExecutionMemoryRecordSchema),
+    recent_admin_events: z.array(MemoryAdminEventRecordSchema).optional().default([]),
+});
+
+export const MemoryAdminActionResponseSchema = z.object({
+    ok: z.boolean(),
+    kind: z.string(),
+    action: z.string(),
+    message: z.string(),
+});
+
+export const ChatRouteMetaSchema = z.object({
+    route_kind: z.string(),
+    outcome: z.string(),
+    confidence: z.number().nullable().optional(),
+    note: z.string().nullable().optional(),
+    memory_scope: z.string().nullable().optional(),
+    freshness_bypassed: z.boolean(),
+    intent_memory_hit: z.boolean(),
+    request_memory_hit: z.boolean(),
+    execution_memory_hit: z.boolean(),
+    deterministic_used: z.boolean(),
+    llm_used: z.boolean(),
+    ai_digest_used: z.boolean(),
+    local_only: z.boolean(),
+});
+
+export const ChatMessageResponseSchema = z.object({
+    response: z.string(),
+    command: z.string().optional(),
+    route_meta: ChatRouteMetaSchema.optional(),
+});
+
+export const LaunchOpsRouteBreakdownSchema = z.object({
+    route_kind: z.string(),
+    count: z.number(),
+});
+
+export const LaunchOpsEventRecordSchema = z.object({
+    id: z.number(),
+    created_at: z.string(),
+    channel: z.string().nullable().optional(),
+    memory_scope: z.string().nullable().optional(),
+    message_preview: z.string(),
+    route_kind: z.string(),
+    command: z.string().nullable().optional(),
+    outcome: z.string(),
+    confidence: z.number().nullable().optional(),
+    freshness_bypassed: z.boolean(),
+    intent_memory_hit: z.boolean(),
+    request_memory_hit: z.boolean(),
+    execution_memory_hit: z.boolean(),
+    deterministic_used: z.boolean(),
+    llm_used: z.boolean(),
+    ai_digest_used: z.boolean(),
+    local_only: z.boolean(),
+    note: z.string().nullable().optional(),
+});
+
+export const LaunchOpsMetricsSchema = z.object({
+    window_size: z.number(),
+    total_requests: z.number(),
+    blocked_requests: z.number(),
+    intent_memory_hits: z.number(),
+    request_memory_hits: z.number(),
+    execution_memory_hits: z.number(),
+    cached_response_hit_rate: z.number(),
+    deterministic_routes: z.number(),
+    llm_routes: z.number(),
+    ai_digest_routes: z.number(),
+    ai_digest_auto_routes: z.number(),
+    local_routes: z.number(),
+    freshness_bypasses: z.number(),
+    low_confidence_routes: z.number(),
+    unknown_routes: z.number(),
+    error_routes: z.number(),
+    last_event_at: z.string().nullable().optional(),
+    route_breakdown: z.array(LaunchOpsRouteBreakdownSchema),
+});
+
+export const NLRunMetricsSchema = z.object({
+    total: z.number(),
+    completed: z.number(),
+    manual_required: z.number(),
+    approval_required: z.number(),
+    blocked: z.number(),
+    error: z.number(),
+    success_rate: z.number(),
+});
+
+export const ExecApprovalMetricsSchema = z.object({
+    window_size: z.number(),
+    total: z.number(),
+    pending: z.number(),
+    approved: z.number(),
+    rejected: z.number(),
+    expired_pending: z.number(),
+    allow_once: z.number(),
+    allow_always: z.number(),
+    deny: z.number(),
+    approval_rate: z.number(),
+    oldest_pending_created_at: z.string().nullable().optional(),
+    last_created_at: z.string().nullable().optional(),
+    last_resolved_at: z.string().nullable().optional(),
+});
+
+export const LaunchOpsResponseSchema = z.object({
+    chat_metrics: LaunchOpsMetricsSchema,
+    memory_metrics: MemoryOpsMetricsSchema,
+    nl_run_metrics: NLRunMetricsSchema,
+    exec_approval_metrics: ExecApprovalMetricsSchema,
+    recommendation_metrics: RecommendationMetricsSchema,
+    recommendation_review_metrics: RecommendationReviewMetricsSchema,
+    recent_events: z.array(LaunchOpsEventRecordSchema),
+});
+
+export const LaunchEvalCandidateSchema = z.object({
+    id: z.string(),
+    provenance: z.string(),
+    source_kind: z.string(),
+    scenario_kind: z.string(),
+    title: z.string(),
+    score: z.number(),
+    command: z.string().nullable().optional(),
+    request_message: z.string(),
+    rationale: z.array(z.string()),
+    yaml: z.string(),
+});
+
+export const LaunchEvalCandidateSnapshotSchema = z.object({
+    generated_at: z.string(),
+    output_path: z.string(),
+    provenance_filter: z.string(),
+    scenario_count: z.number(),
+    candidate_ids: z.array(z.string()),
+});
+
+export const LaunchEvalCandidateSnapshotInfoSchema = z.object({
+    output_path: z.string(),
+    exists: z.boolean(),
+    provenance_filter: z.string(),
+    scenario_count: z.number(),
+    updated_at: z.string().nullable().optional(),
+    scenario_ids: z.array(z.string()),
 });
 
 export const ExecApprovalSchema = z.object({
@@ -201,20 +462,122 @@ export const RuntimeVerifySchema = z.object({
 
 export const ReleaseBaselineSchema = z.object({
     created_at: z.string(),
+    launch_ops: LaunchOpsMetricsSchema.optional(),
+    nl_run_metrics: NLRunMetricsSchema.optional(),
+    exec_approval_metrics: ExecApprovalMetricsSchema.optional(),
+    recommendation_metrics: RecommendationMetricsSchema.optional(),
+    recommendation_review_metrics: RecommendationReviewMetricsSchema.optional(),
+    launch_eval: z.object({
+        generated_at: z.string(),
+        config_path: z.string().nullable().optional(),
+        total: z.number(),
+        passed: z.number(),
+        failed: z.number(),
+        failed_case_ids: z.array(z.string()),
+    }).optional(),
+    launch_eval_candidate_snapshot: LaunchEvalCandidateSnapshotInfoSchema.optional(),
+    launch_eval_candidate_snapshot_refresh_error: z.string().nullable().optional(),
 }).passthrough();
 
 export const ReleaseGateSchema = z.object({
     ok: z.boolean(),
     regressions: z.array(z.string()),
     warnings: z.array(z.string()),
-    current: z.object({
-        created_at: z.string().optional(),
-    }).optional(),
-    baseline: z.object({
-        created_at: z.string().optional(),
-    }).optional(),
+    current: ReleaseBaselineSchema.optional(),
+    baseline: ReleaseBaselineSchema.optional(),
     template: z.string(),
 }).passthrough();
+
+export const ReleaseReadinessTrendSummarySchema = z.object({
+    compared_runs: z.number(),
+    stable_ready_streak: z.number(),
+    status_regressed: z.boolean(),
+    snapshot_delta: z.number(),
+    launch_eval_pass_rate_delta_pct: z.number(),
+    http_e2e_pass_rate_delta_pct: z.number(),
+    http_e2e_regressed: z.boolean(),
+    blocker_delta: z.number(),
+    advisory_delta: z.number(),
+    warnings: z.array(z.string()),
+    summary: z.string(),
+});
+
+export const HttpE2EStepResultSchema = z.object({
+    name: z.string(),
+    ok: z.boolean(),
+    detail: z.string(),
+});
+
+export const HttpE2EHistoryEntrySchema = z.object({
+    generated_at: z.string(),
+    ok: z.boolean(),
+    passed: z.number(),
+    total: z.number(),
+    report_json_path: z.string(),
+    report_markdown_path: z.string(),
+});
+
+export const HttpE2EReportSchema = z.object({
+    generated_at: z.string(),
+    workdir: z.string(),
+    report_json_path: z.string(),
+    report_markdown_path: z.string(),
+    api_base_url: z.string(),
+    runtime_db_path: z.string(),
+    digest_stub_url: z.string(),
+    ok: z.boolean(),
+    passed: z.number(),
+    total: z.number(),
+    steps: z.array(HttpE2EStepResultSchema),
+});
+
+export const ReleaseReadinessSchema = z.object({
+    generated_at: z.string(),
+    workdir: z.string(),
+    config_path: z.string(),
+    report_json_path: z.string(),
+    report_markdown_path: z.string(),
+    archived_history_json_path: z.string().nullable().optional(),
+    archived_history_markdown_path: z.string().nullable().optional(),
+    archived_launch_eval_json_path: z.string().nullable().optional(),
+    archived_launch_eval_markdown_path: z.string().nullable().optional(),
+    history_trend: ReleaseReadinessTrendSummarySchema.nullable().optional(),
+    baseline_saved: z.boolean(),
+    status: z.string(),
+    ready_for_launch: z.boolean(),
+    blockers: z.array(z.string()),
+    advisories: z.array(z.string()),
+    http_e2e: HttpE2EReportSchema.nullable().optional(),
+    http_e2e_load_error: z.string().nullable().optional(),
+    candidate_snapshot: LaunchEvalCandidateSnapshotSchema,
+    launch_eval: z.object({
+        generated_at: z.string(),
+        config_path: z.string().nullable().optional(),
+        db_path: z.string(),
+        report_json_path: z.string(),
+        report_markdown_path: z.string(),
+        total: z.number(),
+        passed: z.number(),
+        failed: z.number(),
+    }).passthrough(),
+    release_gate: ReleaseGateSchema,
+}).passthrough();
+
+export const ReleaseReadinessHistoryEntrySchema = z.object({
+    generated_at: z.string(),
+    status: z.string(),
+    ready_for_launch: z.boolean(),
+    candidate_snapshot_count: z.number(),
+    launch_eval_passed: z.number(),
+    launch_eval_total: z.number(),
+    http_e2e_ok: z.boolean().nullable().optional(),
+    http_e2e_passed: z.number().nullable().optional(),
+    http_e2e_total: z.number().nullable().optional(),
+    blocker_count: z.number(),
+    advisory_count: z.number(),
+    report_json_path: z.string(),
+    report_markdown_path: z.string(),
+});
 
 export const VerificationRunSchema = z.object({
     id: z.number(),
@@ -323,16 +686,6 @@ export const ApprovalPolicySchema = z.object({
     policy_key: z.string(),
     decision: z.string(),
     updated_at: z.string(),
-});
-
-export const NLRunMetricsSchema = z.object({
-    total: z.number(),
-    completed: z.number(),
-    manual_required: z.number(),
-    approval_required: z.number(),
-    blocked: z.number(),
-    error: z.number(),
-    success_rate: z.number(),
 });
 
 export const NLRunSchema = z.object({
@@ -478,8 +831,26 @@ export type LogEntry = z.infer<typeof LogEntrySchema>;
 export type Routine = z.infer<typeof RoutineSchema>;
 export type Recommendation = z.infer<typeof RecommendationSchema>;
 export type ApproveRecommendationResponse = z.infer<typeof ApproveRecommendationResponseSchema>;
+export type RecommendationFeedbackResponse = z.infer<typeof RecommendationFeedbackResponseSchema>;
 export type WorkflowProvisionOp = z.infer<typeof WorkflowProvisionOpSchema>;
 export type RecommendationMetrics = z.infer<typeof RecommendationMetricsSchema>;
+export type RecommendationReviewMetrics = z.infer<typeof RecommendationReviewMetricsSchema>;
+export type RecommendationReviewEventRecord = z.infer<typeof RecommendationReviewEventRecordSchema>;
+export type RequestMemoryRecord = z.infer<typeof RequestMemoryRecordSchema>;
+export type ExecutionMemoryRecord = z.infer<typeof ExecutionMemoryRecordSchema>;
+export type MemoryOpsMetrics = z.infer<typeof MemoryOpsMetricsSchema>;
+export type MemoryAdminEventRecord = z.infer<typeof MemoryAdminEventRecordSchema>;
+export type MemoryRecordsResponse = z.infer<typeof MemoryRecordsResponseSchema>;
+export type MemoryAdminActionResponse = z.infer<typeof MemoryAdminActionResponseSchema>;
+export type LaunchOpsRouteBreakdown = z.infer<typeof LaunchOpsRouteBreakdownSchema>;
+export type LaunchOpsEventRecord = z.infer<typeof LaunchOpsEventRecordSchema>;
+export type ChatRouteMeta = z.infer<typeof ChatRouteMetaSchema>;
+export type ChatMessageResponse = z.infer<typeof ChatMessageResponseSchema>;
+export type LaunchOpsMetrics = z.infer<typeof LaunchOpsMetricsSchema>;
+export type LaunchOpsResponse = z.infer<typeof LaunchOpsResponseSchema>;
+export type LaunchEvalCandidate = z.infer<typeof LaunchEvalCandidateSchema>;
+export type LaunchEvalCandidateSnapshot = z.infer<typeof LaunchEvalCandidateSnapshotSchema>;
+export type LaunchEvalCandidateSnapshotInfo = z.infer<typeof LaunchEvalCandidateSnapshotInfoSchema>;
 export type ExecApproval = z.infer<typeof ExecApprovalSchema>;
 export type ExecAllowlistEntry = z.infer<typeof ExecAllowlistSchema>;
 export type ExecResult = z.infer<typeof ExecResultSchema>;
@@ -493,6 +864,11 @@ export type VisualVerifyResult = z.infer<typeof VisualVerifySchema>;
 export type RuntimeVerifyResult = z.infer<typeof RuntimeVerifySchema>;
 export type ReleaseBaseline = z.infer<typeof ReleaseBaselineSchema>;
 export type ReleaseGate = z.infer<typeof ReleaseGateSchema>;
+export type ReleaseReadinessTrendSummary = z.infer<typeof ReleaseReadinessTrendSummarySchema>;
+export type ReleaseReadiness = z.infer<typeof ReleaseReadinessSchema>;
+export type ReleaseReadinessHistoryEntry = z.infer<typeof ReleaseReadinessHistoryEntrySchema>;
+export type HttpE2EReport = z.infer<typeof HttpE2EReportSchema>;
+export type HttpE2EHistoryEntry = z.infer<typeof HttpE2EHistoryEntrySchema>;
 export type VerificationRun = z.infer<typeof VerificationRunSchema>;
 export type AgentIntentResponse = z.infer<typeof AgentIntentResponseSchema>;
 export type AgentPlanResponse = z.infer<typeof AgentPlanResponseSchema>;

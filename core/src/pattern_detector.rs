@@ -2,7 +2,7 @@
 use crate::db;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 /// Detected pattern from user behavior logs
@@ -12,9 +12,19 @@ pub struct DetectedPattern {
     pub pattern_type: PatternType,
     pub description: String,
     pub occurrences: u32,
+    #[serde(default = "default_distinct_days")]
+    pub distinct_days: u32,
+    #[serde(default)]
+    pub weekday_occurrences: u32,
+    #[serde(default)]
+    pub work_hour_occurrences: u32,
     pub similarity_score: f64,
     pub sample_events: Vec<String>,
     pub detected_at: DateTime<Utc>,
+}
+
+fn default_distinct_days() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,7 +139,7 @@ impl PatternDetector {
 
     /// Detect app switching sequences
     fn detect_app_sequences(&self, events: &[String]) -> Vec<DetectedPattern> {
-        let mut sequences: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+        let mut sequences: HashMap<String, PatternAggregate> = HashMap::new();
         let mut app_history: Vec<String> = Vec::new();
 
         for event_str in events {
@@ -147,6 +157,8 @@ impl PatternDetector {
                 let payload = val.get("payload").or_else(|| val.get("data"));
 
                 if event_type == "app_switch" || event_type == "system.open" {
+                    let day_key = extract_day_key(&val);
+                    let timestamp = extract_timestamp_utc(&val);
                     let app_name = if let Some(p) = payload {
                         p.get("app").and_then(|v| v.as_str()).unwrap_or("")
                     } else {
@@ -157,22 +169,21 @@ impl PatternDetector {
                         let app = app_name.to_string();
                         // 1. Single App Repeats
                         let key = format!("app:{}", app);
-                        let entry = sequences.entry(key.clone()).or_insert((0, vec![]));
-                        entry.0 += 1;
-                        if entry.1.len() < 3 {
-                            entry.1.push(event_str.clone());
-                        }
+                        sequences.entry(key.clone()).or_default().record(
+                            event_str,
+                            day_key.clone(),
+                            timestamp.as_ref(),
+                        );
 
                         // 2. Interleaved Sequences (Bigrams)
                         if let Some(last_app) = app_history.last() {
                             if last_app != &app {
                                 let pair_key = format!("flow:{}->{}", last_app, app);
-                                let pair_entry = sequences.entry(pair_key).or_insert((0, vec![]));
-                                pair_entry.0 += 1;
-                                // Store the transition as a sample
-                                if pair_entry.1.len() < 3 {
-                                    pair_entry.1.push(event_str.clone());
-                                }
+                                sequences.entry(pair_key).or_default().record(
+                                    event_str,
+                                    day_key.clone(),
+                                    timestamp.as_ref(),
+                                );
                             }
                         }
                         app_history.push(app);
@@ -183,8 +194,8 @@ impl PatternDetector {
 
         sequences
             .into_iter()
-            .filter(|(_, (count, _))| *count >= self.config.min_occurrences)
-            .map(|(key, (count, samples))| {
+            .filter(|(_, aggregate)| aggregate.occurrences >= self.config.min_occurrences)
+            .map(|(key, aggregate)| {
                 let is_flow = key.starts_with("flow:");
                 let description = if is_flow {
                     format!(
@@ -201,9 +212,12 @@ impl PatternDetector {
                     pattern_id,
                     pattern_type: PatternType::AppSequence,
                     description,
-                    occurrences: count,
+                    occurrences: aggregate.occurrences,
+                    distinct_days: aggregate.distinct_days(),
+                    weekday_occurrences: aggregate.weekday_occurrences,
+                    work_hour_occurrences: aggregate.work_hour_occurrences,
                     similarity_score: if is_flow { 0.95 } else { 0.8 }, // Higher score for flows
-                    sample_events: samples,
+                    sample_events: aggregate.samples,
                     detected_at: Utc::now(),
                 }
             })
@@ -212,10 +226,12 @@ impl PatternDetector {
 
     /// Detect repeated keyword/text input patterns
     fn detect_keyword_patterns(&self, events: &[String]) -> Vec<DetectedPattern> {
-        let mut keywords: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+        let mut keywords: HashMap<String, PatternAggregate> = HashMap::new();
 
         for event_str in events {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(event_str) {
+                let day_key = extract_day_key(&val);
+                let timestamp = extract_timestamp_utc(&val);
                 let event_type = val
                     .get("event_type")
                     .or_else(|| val.get("type"))
@@ -236,11 +252,11 @@ impl PatternDetector {
                         for word in t.split_whitespace() {
                             if word.len() >= 3 {
                                 let key = word.to_lowercase();
-                                let entry = keywords.entry(key).or_insert((0, vec![]));
-                                entry.0 += 1;
-                                if entry.1.len() < 3 {
-                                    entry.1.push(event_str.clone());
-                                }
+                                keywords.entry(key).or_default().record(
+                                    event_str,
+                                    day_key.clone(),
+                                    timestamp.as_ref(),
+                                );
                             }
                         }
                     }
@@ -250,17 +266,20 @@ impl PatternDetector {
 
         keywords
             .into_iter()
-            .filter(|(_, (count, _))| *count >= 5) // Keywords need more occurrences
-            .map(|(keyword, (count, samples))| {
+            .filter(|(_, aggregate)| aggregate.occurrences >= 5) // Keywords need more occurrences
+            .map(|(keyword, aggregate)| {
                 let description = format!("Repeated keyword: '{}'", keyword);
                 let pattern_id = self.stable_pattern_id(&PatternType::KeywordRepeat, &description);
                 DetectedPattern {
                     pattern_id,
                     pattern_type: PatternType::KeywordRepeat,
                     description,
-                    occurrences: count,
+                    occurrences: aggregate.occurrences,
+                    distinct_days: aggregate.distinct_days(),
+                    weekday_occurrences: aggregate.weekday_occurrences,
+                    work_hour_occurrences: aggregate.work_hour_occurrences,
                     similarity_score: 0.85,
-                    sample_events: samples,
+                    sample_events: aggregate.samples,
                     detected_at: Utc::now(),
                 }
             })
@@ -269,10 +288,12 @@ impl PatternDetector {
 
     /// Detect file operation patterns
     fn detect_file_patterns(&self, events: &[String]) -> Vec<DetectedPattern> {
-        let mut file_ops: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+        let mut file_ops: HashMap<String, PatternAggregate> = HashMap::new();
 
         for event_str in events {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(event_str) {
+                let day_key = extract_day_key(&val);
+                let timestamp = extract_timestamp_utc(&val);
                 let event_type = val
                     .get("event_type")
                     .or_else(|| val.get("type"))
@@ -300,11 +321,11 @@ impl PatternDetector {
                             .and_then(|e| e.to_str())
                         {
                             let key = format!("ext:{}", ext);
-                            let entry = file_ops.entry(key).or_insert((0, vec![]));
-                            entry.0 += 1;
-                            if entry.1.len() < 3 {
-                                entry.1.push(event_str.clone());
-                            }
+                            file_ops.entry(key).or_default().record(
+                                event_str,
+                                day_key.clone(),
+                                timestamp.as_ref(),
+                            );
                         }
                     }
                 }
@@ -313,17 +334,20 @@ impl PatternDetector {
 
         file_ops
             .into_iter()
-            .filter(|(_, (count, _))| *count >= 3)
-            .map(|(pattern, (count, samples))| {
+            .filter(|(_, aggregate)| aggregate.occurrences >= 3)
+            .map(|(pattern, aggregate)| {
                 let description = format!("File pattern: {}", pattern.replace("ext:", "."));
                 let pattern_id = self.stable_pattern_id(&PatternType::FilePattern, &description);
                 DetectedPattern {
                     pattern_id,
                     pattern_type: PatternType::FilePattern,
                     description,
-                    occurrences: count,
+                    occurrences: aggregate.occurrences,
+                    distinct_days: aggregate.distinct_days(),
+                    weekday_occurrences: aggregate.weekday_occurrences,
+                    work_hour_occurrences: aggregate.work_hour_occurrences,
                     similarity_score: 0.85,
-                    sample_events: samples,
+                    sample_events: aggregate.samples,
                     detected_at: Utc::now(),
                 }
             })
@@ -334,7 +358,7 @@ impl PatternDetector {
     fn detect_time_patterns(&self, events: &[String]) -> Vec<DetectedPattern> {
         // Key: (App, Weekday, Hour) -> (Count, Sample Events)
         // Weekday is 0-6 (Mon-Sun), Hour is 0-23
-        let mut time_map: HashMap<(String, u32, u32), (u32, Vec<String>)> = HashMap::new();
+        let mut time_map: HashMap<(String, u32, u32), PatternAggregate> = HashMap::new();
 
         for event_str in events {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(event_str) {
@@ -369,11 +393,11 @@ impl PatternDetector {
                             let hour = dt_utc.hour();
 
                             let key = (app_name.to_string(), weekday, hour);
-                            let entry = time_map.entry(key).or_insert((0, vec![]));
-                            entry.0 += 1;
-                            if entry.1.len() < 3 {
-                                entry.1.push(event_str.clone());
-                            }
+                            time_map.entry(key).or_default().record(
+                                event_str,
+                                Some(dt_utc.format("%F").to_string()),
+                                Some(&dt_utc),
+                            );
                         }
                     }
                 }
@@ -383,8 +407,8 @@ impl PatternDetector {
         // 3. Generate Patterns
         time_map
             .into_iter()
-            .filter(|(_, (count, _))| *count >= self.config.min_occurrences) // Threshold
-            .map(|((app, weekday, hour), (count, samples))| {
+            .filter(|(_, aggregate)| aggregate.occurrences >= self.config.min_occurrences)
+            .map(|((app, weekday, hour), aggregate)| {
                 let day_str = match weekday {
                     0 => "Monday",
                     1 => "Tuesday",
@@ -407,9 +431,12 @@ impl PatternDetector {
                     pattern_id,
                     pattern_type: PatternType::TimeBasedAction,
                     description,
-                    occurrences: count,
+                    occurrences: aggregate.occurrences,
+                    distinct_days: aggregate.distinct_days(),
+                    weekday_occurrences: aggregate.weekday_occurrences,
+                    work_hour_occurrences: aggregate.work_hour_occurrences,
                     similarity_score: 0.8, // Base score for time patterns
-                    sample_events: samples,
+                    sample_events: aggregate.samples,
                     detected_at: Utc::now(),
                 }
             })
@@ -491,6 +518,8 @@ impl PatternDetector {
                             // High similarity threshold
                             // Merge j into i
                             current_group.occurrences += patterns[j].occurrences;
+                            current_group.distinct_days =
+                                current_group.distinct_days.max(patterns[j].distinct_days);
                             current_group
                                 .sample_events
                                 .extend(patterns[j].sample_events.clone());
@@ -507,9 +536,163 @@ impl PatternDetector {
     }
 
     pub fn should_recommend(&self, pattern: &DetectedPattern) -> bool {
-        pattern.occurrences >= self.config.min_occurrences
-            && pattern.similarity_score >= self.config.min_similarity
+        let (min_occ, min_sim, min_days) = match pattern.pattern_type {
+            PatternType::AppSequence => (
+                env_u32(
+                    "REC_MIN_OCCURRENCES_APP",
+                    self.config.min_occurrences.max(4),
+                ),
+                env_f64(
+                    "REC_MIN_SIMILARITY_APP",
+                    self.config.min_similarity.max(0.8),
+                ),
+                env_u32("REC_MIN_DISTINCT_DAYS_APP", 2),
+            ),
+            PatternType::KeywordRepeat => (
+                env_u32("REC_MIN_OCCURRENCES_KEYWORD", 5),
+                env_f64(
+                    "REC_MIN_SIMILARITY_KEYWORD",
+                    self.config.min_similarity.max(0.85),
+                ),
+                env_u32("REC_MIN_DISTINCT_DAYS_KEYWORD", 2),
+            ),
+            PatternType::FilePattern => (
+                env_u32("REC_MIN_OCCURRENCES_FILE", 4),
+                env_f64(
+                    "REC_MIN_SIMILARITY_FILE",
+                    self.config.min_similarity.max(0.85),
+                ),
+                env_u32("REC_MIN_DISTINCT_DAYS_FILE", 2),
+            ),
+            PatternType::TimeBasedAction => (
+                env_u32("REC_MIN_OCCURRENCES_TIME", 4),
+                env_f64(
+                    "REC_MIN_SIMILARITY_TIME",
+                    self.config.min_similarity.max(0.8),
+                ),
+                env_u32("REC_MIN_DISTINCT_DAYS_TIME", 3),
+            ),
+        };
+
+        if matches!(pattern.pattern_type, PatternType::AppSequence)
+            && !allow_single_app_patterns()
+            && pattern.description.starts_with("Heavy usage:")
+        {
+            return false;
+        }
+
+        pattern.occurrences >= min_occ
+            && pattern.similarity_score >= min_sim
+            && pattern.distinct_days >= min_days.max(1)
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PatternAggregate {
+    occurrences: u32,
+    samples: Vec<String>,
+    distinct_days: HashSet<String>,
+    weekday_occurrences: u32,
+    work_hour_occurrences: u32,
+}
+
+impl PatternAggregate {
+    fn record(
+        &mut self,
+        event_str: &str,
+        day_key: Option<String>,
+        timestamp: Option<&DateTime<Utc>>,
+    ) {
+        self.occurrences += 1;
+        if self.samples.len() < 3 {
+            self.samples.push(event_str.to_string());
+        }
+        if let Some(day_key) = day_key.filter(|value| !value.trim().is_empty()) {
+            self.distinct_days.insert(day_key);
+        }
+        if let Some(timestamp) = timestamp {
+            if is_weekday_utc(timestamp) {
+                self.weekday_occurrences += 1;
+            }
+            if is_work_hour_utc(timestamp) {
+                self.work_hour_occurrences += 1;
+            }
+        }
+    }
+
+    fn distinct_days(&self) -> u32 {
+        let count = self.distinct_days.len();
+        if count == 0 {
+            1
+        } else {
+            count as u32
+        }
+    }
+}
+
+fn extract_day_key(value: &serde_json::Value) -> Option<String> {
+    Some(extract_timestamp_utc(value)?.format("%F").to_string())
+}
+
+fn extract_timestamp_utc(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    let timestamp = value
+        .get("ts")
+        .or_else(|| value.get("timestamp"))
+        .and_then(|v| v.as_str())?;
+    let parsed = DateTime::parse_from_rfc3339(timestamp).ok()?;
+    Some(parsed.with_timezone(&Utc))
+}
+
+fn env_u32(key: &str, default_value: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(default_value)
+}
+
+fn env_f64(key: &str, default_value: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .unwrap_or(default_value)
+}
+
+fn workday_start_hour() -> u32 {
+    env_u32("ALLVIA_REC_WORKDAY_START_HOUR", 8).min(23)
+}
+
+fn workday_end_hour() -> u32 {
+    env_u32("ALLVIA_REC_WORKDAY_END_HOUR", 19).min(23)
+}
+
+fn is_weekday_utc(timestamp: &DateTime<Utc>) -> bool {
+    timestamp.weekday().num_days_from_monday() < 5
+}
+
+fn is_work_hour_utc(timestamp: &DateTime<Utc>) -> bool {
+    if !is_weekday_utc(timestamp) {
+        return false;
+    }
+    let hour = timestamp.hour();
+    let start = workday_start_hour();
+    let end = workday_end_hour();
+    if start <= end {
+        hour >= start && hour <= end
+    } else {
+        hour >= start || hour <= end
+    }
+}
+
+fn allow_single_app_patterns() -> bool {
+    std::env::var("ALLVIA_REC_ALLOW_SINGLE_APP_PATTERNS")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -541,6 +724,7 @@ mod tests {
         assert_eq!(p.pattern_type, PatternType::AppSequence);
         assert!(p.description.contains("Slack"));
         assert_eq!(p.occurrences, 3);
+        assert_eq!(p.distinct_days, 1);
     }
 
     #[test]
@@ -563,6 +747,7 @@ mod tests {
             .find(|p| p.description.contains("invoice"))
             .expect("Pattern not found in test");
         assert_eq!(p.occurrences, 5);
+        assert_eq!(p.distinct_days, 1);
         assert_eq!(p.pattern_type, PatternType::KeywordRepeat);
     }
 
@@ -581,6 +766,7 @@ mod tests {
         let p = &patterns[0];
         assert_eq!(p.pattern_type, PatternType::FilePattern);
         assert!(p.description.contains(".pdf"));
+        assert_eq!(p.distinct_days, 1);
     }
 
     #[test]
@@ -608,5 +794,70 @@ mod tests {
         assert!(p.description.contains("Monday"));
         assert!(p.description.contains("9:00"));
         assert_eq!(p.occurrences, 3);
+        assert_eq!(p.distinct_days, 3);
+        assert_eq!(p.weekday_occurrences, 3);
+        assert_eq!(p.work_hour_occurrences, 3);
+    }
+
+    #[test]
+    fn heavy_usage_pattern_is_not_recommendable_by_default() {
+        let detector = PatternDetector::new();
+        let pattern = DetectedPattern {
+            pattern_id: "p_heavy".to_string(),
+            pattern_type: PatternType::AppSequence,
+            description: "Heavy usage: Slack".to_string(),
+            occurrences: 8,
+            distinct_days: 4,
+            weekday_occurrences: 0,
+            work_hour_occurrences: 0,
+            similarity_score: 0.9,
+            sample_events: vec![],
+            detected_at: Utc::now(),
+        };
+
+        assert!(!detector.should_recommend(&pattern));
+    }
+
+    #[test]
+    fn multi_day_workflow_cycle_is_recommendable() {
+        let detector = PatternDetector::new();
+        let pattern = DetectedPattern {
+            pattern_id: "p_cycle".to_string(),
+            pattern_type: PatternType::AppSequence,
+            description: "Workflow Cycle: Slack → Notion".to_string(),
+            occurrences: 5,
+            distinct_days: 3,
+            weekday_occurrences: 0,
+            work_hour_occurrences: 0,
+            similarity_score: 0.95,
+            sample_events: vec![],
+            detected_at: Utc::now(),
+        };
+
+        assert!(detector.should_recommend(&pattern));
+    }
+
+    #[test]
+    fn app_sequence_records_weekday_and_work_hour_context() {
+        let detector = PatternDetector::new();
+        let events = vec![
+            json!({"type": "app_switch", "ts": "2026-03-02T09:05:00Z", "data": {"app": "Slack"}})
+                .to_string(),
+            json!({"type": "app_switch", "ts": "2026-03-03T22:15:00Z", "data": {"app": "Slack"}})
+                .to_string(),
+            json!({"type": "app_switch", "ts": "2026-03-08T10:00:00Z", "data": {"app": "Slack"}})
+                .to_string(),
+            json!({"type": "app_switch", "ts": "2026-03-04T09:10:00Z", "data": {"app": "Chrome"}})
+                .to_string(),
+        ];
+
+        let patterns = detector.analyze_with_events(&events);
+        let pattern = patterns
+            .iter()
+            .find(|pattern| pattern.description == "Heavy usage: Slack")
+            .expect("slack heavy-usage pattern");
+
+        assert_eq!(pattern.weekday_occurrences, 2);
+        assert_eq!(pattern.work_hour_occurrences, 1);
     }
 }

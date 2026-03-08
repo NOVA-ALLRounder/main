@@ -1,4 +1,4 @@
-use crate::{db, env_flag, llm_gateway::LLMClient, n8n_api};
+use crate::{db, env_flag, llm_gateway::LLMClient, n8n_api, recommendation_policy};
 use anyhow::{anyhow, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -113,6 +113,51 @@ fn is_execution_failure_status(status: &str) -> bool {
         status.trim().to_ascii_lowercase().as_str(),
         "error" | "failed" | "failure" | "crashed" | "cancelled" | "canceled" | "timeout"
     )
+}
+
+fn workflow_generation_prompt(rec: &db::Recommendation) -> String {
+    let base = rec.n8n_prompt.trim();
+    let feedback_status = rec
+        .feedback_status
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let feedback_note = rec
+        .feedback_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if feedback_status != "refine" {
+        return base.to_string();
+    }
+
+    let Some(note) = feedback_note else {
+        return base.to_string();
+    };
+
+    if base.is_empty() {
+        format!("Incorporate this user refinement request: {}", note)
+    } else {
+        format!(
+            "{}\n\nUser refinement request to incorporate before generating the workflow:\n- {}",
+            base, note
+        )
+    }
+}
+
+fn ensure_recommendation_ready_for_approval(rec: &db::Recommendation) -> Result<()> {
+    let decision = recommendation_policy::evaluate_recommendation_approval_readiness(rec);
+    if decision.ready {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "recommendation {} is not ready for approval: {}",
+        rec.id,
+        decision.reasons.join(" ")
+    ))
 }
 
 async fn wait_for_execution_success(
@@ -558,6 +603,7 @@ pub fn precreate_async_provisioning(id: i64) -> Result<PreclaimedProvisioning> {
             rec.status
         ));
     }
+    ensure_recommendation_ready_for_approval(&rec)?;
 
     let force_recreate = env_flag("STEER_APPROVE_FORCE_RECREATE");
     let claim_token = if force_recreate {
@@ -666,6 +712,7 @@ async fn execute_approved_recommendation_internal(
 ) -> Result<String> {
     let rec =
         db::get_recommendation(id)?.ok_or_else(|| anyhow!("recommendation {} not found", id))?;
+    let workflow_prompt = workflow_generation_prompt(&rec);
 
     if rec.status.eq_ignore_ascii_case("rejected") {
         return Err(anyhow!(
@@ -680,6 +727,7 @@ async fn execute_approved_recommendation_internal(
             rec.status
         ));
     }
+    ensure_recommendation_ready_for_approval(&rec)?;
 
     // Idempotency guard: if this recommendation already has a workflow id,
     // do not create another workflow unless explicitly forced.
@@ -736,7 +784,7 @@ async fn execute_approved_recommendation_internal(
                     id,
                     existing_id,
                     existing_json.as_ref(),
-                    Some(&rec.n8n_prompt),
+                    Some(&workflow_prompt),
                 )
                 .await
                 {
@@ -785,7 +833,7 @@ async fn execute_approved_recommendation_internal(
                 id,
                 &existing,
                 existing_json.as_ref(),
-                Some(&rec.n8n_prompt),
+                Some(&workflow_prompt),
             )
             .await
             {
@@ -840,7 +888,7 @@ async fn execute_approved_recommendation_internal(
             .clone()
             .ok_or_else(|| anyhow!("LLM Client not available"))?;
         let generated = brain
-            .build_n8n_workflow(&rec.n8n_prompt)
+            .build_n8n_workflow(&workflow_prompt)
             .await
             .map_err(|e| anyhow!("workflow generation failed: {}", e))?;
         mark_provision_progress(provision_op_id, "workflow_json_generated");
@@ -857,7 +905,7 @@ async fn execute_approved_recommendation_internal(
                 );
                 match serde_json::to_string(&n8n_api::build_orchestrator_fallback_workflow(
                     &rec.title,
-                    Some(&rec.n8n_prompt),
+                    Some(&workflow_prompt),
                     "llm_generation_failed",
                 )) {
                     Ok(fallback) => fallback,
@@ -995,7 +1043,7 @@ async fn execute_approved_recommendation_internal(
                 id,
                 &workflow_id,
                 Some(&workflow_val),
-                Some(&rec.n8n_prompt),
+                Some(&workflow_prompt),
             )
             .await
             {
@@ -1080,6 +1128,7 @@ pub async fn approve_and_execute_recommendation(
             id
         ));
     }
+    ensure_recommendation_ready_for_approval(&rec)?;
 
     let approved_now = !rec.status.eq_ignore_ascii_case("approved");
     if approved_now {
@@ -1124,6 +1173,34 @@ mod tests {
             n8n_prompt: format!("Create workflow {}", title),
             evidence: vec!["test".to_string()],
             pattern_id: None,
+            category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+            business_score: 0.0,
+        };
+        let _ = db::insert_recommendation(&proposal);
+        db::get_recommendations_with_filter(Some("pending"))
+            .ok()
+            .and_then(|recs| recs.into_iter().find(|r| r.title == title))
+            .map(|r| r.id)
+    }
+
+    fn insert_test_auto_recommendation(
+        title: &str,
+        confidence: f64,
+        business_score: f64,
+        evidence: Vec<String>,
+    ) -> Option<i64> {
+        let _ = db::init();
+        let proposal = AutomationProposal {
+            title: title.to_string(),
+            summary: "Detected 3 repeats across 1 distinct day(s).".to_string(),
+            trigger: format!("trigger-{}", title),
+            actions: vec!["noop".to_string()],
+            confidence,
+            n8n_prompt: format!("Create workflow {}", title),
+            evidence,
+            pattern_id: Some(format!("pattern-{}", title)),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score,
         };
         let _ = db::insert_recommendation(&proposal);
         db::get_recommendations_with_filter(Some("pending"))
@@ -1147,6 +1224,36 @@ mod tests {
         std::env::remove_var("STEER_N8N_MOCK");
         let result = maybe_assume_approved_for_test(1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn workflow_generation_prompt_includes_refinement_feedback() {
+        let rec = db::Recommendation {
+            id: 1,
+            status: "pending".to_string(),
+            title: "Meeting Prep Assistant".to_string(),
+            summary: "summary".to_string(),
+            trigger: "trigger".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            n8n_prompt: "Create a meeting prep workflow.".to_string(),
+            confidence: 0.8,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![],
+            pattern_id: Some("pattern".to_string()),
+            last_error: None,
+            snoozed_until: None,
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.8,
+            feedback_status: Some("refine".to_string()),
+            feedback_note: Some("텔레그램 말고 노션에 저장해줘".to_string()),
+            feedback_count: 1,
+            last_feedback_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+
+        let prompt = workflow_generation_prompt(&rec);
+        assert!(prompt.contains("Create a meeting prep workflow."));
+        assert!(prompt.contains("텔레그램 말고 노션에 저장해줘"));
     }
 
     #[tokio::test]
@@ -1259,6 +1366,38 @@ mod tests {
         assert_eq!(first.workflow_id, second.workflow_id);
         assert!(!second.approved_now);
         assert!(second.reused_existing);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_auto_recommendation_requires_readiness_before_approval() {
+        db::clear_recommendations_for_tests();
+        let title = format!("rec-auto-gate-{}", chrono::Utc::now().timestamp_millis());
+        let Some(id) = insert_test_auto_recommendation(
+            &title,
+            0.74,
+            0.61,
+            vec![
+                "Frequency: Found 3 occurrences".to_string(),
+                "Span: 1 distinct day(s)".to_string(),
+                "policy.reason=support_work_signals=terminal,vscode".to_string(),
+            ],
+        ) else {
+            return;
+        };
+        std::env::set_var("STEER_TEST_ASSUME_APPROVED", "1");
+        std::env::set_var("STEER_N8N_MOCK", "1");
+
+        let result = approve_and_execute_recommendation(id, None).await;
+
+        assert!(result.is_err());
+        let message = result.err().unwrap().to_string();
+        assert!(message.contains("not ready for approval"));
+
+        let rec = db::get_recommendation(id)
+            .expect("load rec")
+            .expect("existing rec");
+        assert_eq!(rec.status, "pending");
     }
 
     #[test]

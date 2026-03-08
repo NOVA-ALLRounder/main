@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Activity, Cpu, HardDrive, RefreshCw, Lightbulb, ShieldCheck } from "lucide-react";
 import { AuditLog } from "@/components/AuditLog";
 import { useSystemStatus, useLogs, useRoutines, useRecommendations, useRecommendationMetrics, useQualityScore, useConsistencyCheck, useSemanticVerification, useReleaseGate, useVerificationRuns, useExecAllowlist, useExecResults, useExecApprovals, useRoutineRuns, useNlRuns, useNlRunMetrics, useApprovalPolicies } from "@/lib/hooks";
-import { approveRecommendation, rejectRecommendation, laterRecommendation, restoreRecommendation, sendFeedback, fetchCurrentGoal, addExecAllowlist, removeExecAllowlist, runExecResultsGuard, runRuntimeVerification, runPerformanceVerification, runVisualVerification, setReleaseBaseline, fetchSelectionContext, scanProject, runJudgment, approveExecApproval, rejectExecApproval, analyzePatterns, createRoutine, toggleRoutine, calculateQualityScore, executeGoal, agentIntent, agentPlan, agentExecute, agentVerify, agentApprove, removeApprovalPolicy, fetchTaskRunStages, fetchTaskRunAssertions } from "@/lib/api";
+import { approveRecommendation, rejectRecommendation, laterRecommendation, restoreRecommendation, sendFeedback, sendRecommendationFeedback, fetchCurrentGoal, addExecAllowlist, removeExecAllowlist, runExecResultsGuard, runRuntimeVerification, runPerformanceVerification, runVisualVerification, setReleaseBaseline, runReleaseReadiness, fetchLatestReleaseReadiness, fetchReleaseReadinessHistory, fetchLatestHttpE2E, fetchHttpE2EHistory, runHttpE2E, fetchSelectionContext, scanProject, runJudgment, approveExecApproval, rejectExecApproval, analyzePatterns, createRoutine, toggleRoutine, calculateQualityScore, executeGoal, agentIntent, agentPlan, agentExecute, agentVerify, agentApprove, removeApprovalPolicy, fetchTaskRunStages, fetchTaskRunAssertions } from "@/lib/api";
 import { format } from "date-fns";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
@@ -16,6 +16,10 @@ import type {
     Judgment,
     ContextSelection,
     ExecutionProfile,
+    ReleaseReadiness,
+    ReleaseReadinessHistoryEntry,
+    HttpE2EReport,
+    HttpE2EHistoryEntry,
     TaskStageRun,
     TaskStageAssertion,
 } from "@/lib/types";
@@ -374,7 +378,7 @@ function RecommendationsCard() {
 
     const handleApprove = async (id: number) => {
         try {
-            await approveRecommendation(id);
+            await approveRecommendation(id, "web_dashboard");
             refetch(); // Soft refresh
         } catch (e) {
             console.error("Failed to approve", e);
@@ -383,7 +387,7 @@ function RecommendationsCard() {
 
     const handleReject = async (id: number) => {
         try {
-            await rejectRecommendation(id);
+            await rejectRecommendation(id, "web_dashboard");
             refetch(); // Remove from list
         } catch (e) {
             console.error("Failed to reject", e);
@@ -392,7 +396,7 @@ function RecommendationsCard() {
 
     const handleLater = async (id: number) => {
         try {
-            await laterRecommendation(id);
+            await laterRecommendation(id, "web_dashboard");
             refetch();
         } catch (e) {
             console.error("Failed to defer", e);
@@ -401,28 +405,25 @@ function RecommendationsCard() {
 
     const handleRestore = async (id: number) => {
         try {
-            await restoreRecommendation(id);
+            await restoreRecommendation(id, "web_dashboard");
             refetch();
         } catch (e) {
             console.error("Failed to restore", e);
         }
     };
 
-    const handleFeedbackSubmit = async (recId: number, goal: string, summary: string, evidence?: string[]) => {
+    const handleFeedbackSubmit = async (recId: number) => {
         const text = (feedbackText[recId] || "").trim();
         if (!text) {
             setFeedbackStatus((prev) => ({ ...prev, [recId]: "Feedback is required." }));
             return;
         }
         try {
-            const history = [
-                `Recommendation: ${goal}`,
-                summary ? `Summary: ${summary}` : "",
-                evidence && evidence.length > 0 ? `Evidence: ${evidence.slice(0, 2).join(" | ")}` : "",
-            ].filter(Boolean).join(" / ");
-            const res = await sendFeedback(goal, text, history);
+            const res = await sendRecommendationFeedback(recId, text, "web_dashboard");
             setFeedbackStatus((prev) => ({ ...prev, [recId]: res.message || "Feedback submitted." }));
             setFeedbackText((prev) => ({ ...prev, [recId]: "" }));
+            setFeedbackOpenId((current) => (current === recId ? null : current));
+            refetch();
         } catch {
             setFeedbackStatus((prev) => ({ ...prev, [recId]: "Failed to submit feedback." }));
         }
@@ -450,7 +451,7 @@ function RecommendationsCard() {
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-3 w-3 bg-yellow-500"></span>
                     </span>
-                    Proposals ({filteredPending.length})
+                    Work Proposals ({filteredPending.length})
                 </CardTitle>
             </CardHeader>
             <CardContent>
@@ -493,10 +494,22 @@ function RecommendationsCard() {
                                 </div>
                             )}
 
+                            {!rec.approval_ready && rec.status === 'pending' && rec.approval_reasons.length > 0 && (
+                                <div className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-100">
+                                    {rec.approval_reasons.join(" ")}
+                                </div>
+                            )}
+
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => handleApprove(rec.id)}
-                                    className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-1.5 rounded transition-colors font-medium"
+                                    disabled={!rec.approval_ready}
+                                    title={!rec.approval_ready ? rec.approval_reasons.join(" ") : undefined}
+                                    className={`flex-1 text-xs py-1.5 rounded transition-colors font-medium ${
+                                        rec.approval_ready
+                                            ? "bg-green-600 hover:bg-green-700 text-white"
+                                            : "bg-white/10 text-muted-foreground cursor-not-allowed"
+                                    }`}
                                 >
                                     Approve
                                 </button>
@@ -534,7 +547,7 @@ function RecommendationsCard() {
                                         <div className="text-[11px] text-muted-foreground">{feedbackStatus[rec.id]}</div>
                                     )}
                                     <button
-                                        onClick={() => handleFeedbackSubmit(rec.id, rec.title, rec.summary, rec.evidence)}
+                                        onClick={() => handleFeedbackSubmit(rec.id)}
                                         className="w-full bg-white/10 hover:bg-white/20 text-xs py-1.5 rounded transition-colors"
                                     >
                                         Submit Feedback
@@ -581,7 +594,13 @@ function RecommendationsCard() {
                                     <div className="mt-2 flex gap-2">
                                         <button
                                             onClick={() => handleApprove(rec.id)}
-                                            className="text-[11px] px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-200"
+                                            disabled={!rec.approval_ready}
+                                            title={!rec.approval_ready ? rec.approval_reasons.join(" ") : undefined}
+                                            className={`text-[11px] px-2 py-1 rounded ${
+                                                rec.approval_ready
+                                                    ? "bg-red-500/20 hover:bg-red-500/30 text-red-200"
+                                                    : "bg-white/10 text-muted-foreground cursor-not-allowed"
+                                            }`}
                                         >
                                             Retry
                                         </button>
@@ -973,6 +992,32 @@ function QualityGateCard() {
 
     const consistencyCount = consistency?.issues?.length ?? 0;
     const semanticCount = semantic?.issues?.length ?? 0;
+    const currentLaunchOps = releaseGate?.current?.launch_ops;
+    const currentNlRunMetrics = releaseGate?.current?.nl_run_metrics;
+    const currentExecApprovalMetrics = releaseGate?.current?.exec_approval_metrics;
+    const currentRecommendationMetrics = releaseGate?.current?.recommendation_metrics;
+    const currentRecommendationReviewMetrics = releaseGate?.current?.recommendation_review_metrics;
+    const launchErrorRate = currentLaunchOps && currentLaunchOps.total_requests > 0
+        ? (currentLaunchOps.error_routes / currentLaunchOps.total_requests) * 100
+        : 0;
+    const launchLowConfidenceRate = currentLaunchOps && currentLaunchOps.total_requests > 0
+        ? (currentLaunchOps.low_confidence_routes / currentLaunchOps.total_requests) * 100
+        : 0;
+    const nlRunErrorRate = currentNlRunMetrics && currentNlRunMetrics.total > 0
+        ? (currentNlRunMetrics.error / currentNlRunMetrics.total) * 100
+        : 0;
+    const recommendationReviewCount = currentRecommendationMetrics
+        ? currentRecommendationMetrics.approved + currentRecommendationMetrics.rejected
+        : 0;
+    const recommendationApprovalRate = recommendationReviewCount > 0 && currentRecommendationMetrics
+        ? (currentRecommendationMetrics.approved / recommendationReviewCount) * 100
+        : 0;
+    const reviewActionFailureRate = currentRecommendationReviewMetrics?.action_failure_rate ?? 0;
+    const reviewNonPositiveRate = currentRecommendationReviewMetrics?.non_positive_feedback_rate ?? 0;
+    const currentLaunchEval = releaseGate?.current?.launch_eval;
+    const currentLaunchEvalSnapshot = releaseGate?.current?.launch_eval_candidate_snapshot;
+    const currentLaunchEvalSnapshotRefreshError =
+        releaseGate?.current?.launch_eval_candidate_snapshot_refresh_error;
     const hasAnyIssues = gateRegressions > 0 || gateWarnings > 0 || consistencyCount > 0 || semanticCount > 0;
 
     const handleApplyGateOverrides = () => {
@@ -1093,6 +1138,75 @@ function QualityGateCard() {
                 <div className="text-[11px] text-muted-foreground">
                     Last score {qualityTime}
                 </div>
+                {currentLaunchOps && (
+                    <>
+                        <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">Launch ops cache hit</span>
+                            <span className="text-emerald-300">
+                                {currentLaunchOps.cached_response_hit_rate.toFixed(1)}%
+                            </span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">Launch ops errors</span>
+                            <span className={launchErrorRate > 5 ? "text-rose-400" : "text-emerald-300"}>
+                                {launchErrorRate.toFixed(1)}% · low-conf {launchLowConfidenceRate.toFixed(1)}%
+                            </span>
+                        </div>
+                    </>
+                )}
+                {currentRecommendationMetrics && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Workflow approval quality</span>
+                        <span className={recommendationApprovalRate < 20 && recommendationReviewCount >= 5 ? "text-rose-400" : "text-emerald-300"}>
+                            {recommendationApprovalRate.toFixed(1)}% · pending {currentRecommendationMetrics.pending}
+                        </span>
+                    </div>
+                )}
+                {currentRecommendationReviewMetrics && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Recommendation review friction</span>
+                        <span className={reviewActionFailureRate > 10 || reviewNonPositiveRate > 60 ? "text-amber-300" : "text-emerald-300"}>
+                            fail {reviewActionFailureRate.toFixed(1)}% · feedback {reviewNonPositiveRate.toFixed(1)}%
+                        </span>
+                    </div>
+                )}
+                {currentNlRunMetrics && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Write safety</span>
+                        <span className={currentNlRunMetrics.success_rate < 55 ? "text-rose-400" : "text-emerald-300"}>
+                            {currentNlRunMetrics.success_rate.toFixed(1)}% · err {nlRunErrorRate.toFixed(1)}%
+                        </span>
+                    </div>
+                )}
+                {currentExecApprovalMetrics && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Approval backlog</span>
+                        <span className={currentExecApprovalMetrics.pending > 8 || currentExecApprovalMetrics.expired_pending > 0 ? "text-amber-300" : "text-emerald-300"}>
+                            {currentExecApprovalMetrics.pending} pending · expired {currentExecApprovalMetrics.expired_pending}
+                        </span>
+                    </div>
+                )}
+                {currentLaunchEval && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Launch eval</span>
+                        <span className={currentLaunchEval.failed > 0 ? "text-rose-400" : "text-emerald-300"}>
+                            {currentLaunchEval.passed}/{currentLaunchEval.total} · fail {currentLaunchEval.failed}
+                        </span>
+                    </div>
+                )}
+                {currentLaunchEvalSnapshot && (
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Eval candidate coverage</span>
+                        <span className={currentLaunchEvalSnapshot.scenario_count < 5 ? "text-amber-300" : "text-emerald-300"}>
+                            {currentLaunchEvalSnapshot.scenario_count} scenarios
+                        </span>
+                    </div>
+                )}
+                {currentLaunchEvalSnapshotRefreshError && (
+                    <div className="text-[11px] text-amber-300">
+                        snapshot refresh: {currentLaunchEvalSnapshotRefreshError}
+                    </div>
+                )}
                 <div className="rounded-md border border-white/10 bg-black/20 p-2 space-y-2">
                     <div className="text-[11px] text-muted-foreground">Gate thresholds (optional)</div>
                     <div className="grid grid-cols-2 gap-2">
@@ -1299,10 +1413,67 @@ function VerificationActionsCard() {
     const [visualLoading, setVisualLoading] = useState(false);
     const [baselineStatus, setBaselineStatus] = useState<string | null>(null);
     const [baselineLoading, setBaselineLoading] = useState(false);
+    const [releaseReadinessStatus, setReleaseReadinessStatus] = useState<string | null>(null);
+    const [releaseReadinessLoading, setReleaseReadinessLoading] = useState(false);
+    const [releaseReadinessReport, setReleaseReadinessReport] = useState<ReleaseReadiness | null>(null);
+    const [releaseReadinessHistory, setReleaseReadinessHistory] = useState<ReleaseReadinessHistoryEntry[]>([]);
+    const [releaseReadinessHistoryLoading, setReleaseReadinessHistoryLoading] = useState(false);
+    const [httpE2eLoading, setHttpE2eLoading] = useState(false);
+    const [httpE2eStatus, setHttpE2eStatus] = useState<string | null>(null);
+    const [httpE2eReport, setHttpE2eReport] = useState<HttpE2EReport | null>(null);
+    const [httpE2eHistory, setHttpE2eHistory] = useState<HttpE2EHistoryEntry[]>([]);
+    const [httpE2eHistoryLoading, setHttpE2eHistoryLoading] = useState(false);
 
     const baselineTime = releaseGate?.baseline?.created_at
         ? format(new Date(releaseGate.baseline.created_at), "MMM d HH:mm")
         : "—";
+
+    const loadReleaseReadinessHistory = async () => {
+        setReleaseReadinessHistoryLoading(true);
+        try {
+            const history = await fetchReleaseReadinessHistory(5);
+            setReleaseReadinessHistory(history);
+        } catch {
+            setReleaseReadinessHistory([]);
+        } finally {
+            setReleaseReadinessHistoryLoading(false);
+        }
+    };
+
+    const loadHttpE2EHistory = async () => {
+        setHttpE2eHistoryLoading(true);
+        try {
+            const history = await fetchHttpE2EHistory(5);
+            setHttpE2eHistory(history);
+        } catch {
+            setHttpE2eHistory([]);
+        } finally {
+            setHttpE2eHistoryLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchLatestReleaseReadiness()
+            .then((report) => {
+                if (report) {
+                    setReleaseReadinessReport(report);
+                }
+            })
+            .catch(() => {
+                setReleaseReadinessReport(null);
+            });
+        fetchLatestHttpE2E()
+            .then((report) => {
+                if (report) {
+                    setHttpE2eReport(report);
+                }
+            })
+            .catch(() => {
+                setHttpE2eReport(null);
+            });
+        loadReleaseReadinessHistory();
+        loadHttpE2EHistory();
+    }, []);
 
     const handleRunRuntime = async () => {
         setRuntimeLoading(true);
@@ -1375,6 +1546,39 @@ function VerificationActionsCard() {
             setBaselineStatus("Failed to set baseline.");
         } finally {
             setBaselineLoading(false);
+        }
+    };
+
+    const handleRunReleaseReadiness = async () => {
+        setReleaseReadinessLoading(true);
+        setReleaseReadinessStatus(null);
+        try {
+            const report = await runReleaseReadiness();
+            setReleaseReadinessReport(report);
+            setReleaseReadinessStatus(
+                `Readiness ${report.status} · eval ${report.launch_eval.passed}/${report.launch_eval.total} · http ${report.http_e2e ? `${report.http_e2e.passed}/${report.http_e2e.total}` : "n/a"} · snapshot ${report.candidate_snapshot.scenario_count} · baseline preserved`
+            );
+            refetchReleaseGate();
+            loadReleaseReadinessHistory();
+        } catch {
+            setReleaseReadinessStatus("Release readiness failed.");
+        } finally {
+            setReleaseReadinessLoading(false);
+        }
+    };
+
+    const handleRunHttpE2E = async () => {
+        setHttpE2eLoading(true);
+        setHttpE2eStatus(null);
+        try {
+            const report = await runHttpE2E();
+            setHttpE2eReport(report);
+            setHttpE2eStatus(`HTTP E2E ${report.passed}/${report.total}`);
+            loadHttpE2EHistory();
+        } catch {
+            setHttpE2eStatus("HTTP E2E failed.");
+        } finally {
+            setHttpE2eLoading(false);
         }
     };
 
@@ -1565,6 +1769,231 @@ function VerificationActionsCard() {
                         {baselineLoading ? "Saving..." : "Set release baseline"}
                     </button>
                     {baselineStatus && <div className="text-[11px] text-muted-foreground">{baselineStatus}</div>}
+                </div>
+                <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Release readiness</span>
+                        <span>{releaseReadinessReport?.generated_at ? format(new Date(releaseReadinessReport.generated_at), "MMM d HH:mm") : "—"}</span>
+                    </div>
+                    <button
+                        onClick={handleRunReleaseReadiness}
+                        disabled={releaseReadinessLoading}
+                        className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
+                    >
+                        {releaseReadinessLoading ? "Running..." : "Run release readiness (read-only)"}
+                    </button>
+                    {releaseReadinessStatus && <div className="text-[11px] text-muted-foreground">{releaseReadinessStatus}</div>}
+                    {!releaseReadinessStatus && (
+                        <div className="text-[11px] text-muted-foreground">
+                            Read-only verification. Use &quot;Set release baseline&quot; only when intentionally resetting the baseline.
+                        </div>
+                    )}
+                    {releaseReadinessReport && (
+                        <div className="rounded-md border border-white/10 bg-black/20 p-2 text-[11px] space-y-1">
+                            <div className="flex items-center justify-between">
+                                <span>Status</span>
+                                <span className={
+                                    releaseReadinessReport.ready_for_launch
+                                        ? "text-emerald-300"
+                                        : releaseReadinessReport.status === "needs_data"
+                                            ? "text-amber-300"
+                                            : "text-rose-300"
+                                }>
+                                    {releaseReadinessReport.status}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span>Candidate snapshot</span>
+                                <span className={releaseReadinessReport.candidate_snapshot.scenario_count < 5 ? "text-amber-300" : "text-emerald-300"}>
+                                    {releaseReadinessReport.candidate_snapshot.scenario_count} scenarios
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span>Launch eval</span>
+                                <span className={releaseReadinessReport.launch_eval.failed > 0 ? "text-rose-300" : "text-emerald-300"}>
+                                    {releaseReadinessReport.launch_eval.passed}/{releaseReadinessReport.launch_eval.total}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span>Release gate</span>
+                                <span className={releaseReadinessReport.release_gate.ok ? "text-emerald-300" : "text-rose-300"}>
+                                    {releaseReadinessReport.release_gate.ok ? "OK" : "Issue"}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span>HTTP E2E</span>
+                                <span className={
+                                    releaseReadinessReport.http_e2e
+                                        ? releaseReadinessReport.http_e2e.ok
+                                            ? "text-emerald-300"
+                                            : "text-rose-300"
+                                        : releaseReadinessReport.http_e2e_load_error
+                                            ? "text-rose-300"
+                                            : "text-amber-300"
+                                }>
+                                    {releaseReadinessReport.http_e2e
+                                        ? `${releaseReadinessReport.http_e2e.passed}/${releaseReadinessReport.http_e2e.total}`
+                                        : releaseReadinessReport.http_e2e_load_error
+                                            ? "Load error"
+                                            : "Missing"}
+                                </span>
+                            </div>
+                            {releaseReadinessReport.blockers.length > 0 && (
+                                <div className="text-rose-200">
+                                    {releaseReadinessReport.blockers.slice(0, 3).map((item) => (
+                                        <div key={item} className="truncate">• {item}</div>
+                                    ))}
+                                </div>
+                            )}
+                            {releaseReadinessReport.blockers.length === 0 && releaseReadinessReport.advisories.length > 0 && (
+                                <div className="text-amber-200">
+                                    {releaseReadinessReport.advisories.slice(0, 3).map((item) => (
+                                        <div key={item} className="truncate">• {item}</div>
+                                    ))}
+                                </div>
+                            )}
+                            {!releaseReadinessReport.http_e2e && releaseReadinessReport.http_e2e_load_error && (
+                                <div className="text-rose-200 truncate">
+                                    • {releaseReadinessReport.http_e2e_load_error}
+                                </div>
+                            )}
+                            <div className="text-muted-foreground truncate">
+                                {releaseReadinessReport.report_markdown_path}
+                            </div>
+                            {releaseReadinessReport.archived_history_markdown_path && (
+                                <div className="text-muted-foreground truncate">
+                                    archive: {releaseReadinessReport.archived_history_markdown_path}
+                                </div>
+                            )}
+                            {releaseReadinessReport.history_trend && (
+                                <div className="mt-2 rounded border border-white/10 bg-white/5 p-2">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-muted-foreground">Trend</span>
+                                        <span className={
+                                            releaseReadinessReport.history_trend.warnings.length > 0
+                                                ? "text-amber-300"
+                                                : "text-emerald-300"
+                                        }>
+                                            {releaseReadinessReport.history_trend.compared_runs} runs
+                                        </span>
+                                    </div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        {releaseReadinessReport.history_trend.summary}
+                                    </div>
+                                    <div className="mt-1 text-muted-foreground">
+                                        HTTP E2E delta {releaseReadinessReport.history_trend.http_e2e_pass_rate_delta_pct >= 0 ? "+" : ""}
+                                        {releaseReadinessReport.history_trend.http_e2e_pass_rate_delta_pct.toFixed(1)}pp
+                                    </div>
+                                    {releaseReadinessReport.history_trend.warnings.length > 0 && (
+                                        <div className="mt-1 text-amber-200">
+                                            {releaseReadinessReport.history_trend.warnings.slice(0, 3).map((item) => (
+                                                <div key={item} className="truncate">• {item}</div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <div className="pt-2 border-t border-white/10 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs text-muted-foreground">HTTP source-of-truth smoke</span>
+                            <span className="text-[11px] text-muted-foreground">
+                                {httpE2eReport?.generated_at ? format(new Date(httpE2eReport.generated_at), "MMM d HH:mm") : "—"}
+                            </span>
+                        </div>
+                        <button
+                            onClick={handleRunHttpE2E}
+                            disabled={httpE2eLoading}
+                            className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
+                        >
+                            {httpE2eLoading ? "Running..." : "Run live HTTP E2E"}
+                        </button>
+                        {httpE2eStatus && <div className="text-[11px] text-muted-foreground">{httpE2eStatus}</div>}
+                        {httpE2eReport && (
+                            <div className="rounded-md border border-white/10 bg-black/20 p-2 text-[11px] space-y-1">
+                                <div className="flex items-center justify-between">
+                                    <span>Status</span>
+                                    <span className={httpE2eReport.ok ? "text-emerald-300" : "text-rose-300"}>
+                                        {httpE2eReport.passed}/{httpE2eReport.total}
+                                    </span>
+                                </div>
+                                <div className="text-muted-foreground truncate">
+                                    {httpE2eReport.report_markdown_path}
+                                </div>
+                                {!httpE2eReport.ok && (
+                                    <div className="text-rose-200">
+                                        {httpE2eReport.steps
+                                            .filter((step) => !step.ok)
+                                            .slice(0, 3)
+                                            .map((step) => (
+                                                <div key={step.name} className="truncate">• {step.name}: {step.detail}</div>
+                                            ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        <div className="rounded-md border border-white/10 bg-black/20 p-2 text-[11px] space-y-1">
+                            <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">Recent HTTP E2E history</span>
+                                <span className="text-muted-foreground">
+                                    {httpE2eHistoryLoading ? "loading" : `${httpE2eHistory.length} runs`}
+                                </span>
+                            </div>
+                            {httpE2eHistory.length === 0 ? (
+                                <div className="text-muted-foreground">No archived HTTP E2E runs yet.</div>
+                            ) : (
+                                httpE2eHistory.map((entry) => (
+                                    <div key={`${entry.generated_at}-${entry.report_json_path}`} className="flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="truncate">
+                                                {format(new Date(entry.generated_at), "MMM d HH:mm")} · {entry.passed}/{entry.total}
+                                            </div>
+                                            <div className="truncate text-muted-foreground">
+                                                {entry.report_markdown_path}
+                                            </div>
+                                        </div>
+                                        <span className={entry.ok ? "text-emerald-300" : "text-rose-300"}>
+                                            {entry.ok ? "OK" : "Fail"}
+                                        </span>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-black/20 p-2 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Recent readiness history</span>
+                            <span className="text-muted-foreground">
+                                {releaseReadinessHistoryLoading ? "loading" : `${releaseReadinessHistory.length} runs`}
+                            </span>
+                        </div>
+                        {releaseReadinessHistory.length === 0 ? (
+                            <div className="text-muted-foreground">No archived release readiness runs yet.</div>
+                        ) : (
+                            releaseReadinessHistory.map((entry) => (
+                                <div key={`${entry.generated_at}-${entry.report_json_path}`} className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="truncate">
+                                            {format(new Date(entry.generated_at), "MMM d HH:mm")} · snapshot {entry.candidate_snapshot_count} · eval {entry.launch_eval_passed}/{entry.launch_eval_total} · http {entry.http_e2e_passed != null && entry.http_e2e_total != null ? `${entry.http_e2e_passed}/${entry.http_e2e_total}` : "n/a"}
+                                        </div>
+                                        <div className="truncate text-muted-foreground">
+                                            {entry.report_markdown_path}
+                                        </div>
+                                    </div>
+                                    <span className={
+                                        entry.ready_for_launch
+                                            ? "text-emerald-300"
+                                            : entry.status === "needs_data"
+                                                ? "text-amber-300"
+                                                : "text-rose-300"
+                                    }>
+                                        {entry.status}
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
                 </div>
                 <VerificationRunHistory />
             </CardContent>

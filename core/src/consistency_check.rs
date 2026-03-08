@@ -91,7 +91,7 @@ fn scan_backend_routes(path: &Path) -> Vec<BackendEndpoint> {
     };
     let source = path.to_string_lossy().to_string();
 
-    let route_re = Regex::new(r#"\.route\(\"([^\"]+)\"\s*,\s*([a-zA-Z_]+)"#).unwrap();
+    let route_re = Regex::new(r#"(?s)\.route\s*\(\s*\"([^\"]+)\"\s*,\s*([a-zA-Z_:]+)"#).unwrap();
     let mut endpoints = Vec::new();
 
     for cap in route_re.captures_iter(&content) {
@@ -172,6 +172,15 @@ fn detect_api_base_prefix(workdir: &Path) -> Option<String> {
         return extract_base_path(cap.get(1)?.as_str());
     }
 
+    let normalize_default_re = Regex::new(r#"return\s+\"([^\"]+/api)\""#).unwrap();
+    if let Some(cap) = normalize_default_re.captures(&content) {
+        return extract_base_path(cap.get(1)?.as_str());
+    }
+
+    if content.contains("API_BASE_URL") {
+        return Some("/api".to_string());
+    }
+
     None
 }
 
@@ -237,11 +246,21 @@ fn normalize_frontend_path(raw: &str, base_prefix: Option<&str>) -> Option<Strin
         path = extracted;
     }
 
+    if let Some(prefix) = base_prefix {
+        path = path.replace("${API_BASE_URL}", prefix);
+        path = path.replace("API_BASE_URL", prefix);
+    }
+
     if let Some(idx) = path.find('?') {
         path.truncate(idx);
     }
     if let Some(idx) = path.find('#') {
         path.truncate(idx);
+    }
+    if path.contains("${") && !path.contains('}') {
+        if let Some(idx) = path.find("${") {
+            path.truncate(idx);
+        }
     }
 
     path = Regex::new(r"\$\{[^}]+\}")
@@ -354,5 +373,46 @@ mod tests {
     fn test_normalize_frontend_with_base() {
         let path = normalize_frontend_path("/status", Some("/api")).unwrap();
         assert_eq!(path, "/api/status");
+    }
+
+    #[test]
+    fn test_normalize_frontend_with_api_base_url_template() {
+        let path = normalize_frontend_path("${API_BASE_URL}/chat", Some("/api")).unwrap();
+        assert_eq!(path, "/api/chat");
+    }
+
+    #[test]
+    fn test_normalize_frontend_truncates_unclosed_query_template_suffix() {
+        let path = normalize_frontend_path("/workflow/provision-ops${qs ? ", Some("/api")).unwrap();
+        assert_eq!(path, "/api/workflow/provision-ops");
+    }
+
+    #[test]
+    fn test_scan_backend_routes_supports_multiline_route_declarations() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let file_path = temp_dir.path().join("api_server.rs");
+        fs::write(
+            &file_path,
+            r#"
+            let app = Router::new()
+                .route(
+                    "/api/launch/eval-candidates",
+                    get(get_launch_eval_candidates_handler),
+                )
+                .route(
+                    "/api/routines/:id",
+                    axum::routing::patch(toggle_routine_handler),
+                );
+            "#,
+        )
+        .expect("write api file");
+
+        let routes = scan_backend_routes(&file_path);
+        let paths = routes
+            .into_iter()
+            .map(|route| route.path)
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"/api/launch/eval-candidates".to_string()));
+        assert!(paths.contains(&"/api/routines/:id".to_string()));
     }
 }

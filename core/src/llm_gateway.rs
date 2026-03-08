@@ -1959,6 +1959,8 @@ Guidelines:
                 confidence: parsed["confidence"].as_f64().unwrap_or(0.5),
                 evidence: vec![],
                 pattern_id: None,
+                category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+                business_score: 0.0,
             });
         }
 
@@ -2018,6 +2020,8 @@ Guidelines:
             confidence: parsed["confidence"].as_f64().unwrap_or(0.5),
             evidence: vec![], // Populated by caller
             pattern_id: None, // Populated by caller
+            category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+            business_score: 0.0,
         })
     }
 

@@ -21,6 +21,18 @@ pub struct AiDigestTriggerResult {
     pub response_text: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiDigestProgramRouteKind {
+    Explicit,
+    Auto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiDigestProgramRoute {
+    pub request_text: String,
+    pub kind: AiDigestProgramRouteKind,
+}
+
 pub fn default_request_text() -> &'static str {
     DEFAULT_REQUEST_TEXT
 }
@@ -142,6 +154,92 @@ pub fn strip_local_execution_prefix(message: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+fn normalize_channel_name(channel: Option<&str>) -> Option<String> {
+    let normalized = channel
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn env_truthy(key: &str) -> Option<bool> {
+    std::env::var(key).ok().map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+pub fn ai_digest_auto_route_enabled(channel: Option<&str>) -> bool {
+    let normalized = normalize_channel_name(channel);
+
+    if let Some(configured) = std::env::var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS")
+        .ok()
+        .map(|value| {
+            value
+                .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+                .map(|part| part.trim().to_lowercase())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+        })
+    {
+        return normalized
+            .as_ref()
+            .is_some_and(|channel| configured.iter().any(|value| value == channel));
+    }
+
+    if normalized.as_deref() == Some("telegram") {
+        return env_truthy("STEER_TELEGRAM_AUTO_ROUTE_AI_DIGEST").unwrap_or(true);
+    }
+
+    matches!(normalized.as_deref(), Some("web"))
+}
+
+pub fn infer_program_route(message: &str, channel: Option<&str>) -> Option<AiDigestProgramRoute> {
+    let stripped = strip_local_execution_prefix(message);
+    if stripped != message.trim() {
+        return None;
+    }
+
+    if let Some(explicit) = extract_explicit_n8n_request(message) {
+        return Some(AiDigestProgramRoute {
+            request_text: explicit,
+            kind: AiDigestProgramRouteKind::Explicit,
+        });
+    }
+
+    if !ai_digest_auto_route_enabled(channel) {
+        return None;
+    }
+    if !looks_like_ai_digest_request(message) {
+        return None;
+    }
+    if resolve_program_webhook_url().is_err() {
+        return None;
+    }
+
+    let request_text = if stripped.trim().is_empty() {
+        DEFAULT_REQUEST_TEXT.to_string()
+    } else {
+        stripped
+    };
+    Some(AiDigestProgramRoute {
+        request_text,
+        kind: AiDigestProgramRouteKind::Auto,
+    })
 }
 
 fn env_non_empty(key: &str) -> Option<String> {
@@ -313,10 +411,7 @@ fn extract_headlines(payload: &Value) -> Vec<String> {
                     }
                 }
                 if let Some(title) = maybe_string(map.get("title")) {
-                    let has_news_link = map
-                        .get("source_url")
-                        .and_then(|v| v.as_str())
-                        .is_some()
+                    let has_news_link = map.get("source_url").and_then(|v| v.as_str()).is_some()
                         || map.get("link").and_then(|v| v.as_str()).is_some();
                     if has_news_link {
                         dedupe_push(&mut out, &title);
@@ -473,6 +568,14 @@ pub async fn trigger_program_webhook(
     })
 }
 
+pub async fn trigger_program_webhook_human_summary(
+    request_text: &str,
+    scope_marker_override: Option<String>,
+) -> Result<String> {
+    let result = trigger_program_webhook(request_text, scope_marker_override).await?;
+    Ok(format_human_summary(&result))
+}
+
 pub fn format_human_summary(result: &AiDigestTriggerResult) -> String {
     let extracted_notion_url = result
         .response_json
@@ -543,6 +646,57 @@ mod tests {
             extract_explicit_n8n_request("스포츠 뉴스 5개 노션에 정리해줘"),
             None
         );
+    }
+
+    #[test]
+    #[serial]
+    fn auto_route_defaults_to_web_and_telegram_only() {
+        std::env::remove_var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS");
+        std::env::remove_var("STEER_TELEGRAM_AUTO_ROUTE_AI_DIGEST");
+        std::env::set_var(
+            "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+            "http://127.0.0.1:5678/webhook/test/programtrigger/ai-digest-program",
+        );
+
+        let web = infer_program_route("AI 뉴스 5개 요약해서 노션에 정리해줘", Some("web"))
+            .expect("web route");
+        let telegram =
+            infer_program_route("AI 뉴스 5개 요약해서 노션에 정리해줘", Some("telegram"))
+                .expect("telegram route");
+        let api = infer_program_route("AI 뉴스 5개 요약해서 노션에 정리해줘", Some("api"));
+
+        assert_eq!(web.kind, AiDigestProgramRouteKind::Auto);
+        assert_eq!(telegram.kind, AiDigestProgramRouteKind::Auto);
+        assert!(api.is_none());
+
+        std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
+    }
+
+    #[test]
+    #[serial]
+    fn infer_program_route_respects_channel_override_and_local_prefix() {
+        std::env::set_var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS", "telegram");
+        std::env::set_var(
+            "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+            "http://127.0.0.1:5678/webhook/test/programtrigger/ai-digest-program",
+        );
+
+        assert!(infer_program_route(
+            "/local AI 뉴스 5개 요약해서 노션에 정리해줘",
+            Some("telegram"),
+        )
+        .is_none());
+
+        let telegram =
+            infer_program_route("AI 뉴스 5개 요약해서 노션에 정리해줘", Some("telegram"))
+                .expect("telegram route");
+        let web = infer_program_route("AI 뉴스 5개 요약해서 노션에 정리해줘", Some("web"));
+
+        assert_eq!(telegram.kind, AiDigestProgramRouteKind::Auto);
+        assert!(web.is_none());
+
+        std::env::remove_var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS");
+        std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
     }
 
     #[test]

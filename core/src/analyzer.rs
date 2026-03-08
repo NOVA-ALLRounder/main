@@ -4,11 +4,31 @@ use crate::memory::MemoryStore; // Added for RAG
 use crate::notifier;
 use crate::pattern_detector::PatternDetector;
 use crate::recommendation::TemplateMatcher;
+use crate::recommendation_policy;
 use crate::schema::EventEnvelope;
 use crate::session::Sessionizer;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+fn auto_recommendation_allowed(proposal: &crate::recommendation::AutomationProposal) -> bool {
+    let history_limit = recommendation_policy::auto_recommendation_history_limit();
+    let recent = db::get_recent_recommendations(history_limit).unwrap_or_default();
+    let decision = recommendation_policy::admit_auto_recommendation(proposal, &recent);
+    if decision.accepted {
+        return true;
+    }
+
+    println!(
+        "🧹 [Analyzer] Suppressing auto recommendation: {} [{} / {} / {:.2}] {}",
+        proposal.title,
+        decision.pending_same_category,
+        decision.pending_limit,
+        decision.priority_score,
+        decision.reasons.join(", ")
+    );
+    false
+}
 
 pub fn spawn(
     mut log_rx: mpsc::Receiver<String>,
@@ -217,9 +237,12 @@ async fn process_buffer(
         }
         Err(_) => max_per_day as usize,
     };
+    let preference_history =
+        db::get_recent_recommendations(recommendation_policy::auto_recommendation_history_limit())
+            .unwrap_or_default();
 
     for pattern in patterns {
-        if !pattern_is_recommendable(&pattern) {
+        if !detector.should_recommend(&pattern) {
             continue;
         }
 
@@ -240,8 +263,23 @@ async fn process_buffer(
         }
 
         // 1. Try Template Match (Fast, High Trust, Zero Cost)
-        if let Some(proposal) = matcher.match_pattern(&pattern) {
+        if let Some(mut proposal) = matcher.match_pattern(&pattern) {
+            let decision = recommendation_policy::apply_mvp_policy(&mut proposal, Some(&pattern));
+            if !decision.accepted {
+                println!(
+                    "🧹 [Analyzer] Skipping non-work recommendation: {} [{} {:.2}]",
+                    proposal.title, decision.category, decision.business_score
+                );
+                continue;
+            }
+            recommendation_policy::apply_recommendation_preferences(
+                &mut proposal,
+                &preference_history,
+            );
             if proposal.confidence >= min_confidence {
+                if !auto_recommendation_allowed(&proposal) {
+                    continue;
+                }
                 println!("✨ [Analyzer] Matched Template: {}", proposal.title);
                 if let Err(e) = db::insert_recommendation(&proposal) {
                     eprintln!("⚠️ [Analyzer] DB Error: {}", e);
@@ -291,7 +329,23 @@ async fn process_buffer(
                 if proposal.evidence.is_empty() {
                     proposal.evidence = build_evidence(&pattern);
                 }
+                let decision =
+                    recommendation_policy::apply_mvp_policy(&mut proposal, Some(&pattern));
+                if !decision.accepted {
+                    println!(
+                        "🧹 [Analyzer] Skipping non-work AI recommendation: {} [{} {:.2}]",
+                        proposal.title, decision.category, decision.business_score
+                    );
+                    continue;
+                }
+                recommendation_policy::apply_recommendation_preferences(
+                    &mut proposal,
+                    &preference_history,
+                );
                 if proposal.confidence >= min_confidence {
+                    if !auto_recommendation_allowed(&proposal) {
+                        continue;
+                    }
                     println!("✨ [Analyzer] AI Generated Idea: {}", proposal.title);
                     if let Err(e) = db::insert_recommendation(&proposal) {
                         eprintln!("⚠️ [Analyzer] DB Error: {}", e);
@@ -321,13 +375,6 @@ fn env_i64(key: &str, default_val: i64) -> i64 {
         .unwrap_or(default_val)
 }
 
-fn env_u32(key: &str, default_val: u32) -> u32 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default_val)
-}
-
 fn env_f64(key: &str, default_val: f64) -> f64 {
     std::env::var(key)
         .ok()
@@ -335,34 +382,18 @@ fn env_f64(key: &str, default_val: f64) -> f64 {
         .unwrap_or(default_val)
 }
 
-fn pattern_is_recommendable(pattern: &crate::pattern_detector::DetectedPattern) -> bool {
-    use crate::pattern_detector::PatternType::*;
-    let (min_occ, min_sim) = match pattern.pattern_type {
-        AppSequence => (
-            env_u32("REC_MIN_OCCURRENCES_APP", 4),
-            env_f64("REC_MIN_SIMILARITY_APP", 0.8),
-        ),
-        KeywordRepeat => (
-            env_u32("REC_MIN_OCCURRENCES_KEYWORD", 5),
-            env_f64("REC_MIN_SIMILARITY_KEYWORD", 0.85),
-        ),
-        FilePattern => (
-            env_u32("REC_MIN_OCCURRENCES_FILE", 4),
-            env_f64("REC_MIN_SIMILARITY_FILE", 0.85),
-        ),
-        TimeBasedAction => (
-            env_u32("REC_MIN_OCCURRENCES_TIME", 4),
-            env_f64("REC_MIN_SIMILARITY_TIME", 0.8),
-        ),
-    };
-    pattern.occurrences >= min_occ && pattern.similarity_score >= min_sim
-}
-
 fn build_evidence(pattern: &crate::pattern_detector::DetectedPattern) -> Vec<String> {
     let mut evidence = vec![
         format!("Pattern: {}", pattern.description),
         format!("Frequency: Found {} occurrences", pattern.occurrences),
+        format!("Span: {} distinct day(s)", pattern.distinct_days),
     ];
+    if pattern.weekday_occurrences > 0 || pattern.work_hour_occurrences > 0 {
+        evidence.push(format!(
+            "Work context: weekday {} / work-hour {} occurrences",
+            pattern.weekday_occurrences, pattern.work_hour_occurrences
+        ));
+    }
     if let Some(sample) = pattern.sample_events.first() {
         let snippet = if sample.len() > 140 {
             format!("{}...", &sample[..140])

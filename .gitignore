@@ -31,6 +31,10 @@ build/
 
 # Runtime artifacts (scenario runs / temporary UI captures)
 scenario_results/
+reports/
+configs/launch_eval.generated.yaml
+configs/launch_eval.dogfood.generated.yaml
+configs/launch_eval.mixed.generated.yaml
 
 # Python bytecode caches
 **/__pycache__/

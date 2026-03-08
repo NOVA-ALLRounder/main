@@ -13,13 +13,16 @@ use crate::permission_manager::PermissionManager;
 use crate::{
     ai_digest, approval_gate, chat_sanitize, collector_pipeline, consistency_check,
     context_pruning, db, execution_controller, feedback_collector, integrations, intent_router,
-    judgment, llm_gateway, monitor, nl_store, pattern_detector, performance_verification,
-    plan_builder, project_scanner, quality_scorer, recommendation_executor, release_gate,
-    runtime_verification, semantic_verification, slot_filler, tool_result_guard,
-    verification_engine, visual_verification, workflow_intake,
+    judgment, launch_eval, llm_gateway, monitor, nl_store, pattern_detector,
+    performance_verification, plan_builder, project_scanner, quality_scorer,
+    recommendation_executor, release_gate, release_readiness, runtime_verification,
+    semantic_verification, slot_filler, tool_result_guard, verification_engine,
+    visual_verification, workflow_intake,
 };
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -89,6 +92,96 @@ fn has_nonempty_env(key: &str) -> bool {
         .ok()
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
+}
+
+fn default_server_workdir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn allow_operational_workdir_override() -> bool {
+    std::env::var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE")
+        .ok()
+        .map(|value| is_truthy_env_value(&value))
+        .unwrap_or(false)
+}
+
+fn allow_operational_path_override() -> bool {
+    allow_operational_workdir_override()
+        || std::env::var("ALLVIA_API_ALLOW_PATH_OVERRIDE")
+            .ok()
+            .map(|value| is_truthy_env_value(&value))
+            .unwrap_or(false)
+}
+
+fn resolve_operational_workdir(requested: Option<&str>) -> PathBuf {
+    if allow_operational_workdir_override() {
+        if let Some(raw) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+            return PathBuf::from(raw);
+        }
+    }
+    default_server_workdir()
+}
+
+fn resolve_operational_file_override(requested: Option<&str>) -> Option<PathBuf> {
+    if allow_operational_path_override() {
+        if let Some(raw) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+            return Some(PathBuf::from(raw));
+        }
+    }
+    None
+}
+
+fn requested_operational_override(requested: Option<&str>) -> bool {
+    requested
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
+fn default_launch_eval_config_path() -> PathBuf {
+    default_server_workdir().join("configs/launch_eval.yaml")
+}
+
+fn has_release_baseline_override(payload: &release_gate::ReleaseBaselineRequest) -> bool {
+    payload.workdir.is_some()
+        || payload.max_files.is_some()
+        || payload.consistency.is_some()
+        || payload.semantic.is_some()
+        || payload.performance.is_some()
+        || payload.quality.is_some()
+        || payload.perf_regression_pct.is_some()
+        || payload.quality_drop.is_some()
+        || payload.launch_error_rate_pct.is_some()
+        || payload.launch_low_confidence_rate_pct.is_some()
+        || payload.launch_cache_hit_rate_drop_pct.is_some()
+        || payload.recommendation_approval_rate_min.is_some()
+        || payload.launch_eval_config_path.is_some()
+        || payload.launch_eval_report_path.is_some()
+        || payload.launch_eval_snapshot_output_path.is_some()
+        || payload.refresh_launch_eval_candidates.is_some()
+        || payload.launch_eval_candidate_limit.is_some()
+}
+
+fn default_release_baseline_request() -> release_gate::ReleaseBaselineRequest {
+    release_gate::ReleaseBaselineRequest {
+        workdir: None,
+        max_files: None,
+        consistency: None,
+        semantic: None,
+        performance: None,
+        quality: None,
+        perf_regression_pct: None,
+        quality_drop: None,
+        launch_error_rate_pct: None,
+        launch_low_confidence_rate_pct: None,
+        launch_cache_hit_rate_drop_pct: None,
+        recommendation_approval_rate_min: None,
+        launch_eval_config_path: None,
+        launch_eval_report_path: None,
+        refresh_launch_eval_candidates: Some(true),
+        launch_eval_candidate_limit: Some(20),
+        launch_eval_snapshot_output_path: None,
+    }
 }
 
 fn telegram_polling_requested() -> bool {
@@ -244,7 +337,7 @@ fn acquire_agent_execution(
 }
 
 // Request/Response types
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ChatRequest {
     pub message: String,
     pub channel: Option<String>,
@@ -264,6 +357,154 @@ pub struct FeedbackRequest {
 pub struct FeedbackResponse {
     pub action: String,
     pub new_goal: Option<String>,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
+pub struct ChatFeedbackRequest {
+    pub request_text: String,
+    pub response_text: String,
+    pub command: Option<String>,
+    pub sentiment: String,
+    pub channel: Option<String>,
+    pub chat_type: Option<String>,
+    pub sender: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ChatFeedbackResponse {
+    pub ok: bool,
+    pub request_memory_updated: bool,
+    pub execution_memory_updated: bool,
+    pub reuse_suppressed: bool,
+}
+
+#[derive(Deserialize)]
+pub struct RecommendationFeedbackRequest {
+    pub feedback: String,
+    pub actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RecommendationReviewActionRequest {
+    pub actor: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RecommendationFeedbackResponse {
+    pub ok: bool,
+    pub sentiment: String,
+    pub status: String,
+    pub message: String,
+    pub suppressed_similar: bool,
+}
+
+#[derive(Deserialize)]
+pub struct MemoryRecordsQuery {
+    pub limit: Option<i64>,
+    pub include_suppressed: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct RecommendationReviewEventsQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct MemoryRecordsResponse {
+    pub metrics: crate::db::MemoryOpsMetrics,
+    pub request_memory: Vec<crate::db::RequestMemoryRecord>,
+    pub execution_memory: Vec<crate::db::ExecutionMemoryRecord>,
+    pub recent_admin_events: Vec<crate::db::MemoryAdminEventRecord>,
+}
+
+#[derive(Deserialize)]
+pub struct LaunchOpsQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct LaunchEvalCandidatesQuery {
+    pub limit: Option<usize>,
+    pub provenance: Option<String>,
+    pub workdir: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LaunchEvalSnapshotRequest {
+    pub limit: Option<usize>,
+    pub output_path: Option<String>,
+    pub workdir: Option<String>,
+    pub provenance: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct LaunchEvalSnapshotInfoQuery {
+    pub output_path: Option<String>,
+    pub workdir: Option<String>,
+    pub provenance: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReleaseReadinessRequest {
+    pub workdir: Option<String>,
+    pub config_path: Option<String>,
+    pub candidate_limit: Option<usize>,
+    pub snapshot_output_path: Option<String>,
+    pub save_baseline: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReleaseReadinessHistoryQuery {
+    pub workdir: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HttpE2ERequest {
+    pub workdir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HttpE2EHistoryQuery {
+    pub workdir: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct LaunchOpsResponse {
+    pub chat_metrics: crate::db::LaunchOpsMetrics,
+    pub memory_metrics: crate::db::MemoryOpsMetrics,
+    pub nl_run_metrics: crate::db::NLRunMetrics,
+    pub exec_approval_metrics: crate::db::ExecApprovalMetrics,
+    pub recommendation_metrics: RecommendationMetricsResponse,
+    pub recommendation_review_metrics: crate::db::RecommendationReviewMetrics,
+    pub recent_events: Vec<crate::db::LaunchOpsEventRecord>,
+}
+
+#[derive(Deserialize)]
+pub struct RequestMemoryAdminActionRequest {
+    pub request_text: String,
+    pub memory_scope: Option<String>,
+    pub reason: Option<String>,
+    pub actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExecutionMemoryAdminActionRequest {
+    pub intent_command: String,
+    pub params_key: String,
+    pub memory_scope: Option<String>,
+    pub reason: Option<String>,
+    pub actor: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MemoryAdminActionResponse {
+    pub ok: bool,
+    pub kind: String,
+    pub action: String,
     pub message: String,
 }
 
@@ -678,9 +919,28 @@ pub struct PerformanceVerifyRequest {
 }
 
 #[derive(Serialize)]
+pub struct ChatRouteMeta {
+    pub route_kind: String,
+    pub outcome: String,
+    pub confidence: Option<f64>,
+    pub note: Option<String>,
+    pub memory_scope: Option<String>,
+    pub freshness_bypassed: bool,
+    pub intent_memory_hit: bool,
+    pub request_memory_hit: bool,
+    pub execution_memory_hit: bool,
+    pub deterministic_used: bool,
+    pub llm_used: bool,
+    pub ai_digest_used: bool,
+    pub local_only: bool,
+}
+
+#[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
     pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_meta: Option<ChatRouteMeta>,
 }
 
 #[derive(Deserialize)]
@@ -740,10 +1000,15 @@ pub struct RecommendationItem {
     pub title: String,
     pub summary: String,
     pub confidence: f64,
+    pub category: String,
+    pub business_score: f64,
     pub evidence: Vec<String>, // [NEW] Explainability field
     pub last_error: Option<String>,
     pub workflow_id: Option<String>,
     pub workflow_url: Option<String>,
+    pub snoozed_until: Option<String>,
+    pub approval_ready: bool,
+    pub approval_reasons: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -826,62 +1091,7 @@ async fn auth_middleware(
     }
 }
 
-/// Start the HTTP API server for desktop GUI
-pub async fn start_api_server(
-    llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>>,
-) -> anyhow::Result<()> {
-    API_SERVER_STARTED_AT.get_or_init(|| chrono::Utc::now().to_rfc3339());
-
-    let telegram_polling_explicit = std::env::var("STEER_TELEGRAM_POLLING").ok();
-    if telegram_polling_requested() {
-        if let Some(llm) = llm_client.clone() {
-            match try_spawn_telegram_listener(llm) {
-                Ok(TelegramListenerStartOutcome::Started) => {
-                    if telegram_polling_explicit.is_some() {
-                        println!("🤖 Telegram polling enabled (STEER_TELEGRAM_POLLING=1).");
-                    } else {
-                        println!(
-                            "🤖 Telegram polling auto-enabled (Telegram credentials detected)."
-                        );
-                    }
-                }
-                Ok(TelegramListenerStartOutcome::AlreadyRunning) => {
-                    println!("ℹ️ Telegram listener already running.");
-                }
-                Err("missing_telegram_token") => {
-                    println!(
-                        "⚠️  STEER_TELEGRAM_POLLING=1 but TELEGRAM_BOT_TOKEN is missing; listener not started."
-                    );
-                }
-                Err(_) => {}
-            }
-        } else {
-            println!("⚠️  STEER_TELEGRAM_POLLING=1 but LLM is unavailable; listener not started.");
-        }
-    }
-
-    match db::mark_orphaned_inflight_task_runs_failed() {
-        Ok(recovered) if recovered > 0 => {
-            println!(
-                "♻️ Recovered {} orphaned in-flight task run(s) from previous core process.",
-                recovered
-            );
-        }
-        Ok(_) => {}
-        Err(e) => {
-            println!("⚠️ Failed to recover orphaned task runs: {}", e);
-        }
-    }
-
-    let state = AppState {
-        llm_client,
-        current_goal: Arc::new(Mutex::new(None)),
-    };
-
-    // Recover/resume in-flight workflow provisioning across core restarts.
-    spawn_workflow_provision_recovery_loop(state.llm_client.clone());
-
-    // SECURITY: Restrict CORS to localhost only (Tauri/Dev Server)
+fn build_api_cors_layer() -> CorsLayer {
     let allowed_origins = [
         "http://localhost:5173"
             .parse::<HeaderValue>()
@@ -903,12 +1113,14 @@ pub async fn start_api_server(
             .expect("Invalid CORS origin"),
     ];
 
-    let cors = CorsLayer::new()
+    CorsLayer::new()
         .allow_origin(allowed_origins)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+}
 
-    let app = Router::new()
+pub fn build_api_router(state: AppState) -> Router {
+    Router::new()
         .route("/", get(root_handler))
         .route("/api/health", get(health_check))
         // Open endpoints (Status, Logs)
@@ -918,6 +1130,7 @@ pub async fn start_api_server(
         // Protected Endpoints (Chat, Execute, Plan, Verify)
         .route("/events", post(ingest_events))
         .route("/api/chat", post(handle_chat))
+        .route("/api/chat/feedback", post(handle_chat_feedback))
         .route("/api/automation/ai-digest", post(run_ai_digest_handler))
         .route("/api/llm/news-summary", post(run_news_summary_handler))
         .route("/api/recommendations", get(list_recommendations))
@@ -928,6 +1141,10 @@ pub async fn start_api_server(
         .route(
             "/api/recommendations/:id/reject",
             post(reject_recommendation),
+        )
+        .route(
+            "/api/recommendations/:id/feedback",
+            post(submit_recommendation_feedback),
         )
         .route("/api/recommendations/:id/later", post(later_recommendation))
         .route(
@@ -972,6 +1189,17 @@ pub async fn start_api_server(
         .route("/api/release/baseline", post(set_release_baseline_handler))
         .route("/api/release/gate", post(run_release_gate_handler))
         .route(
+            "/api/release/readiness",
+            get(get_latest_release_readiness_handler).post(run_release_readiness_handler),
+        )
+        .route(
+            "/api/release/readiness/history",
+            get(get_release_readiness_history_handler),
+        )
+        .route("/api/http-e2e/latest", get(get_latest_http_e2e_handler))
+        .route("/api/http-e2e/history", get(get_http_e2e_history_handler))
+        .route("/api/http-e2e/run", post(run_http_e2e_handler))
+        .route(
             "/api/exec-results/guard",
             post(run_exec_results_guard_handler),
         )
@@ -979,9 +1207,48 @@ pub async fn start_api_server(
         .route("/api/quality/latest", get(latest_quality_handler))
         .route("/api/patterns/analyze", post(analyze_patterns))
         .route("/api/quality", get(get_quality_metrics))
+        .route("/api/launch/ops", get(get_launch_ops_handler))
+        .route(
+            "/api/launch/eval-candidates",
+            get(get_launch_eval_candidates_handler),
+        )
+        .route(
+            "/api/launch/eval-candidates/snapshot",
+            get(get_launch_eval_candidate_snapshot_info_handler)
+                .post(write_launch_eval_candidate_snapshot_handler),
+        )
         .route(
             "/api/recommendations/metrics",
             get(get_recommendation_metrics),
+        )
+        .route(
+            "/api/recommendations/review-events",
+            get(list_recommendation_review_events_handler),
+        )
+        .route("/api/memory/records", get(list_memory_records_handler))
+        .route(
+            "/api/memory/request/suppress",
+            post(suppress_request_memory_handler),
+        )
+        .route(
+            "/api/memory/request/restore",
+            post(restore_request_memory_handler),
+        )
+        .route(
+            "/api/memory/request/delete",
+            post(delete_request_memory_handler),
+        )
+        .route(
+            "/api/memory/execution/suppress",
+            post(suppress_execution_memory_handler),
+        )
+        .route(
+            "/api/memory/execution/restore",
+            post(restore_execution_memory_handler),
+        )
+        .route(
+            "/api/memory/execution/delete",
+            post(delete_execution_memory_handler),
         )
         .route(
             "/api/routines",
@@ -1057,9 +1324,66 @@ pub async fn start_api_server(
             get(get_session_handler).delete(delete_session_handler),
         )
         .route("/api/sessions/:id/resume", post(resume_session_handler))
-        .layer(axum::middleware::from_fn(auth_middleware)) // Apply Auth Middleware
-        .layer(cors)
-        .with_state(state);
+        .layer(axum::middleware::from_fn(auth_middleware))
+        .layer(build_api_cors_layer())
+        .with_state(state)
+}
+
+/// Start the HTTP API server for desktop GUI
+pub async fn start_api_server(
+    llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>>,
+) -> anyhow::Result<()> {
+    API_SERVER_STARTED_AT.get_or_init(|| chrono::Utc::now().to_rfc3339());
+
+    let telegram_polling_explicit = std::env::var("STEER_TELEGRAM_POLLING").ok();
+    if telegram_polling_requested() {
+        if let Some(llm) = llm_client.clone() {
+            match try_spawn_telegram_listener(llm) {
+                Ok(TelegramListenerStartOutcome::Started) => {
+                    if telegram_polling_explicit.is_some() {
+                        println!("🤖 Telegram polling enabled (STEER_TELEGRAM_POLLING=1).");
+                    } else {
+                        println!(
+                            "🤖 Telegram polling auto-enabled (Telegram credentials detected)."
+                        );
+                    }
+                }
+                Ok(TelegramListenerStartOutcome::AlreadyRunning) => {
+                    println!("ℹ️ Telegram listener already running.");
+                }
+                Err("missing_telegram_token") => {
+                    println!(
+                        "⚠️  STEER_TELEGRAM_POLLING=1 but TELEGRAM_BOT_TOKEN is missing; listener not started."
+                    );
+                }
+                Err(_) => {}
+            }
+        } else {
+            println!("⚠️  STEER_TELEGRAM_POLLING=1 but LLM is unavailable; listener not started.");
+        }
+    }
+
+    match db::mark_orphaned_inflight_task_runs_failed() {
+        Ok(recovered) if recovered > 0 => {
+            println!(
+                "♻️ Recovered {} orphaned in-flight task run(s) from previous core process.",
+                recovered
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            println!("⚠️ Failed to recover orphaned task runs: {}", e);
+        }
+    }
+
+    let state = AppState {
+        llm_client,
+        current_goal: Arc::new(Mutex::new(None)),
+    };
+
+    // Recover/resume in-flight workflow provisioning across core restarts.
+    spawn_workflow_provision_recovery_loop(state.llm_client.clone());
+    let app = build_api_router(state);
 
     let port = std::env::var("STEER_API_PORT")
         .ok()
@@ -2091,10 +2415,18 @@ async fn run_judgment_handler(
 
 async fn set_release_baseline_handler(
     Json(payload): Json<release_gate::ReleaseBaselineRequest>,
-) -> Json<release_gate::ReleaseBaseline> {
-    let baseline = release_gate::build_baseline(payload);
+) -> Result<Json<release_gate::ReleaseBaseline>, StatusCode> {
+    if has_release_baseline_override(&payload) && !allow_operational_path_override() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let request = if allow_operational_path_override() && has_release_baseline_override(&payload) {
+        payload
+    } else {
+        default_release_baseline_request()
+    };
+    let baseline = release_gate::build_baseline(request);
     release_gate::save_baseline(&baseline);
-    Json(baseline)
+    Ok(Json(baseline))
 }
 
 async fn run_release_gate_handler(
@@ -2112,6 +2444,135 @@ async fn run_release_gate_handler(
     });
     log_verification_run("release_gate", result.ok, summary, Some(details));
     Json(result)
+}
+
+async fn run_release_readiness_handler(
+    Json(payload): Json<ReleaseReadinessRequest>,
+) -> Result<Json<release_readiness::ReleaseReadinessReport>, StatusCode> {
+    if payload.save_baseline.unwrap_or(false) && !allow_operational_path_override() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if requested_operational_override(payload.config_path.as_deref())
+        && !allow_operational_path_override()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if requested_operational_override(payload.snapshot_output_path.as_deref())
+        && !allow_operational_path_override()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let workdir = resolve_operational_workdir(payload.workdir.as_deref());
+    let config_path = resolve_operational_file_override(payload.config_path.as_deref())
+        .unwrap_or_else(default_launch_eval_config_path);
+    let snapshot_output_path =
+        resolve_operational_file_override(payload.snapshot_output_path.as_deref())
+            .map(|value| value.display().to_string());
+    let report = release_readiness::run_release_readiness(
+        &workdir,
+        &config_path,
+        payload.candidate_limit.unwrap_or(20).clamp(1, 50),
+        snapshot_output_path.as_deref(),
+        payload.save_baseline.unwrap_or(false) && allow_operational_path_override(),
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let ok = report.ready_for_launch;
+    let summary = if ok {
+        "Release readiness passed"
+    } else {
+        "Release readiness found issues"
+    };
+    let details = json!({
+        "candidate_snapshot_scenarios": report.candidate_snapshot.scenario_count,
+        "launch_eval_passed": report.launch_eval.passed,
+        "launch_eval_total": report.launch_eval.total,
+        "http_e2e_passed": report.http_e2e.as_ref().map(|value| value.passed),
+        "http_e2e_total": report.http_e2e.as_ref().map(|value| value.total),
+        "http_e2e_ok": report.http_e2e.as_ref().map(|value| value.ok),
+        "release_gate_ok": report.release_gate.ok,
+        "status": report.status,
+        "ready_for_launch": report.ready_for_launch,
+        "baseline_saved": report.baseline_saved,
+        "report_json_path": report.report_json_path,
+        "report_markdown_path": report.report_markdown_path,
+        "blockers": report.blockers.iter().take(10).cloned().collect::<Vec<_>>(),
+        "regressions": report.release_gate.regressions.iter().take(10).cloned().collect::<Vec<_>>(),
+        "warnings": report.advisories.iter().take(10).cloned().collect::<Vec<_>>()
+    });
+    log_verification_run("release_readiness", ok, summary, Some(details));
+
+    Ok(Json(report))
+}
+
+async fn get_latest_release_readiness_handler(
+    Query(query): Query<ReleaseReadinessHistoryQuery>,
+) -> Result<Json<Option<release_readiness::ReleaseReadinessReport>>, StatusCode> {
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let report = release_readiness::load_latest_release_readiness_report(&workdir)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(report))
+}
+
+async fn get_release_readiness_history_handler(
+    Query(query): Query<ReleaseReadinessHistoryQuery>,
+) -> Result<Json<Vec<release_readiness::ReleaseReadinessHistoryEntry>>, StatusCode> {
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let limit = query.limit.unwrap_or(10).clamp(1, 50);
+    let history = release_readiness::list_release_readiness_history(&workdir, limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(history))
+}
+
+async fn run_http_e2e_handler(
+    Json(payload): Json<HttpE2ERequest>,
+) -> Result<Json<crate::http_e2e::HttpE2EReport>, StatusCode> {
+    let workdir = resolve_operational_workdir(payload.workdir.as_deref());
+    let report = crate::http_e2e::run_http_e2e(&workdir)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let summary = if report.ok {
+        "HTTP E2E passed"
+    } else {
+        "HTTP E2E found failures"
+    };
+    let details = json!({
+        "passed": report.passed,
+        "total": report.total,
+        "report_json_path": report.report_json_path,
+        "report_markdown_path": report.report_markdown_path,
+        "failed_steps": report
+            .steps
+            .iter()
+            .filter(|step| !step.ok)
+            .map(|step| step.name.clone())
+            .take(10)
+            .collect::<Vec<_>>()
+    });
+    log_verification_run("http_e2e", report.ok, summary, Some(details));
+
+    Ok(Json(report))
+}
+
+async fn get_latest_http_e2e_handler(
+    Query(query): Query<HttpE2ERequest>,
+) -> Result<Json<Option<crate::http_e2e::HttpE2EReport>>, StatusCode> {
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let report = crate::http_e2e::load_latest_http_e2e_report(&workdir)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(report))
+}
+
+async fn get_http_e2e_history_handler(
+    Query(query): Query<HttpE2EHistoryQuery>,
+) -> Result<Json<Vec<crate::http_e2e::HttpE2EHistoryEntry>>, StatusCode> {
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let limit = query.limit.unwrap_or(10).clamp(1, 50);
+    let history = crate::http_e2e::list_http_e2e_history(&workdir, limit)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(history))
 }
 
 async fn run_exec_results_guard_handler(
@@ -2473,10 +2934,950 @@ transparency_note에는 반드시 \"{}\"를 포함하세요.\n\n\
         .into_response()
 }
 
+fn request_memory_min_confidence() -> f64 {
+    std::env::var("ALLVIA_REQUEST_MEMORY_MIN_CONFIDENCE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or(0.8)
+}
+
+fn normalize_chat_scope_part(value: Option<&str>) -> Option<String> {
+    let normalized = value
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn build_chat_memory_scope(
+    channel: Option<&str>,
+    chat_type: Option<&str>,
+    sender: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(channel) = normalize_chat_scope_part(channel) {
+        parts.push(format!("channel_{}", channel));
+    }
+    if let Some(chat_type) = normalize_chat_scope_part(chat_type) {
+        parts.push(format!("type_{}", chat_type));
+    }
+    if let Some(sender) = normalize_chat_scope_part(sender) {
+        parts.push(format!("sender_{}", sender));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("__"))
+    }
+}
+
+fn chat_request_memory_scope(req: &ChatRequest) -> Option<String> {
+    build_chat_memory_scope(
+        req.channel.as_deref(),
+        req.chat_type.as_deref(),
+        req.sender.as_deref(),
+    )
+}
+
+fn chat_feedback_memory_scope(req: &ChatFeedbackRequest) -> Option<String> {
+    build_chat_memory_scope(
+        req.channel.as_deref(),
+        req.chat_type.as_deref(),
+        req.sender.as_deref(),
+    )
+}
+
+fn request_memory_response_mode(command: &str) -> &'static str {
+    match command {
+        "help" | "help_local" | "greeting_local" => "reusable_response",
+        "calendar_today" | "calendar_week" | "gmail_list" => "ttl_response_signature",
+        "system_status" => "ttl_response_exact",
+        _ => "intent_only",
+    }
+}
+
+fn request_memory_signature_cache_supported(command: &str) -> bool {
+    matches!(command, "calendar_today" | "calendar_week" | "gmail_list")
+}
+
+fn request_memory_response_is_successful(response: &str) -> bool {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    !trimmed.starts_with("❌")
+        && !trimmed.starts_with("⚠️")
+        && !trimmed.starts_with("⛔")
+        && !trimmed.starts_with("🤔")
+        && !trimmed.starts_with("❓")
+}
+
+fn request_memory_should_store(command: &str, confidence: f64, response: &str) -> bool {
+    !command.trim().is_empty()
+        && !command.eq_ignore_ascii_case("unknown")
+        && confidence >= request_memory_min_confidence()
+        && request_memory_response_is_successful(response)
+}
+
+fn request_memory_response_cache_ttl_secs(command: &str, response_mode: &str) -> Option<i64> {
+    let env_key = match command {
+        "gmail_list" => Some("ALLVIA_RESPONSE_CACHE_TTL_GMAIL_LIST"),
+        "calendar_today" => Some("ALLVIA_RESPONSE_CACHE_TTL_CALENDAR_TODAY"),
+        "calendar_week" => Some("ALLVIA_RESPONSE_CACHE_TTL_CALENDAR_WEEK"),
+        "system_status" => Some("ALLVIA_RESPONSE_CACHE_TTL_SYSTEM_STATUS"),
+        _ => None,
+    };
+
+    if response_mode == "reusable_response" {
+        return env_key
+            .and_then(|key| std::env::var(key).ok())
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .or(Some(24 * 60 * 60));
+    }
+
+    if !matches!(
+        response_mode,
+        "ttl_response_signature" | "ttl_response_exact"
+    ) {
+        return None;
+    }
+
+    env_key
+        .and_then(|key| std::env::var(key).ok())
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .or_else(|| match command {
+            "gmail_list" => Some(20),
+            "calendar_today" => Some(30),
+            "calendar_week" => Some(120),
+            "system_status" => Some(10),
+            _ => None,
+        })
+        .filter(|ttl| *ttl > 0)
+}
+
+fn request_memory_response_mode_supports_signature(response_mode: &str) -> bool {
+    matches!(response_mode, "ttl_response_signature")
+}
+
+fn command_supports_live_refresh(command: &str) -> bool {
+    matches!(
+        command,
+        "gmail_list" | "calendar_today" | "calendar_week" | "system_status"
+    )
+}
+
+fn request_prefers_fresh_data(message: &str, command: &str) -> bool {
+    if !command_supports_live_refresh(command) {
+        return false;
+    }
+
+    let normalized = crate::request_memory::normalize_request_text(message);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let tokens = normalized.split_whitespace().collect::<HashSet<_>>();
+    let token_hit = [
+        "새로고침",
+        "refresh",
+        "realtime",
+        "실시간",
+        "최신으로",
+        "지금",
+        "방금",
+    ]
+    .iter()
+    .any(|token| tokens.contains(token));
+    let phrase_hit = ["real time", "latest status", "up to date"]
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+
+    token_hit || phrase_hit || (tokens.contains("다시") && tokens.contains("확인"))
+}
+
+fn repeat_request_fresh_window_secs() -> Option<i64> {
+    std::env::var("ALLVIA_REPEAT_REQUEST_FRESH_WINDOW_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .or(Some(15))
+        .filter(|window| *window > 0)
+}
+
+fn timestamp_is_within_window(timestamp: &str, window_secs: i64) -> bool {
+    let recorded_at = match chrono::DateTime::parse_from_rfc3339(timestamp) {
+        Ok(value) => value.with_timezone(&chrono::Utc),
+        Err(_) => return false,
+    };
+    let age_secs = chrono::Utc::now()
+        .signed_duration_since(recorded_at)
+        .num_seconds();
+    age_secs >= 0 && age_secs <= window_secs
+}
+
+fn chat_memory_source_allows_repeat_bypass(source: &str) -> bool {
+    source.starts_with("api.chat.")
+}
+
+fn request_memory_recent_chat_reask(
+    record: &db::RequestMemoryRecord,
+    command: &str,
+    window_secs: i64,
+) -> bool {
+    record.intent_command.as_deref() == Some(command)
+        && chat_memory_source_allows_repeat_bypass(&record.source)
+        && feedback_allows_response_reuse(
+            record.positive_feedback_count,
+            record.negative_feedback_count,
+        )
+        && timestamp_is_within_window(&record.last_used_at, window_secs)
+}
+
+fn execution_memory_recent_chat_reask(
+    record: &db::ExecutionMemoryRecord,
+    command: &str,
+    window_secs: i64,
+) -> bool {
+    record.intent_command == command
+        && chat_memory_source_allows_repeat_bypass(&record.source)
+        && feedback_allows_response_reuse(
+            record.positive_feedback_count,
+            record.negative_feedback_count,
+        )
+        && timestamp_is_within_window(&record.last_used_at, window_secs)
+}
+
+fn request_recently_reasked(memory_scope: Option<&str>, message: &str, command: &str) -> bool {
+    if !command_supports_live_refresh(command) {
+        return false;
+    }
+    let Some(window_secs) = repeat_request_fresh_window_secs() else {
+        return false;
+    };
+
+    if let Some(record) = db::get_request_memory_scoped(memory_scope, message)
+        .ok()
+        .flatten()
+    {
+        if request_memory_recent_chat_reask(&record, command, window_secs) {
+            return true;
+        }
+    }
+
+    if !request_memory_signature_cache_supported(command) {
+        return false;
+    }
+
+    let input_signature = crate::request_memory::build_request_signature(message);
+    if input_signature.is_empty() {
+        return false;
+    }
+
+    db::get_request_memory_by_signature_scoped(memory_scope, &input_signature, &[command])
+        .ok()
+        .flatten()
+        .is_some_and(|record| request_memory_recent_chat_reask(&record, command, window_secs))
+}
+
+fn feedback_allows_response_reuse(
+    positive_feedback_count: i64,
+    negative_feedback_count: i64,
+) -> bool {
+    negative_feedback_count == 0 || positive_feedback_count > negative_feedback_count
+}
+
+fn request_memory_static_intent(command: &str) -> Value {
+    json!({
+        "command": command,
+        "params": {},
+        "confidence": 1.0
+    })
+}
+
+fn persist_chat_response_memory(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+    response: &str,
+    source: &str,
+    confidence: f64,
+) {
+    if let Err(e) = db::insert_chat_message("assistant", response) {
+        eprintln!("Failed to save assistant chat: {}", e);
+    }
+
+    if request_memory_should_store(command, confidence, response) {
+        let intent = request_memory_static_intent(command);
+        let _ = db::upsert_request_memory_scoped(
+            memory_scope,
+            message,
+            Some(&intent),
+            Some(response),
+            request_memory_response_mode(command),
+            source,
+            confidence,
+        );
+    }
+}
+
+fn chat_response_memory_source(intent: &Value) -> &'static str {
+    match intent.get("source").and_then(|value| value.as_str()) {
+        Some("deterministic") => "api.chat.deterministic",
+        _ => "api.chat.llm",
+    }
+}
+
+fn request_memory_response_fresh(
+    record: &db::RequestMemoryRecord,
+    command: &str,
+) -> Option<String> {
+    if record.intent_command.as_deref() != Some(command) {
+        return None;
+    }
+    if !feedback_allows_response_reuse(
+        record.positive_feedback_count,
+        record.negative_feedback_count,
+    ) {
+        return None;
+    }
+
+    let response = record
+        .response_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+
+    let ttl_secs = request_memory_response_cache_ttl_secs(command, &record.response_mode)?;
+    if ttl_secs <= 0 {
+        return None;
+    }
+
+    if record.response_mode == "reusable_response" {
+        return Some(response);
+    }
+
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&record.updated_at).ok()?;
+    let age_secs = chrono::Utc::now()
+        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
+        .num_seconds();
+    if age_secs < 0 || age_secs > ttl_secs {
+        return None;
+    }
+
+    Some(response)
+}
+
+pub(crate) fn load_cached_request_response(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+) -> Option<String> {
+    if request_prefers_fresh_data(message, command)
+        || request_recently_reasked(memory_scope, message, command)
+    {
+        return None;
+    }
+
+    if let Some(record) = db::get_request_memory_scoped(memory_scope, message)
+        .ok()
+        .flatten()
+    {
+        if let Some(response) = request_memory_response_fresh(&record, command) {
+            return Some(response);
+        }
+    }
+
+    let input_signature = crate::request_memory::build_request_signature(message);
+    if input_signature.is_empty() {
+        return None;
+    }
+
+    let record =
+        db::get_request_memory_by_signature_scoped(memory_scope, &input_signature, &[command])
+            .ok()
+            .flatten()?;
+    if !request_memory_response_mode_supports_signature(&record.response_mode) {
+        return None;
+    }
+    request_memory_response_fresh(&record, command)
+}
+
+fn build_local_chat_response(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+    response: String,
+    source: &str,
+) -> Json<ChatResponse> {
+    persist_chat_response_memory(memory_scope, message, command, &response, source, 1.0);
+    Json(ChatResponse {
+        response,
+        command: Some(command.to_string()),
+        route_meta: None,
+    })
+}
+
+fn load_local_cached_chat_response(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+) -> Option<Json<ChatResponse>> {
+    let response = load_cached_request_response(memory_scope, message, command)?;
+    persist_chat_response_memory(
+        memory_scope,
+        message,
+        command,
+        &response,
+        "api.chat.local_cache",
+        1.0,
+    );
+    Some(Json(ChatResponse {
+        response,
+        command: Some(command.to_string()),
+        route_meta: None,
+    }))
+}
+
+fn parse_u32_param(
+    value: Option<&Value>,
+    default_value: u32,
+    min_value: u32,
+    max_value: u32,
+) -> u32 {
+    value
+        .and_then(|raw| {
+            raw.as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .or_else(|| raw.as_str().and_then(|v| v.trim().parse::<u32>().ok()))
+        })
+        .unwrap_or(default_value)
+        .clamp(min_value, max_value)
+}
+
+fn execution_memory_supported(command: &str) -> bool {
+    matches!(command, "calendar_today" | "calendar_week" | "gmail_list")
+}
+
+fn execution_memory_tool_path(command: &str) -> &'static str {
+    match command {
+        "calendar_today" => "integrations.calendar.list_today",
+        "calendar_week" => "integrations.calendar.list_week",
+        "gmail_list" => "integrations.gmail.list_messages",
+        _ => "api.chat",
+    }
+}
+
+fn execution_memory_ttl_secs(command: &str) -> Option<i64> {
+    request_memory_response_cache_ttl_secs(command, "ttl_response_signature")
+}
+
+fn execution_memory_params(command: &str, intent: &Value) -> Option<(String, Value)> {
+    match command {
+        "gmail_list" => {
+            let count = parse_u32_param(intent["params"].get("count"), 5, 1, 20);
+            Some((format!("count={}", count), json!({ "count": count })))
+        }
+        "calendar_today" | "calendar_week" => Some(("default".to_string(), json!({}))),
+        _ => None,
+    }
+}
+
+fn execution_memory_should_store(command: &str, response: &str, confidence: f64) -> bool {
+    execution_memory_supported(command)
+        && request_memory_response_is_successful(response)
+        && confidence >= request_memory_min_confidence()
+        && execution_memory_ttl_secs(command).unwrap_or(0) > 0
+}
+
+fn persist_execution_memory(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+    intent: &Value,
+    response: &str,
+    source: &str,
+) {
+    let confidence = intent["confidence"].as_f64().unwrap_or(0.0);
+    if !execution_memory_should_store(command, response, confidence) {
+        return;
+    }
+
+    let Some((params_key, params_json)) = execution_memory_params(command, intent) else {
+        return;
+    };
+    let Some(ttl_secs) = execution_memory_ttl_secs(command) else {
+        return;
+    };
+    let request_signature = crate::request_memory::build_request_signature(message);
+    let signature = if request_signature.trim().is_empty() {
+        None
+    } else {
+        Some(request_signature.as_str())
+    };
+    let _ = db::upsert_execution_memory_scoped(
+        memory_scope,
+        command,
+        &params_key,
+        Some(&params_json),
+        signature,
+        response,
+        ttl_secs,
+        source,
+        execution_memory_tool_path(command),
+    );
+}
+
+fn execution_memory_response_fresh(
+    record: &db::ExecutionMemoryRecord,
+    command: &str,
+) -> Option<String> {
+    if !record.success || record.intent_command != command {
+        return None;
+    }
+    if !feedback_allows_response_reuse(
+        record.positive_feedback_count,
+        record.negative_feedback_count,
+    ) {
+        return None;
+    }
+
+    let response = record.response_text.trim();
+    if response.is_empty() {
+        return None;
+    }
+
+    let configured_ttl = execution_memory_ttl_secs(command).unwrap_or(record.freshness_ttl_seconds);
+    let ttl_secs = if record.freshness_ttl_seconds > 0 {
+        configured_ttl.min(record.freshness_ttl_seconds)
+    } else {
+        configured_ttl
+    };
+    if ttl_secs <= 0 {
+        return None;
+    }
+
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&record.updated_at).ok()?;
+    let age_secs = chrono::Utc::now()
+        .signed_duration_since(updated_at.with_timezone(&chrono::Utc))
+        .num_seconds();
+    if age_secs < 0 || age_secs > ttl_secs {
+        return None;
+    }
+
+    Some(response.to_string())
+}
+
+pub(crate) fn load_cached_execution_response(
+    memory_scope: Option<&str>,
+    message: &str,
+    command: &str,
+    intent: &Value,
+) -> Option<String> {
+    if request_prefers_fresh_data(message, command)
+        || request_recently_reasked(memory_scope, message, command)
+    {
+        return None;
+    }
+
+    if !execution_memory_supported(command) {
+        return None;
+    }
+
+    let (params_key, _) = execution_memory_params(command, intent)?;
+    let record = db::get_execution_memory_scoped(memory_scope, command, &params_key)
+        .ok()
+        .flatten()?;
+    if let Some(window_secs) = repeat_request_fresh_window_secs() {
+        if execution_memory_recent_chat_reask(&record, command, window_secs) {
+            return None;
+        }
+    }
+
+    let cached = execution_memory_response_fresh(&record, command)?;
+    persist_execution_memory(
+        memory_scope,
+        message,
+        command,
+        intent,
+        &cached,
+        "api.chat.execution_cache",
+    );
+    Some(cached)
+}
+
+fn request_memory_intent_for_feedback(
+    memory_scope: Option<&str>,
+    request_text: &str,
+) -> Option<Value> {
+    let record = db::get_request_memory_scoped(memory_scope, request_text)
+        .ok()
+        .flatten()?;
+    let raw = record.intent_json?;
+    serde_json::from_str(&raw).ok()
+}
+
+pub(crate) fn load_cached_request_intent(
+    memory_scope: Option<&str>,
+    message: &str,
+) -> Option<(Value, f64)> {
+    if let Some(record) = db::get_request_memory_scoped(memory_scope, message)
+        .ok()
+        .flatten()
+    {
+        if record.confidence < request_memory_min_confidence() {
+            return None;
+        }
+        if !feedback_allows_response_reuse(
+            record.positive_feedback_count,
+            record.negative_feedback_count,
+        ) {
+            return None;
+        }
+        let raw = record.intent_json?;
+        let parsed: Value = serde_json::from_str(&raw).ok()?;
+        return Some((parsed, record.confidence));
+    }
+
+    let input_signature = crate::request_memory::build_request_signature(message);
+    if input_signature.is_empty() {
+        return None;
+    }
+
+    let allowed_commands = ["calendar_today", "calendar_week", "gmail_list"];
+    let record = db::get_request_memory_by_signature_scoped(
+        memory_scope,
+        &input_signature,
+        &allowed_commands,
+    )
+    .ok()
+    .flatten()?;
+    if record.confidence < request_memory_min_confidence() {
+        return None;
+    }
+    if !feedback_allows_response_reuse(
+        record.positive_feedback_count,
+        record.negative_feedback_count,
+    ) {
+        return None;
+    }
+    let raw = record.intent_json?;
+    let parsed: Value = serde_json::from_str(&raw).ok()?;
+    let command = parsed.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    if !request_memory_signature_cache_supported(command) {
+        return None;
+    }
+    Some((parsed, record.confidence))
+}
+
+fn load_deterministic_chat_intent(message: &str) -> Option<(Value, f64)> {
+    let intent = crate::deterministic_intent::classify_chat_intent(message)?;
+    let confidence = intent
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    Some((intent, confidence))
+}
+
+#[derive(Default, Clone, Copy)]
+struct ChatOpsFlags {
+    freshness_bypassed: bool,
+    intent_memory_hit: bool,
+    request_memory_hit: bool,
+    execution_memory_hit: bool,
+    deterministic_used: bool,
+    llm_used: bool,
+    ai_digest_used: bool,
+    local_only: bool,
+}
+
+fn safe_text_preview(value: &str, max_chars: usize) -> String {
+    let normalized = value.trim().replace('\n', " ");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", preview)
+    } else {
+        preview
+    }
+}
+
+fn chat_ops_message_preview(message: &str) -> String {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    safe_text_preview(trimmed, 160)
+}
+
+fn chat_ops_outcome_from_response(response: &str) -> &'static str {
+    if request_memory_response_is_successful(response) {
+        "success"
+    } else {
+        "error"
+    }
+}
+
+fn record_chat_ops_event(
+    req: &ChatRequest,
+    memory_scope: Option<&str>,
+    message: &str,
+    route_kind: &str,
+    command: Option<&str>,
+    outcome: &str,
+    confidence: Option<f64>,
+    flags: ChatOpsFlags,
+    note: Option<&str>,
+) {
+    let preview = chat_ops_message_preview(message);
+    if let Err(err) = db::record_launch_ops_event(
+        req.channel.as_deref(),
+        memory_scope,
+        &preview,
+        route_kind,
+        command,
+        outcome,
+        confidence,
+        flags.freshness_bypassed,
+        flags.intent_memory_hit,
+        flags.request_memory_hit,
+        flags.execution_memory_hit,
+        flags.deterministic_used,
+        flags.llm_used,
+        flags.ai_digest_used,
+        flags.local_only,
+        note,
+    ) {
+        eprintln!("Failed to record launch ops event: {}", err);
+    }
+}
+
+fn build_chat_route_meta(
+    memory_scope: Option<&str>,
+    route_kind: &str,
+    outcome: &str,
+    confidence: Option<f64>,
+    flags: ChatOpsFlags,
+    note: Option<&str>,
+) -> ChatRouteMeta {
+    ChatRouteMeta {
+        route_kind: route_kind.to_string(),
+        outcome: outcome.to_string(),
+        confidence,
+        note: note.map(|value| value.to_string()),
+        memory_scope: memory_scope.map(|value| value.to_string()),
+        freshness_bypassed: flags.freshness_bypassed,
+        intent_memory_hit: flags.intent_memory_hit,
+        request_memory_hit: flags.request_memory_hit,
+        execution_memory_hit: flags.execution_memory_hit,
+        deterministic_used: flags.deterministic_used,
+        llm_used: flags.llm_used,
+        ai_digest_used: flags.ai_digest_used,
+        local_only: flags.local_only,
+    }
+}
+
+fn chat_nl_run_should_record(route_kind: &str, command: Option<&str>, message: &str) -> bool {
+    if crate::request_memory::normalize_request_text(message).is_empty() {
+        return false;
+    }
+
+    if matches!(
+        route_kind,
+        "empty_message" | "gate_blocked" | "system_command" | "local_command" | "vision_demo"
+    ) {
+        return false;
+    }
+
+    !matches!(
+        command.unwrap_or(""),
+        "help_local"
+            | "greeting_local"
+            | "system_status"
+            | "telegram_listener_start"
+            | "telegram_listener_status"
+            | "n8n_restart"
+    )
+}
+
+fn chat_nl_run_status(route_kind: &str, response: &ChatResponse, outcome: &str) -> &'static str {
+    if route_kind == "gate_blocked" || outcome == "blocked" {
+        return "blocked";
+    }
+    if response.command.as_deref() == Some("build_workflow")
+        || response.response.contains("승인 후 생성")
+        || response.response.contains("approval")
+    {
+        return "approval_required";
+    }
+    if response.response.contains("수동으로")
+        || response.response.contains("직접 확인")
+        || response.response.contains("manual")
+    {
+        return "manual_required";
+    }
+    if outcome == "success" {
+        "completed"
+    } else {
+        "error"
+    }
+}
+
+fn chat_nl_run_summary(response: &str) -> Option<String> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(safe_text_preview(trimmed, 160))
+}
+
+fn record_chat_nl_run(
+    req: &ChatRequest,
+    memory_scope: Option<&str>,
+    message: &str,
+    response: &ChatResponse,
+    route_kind: &str,
+    outcome: &str,
+    confidence: Option<f64>,
+    flags: ChatOpsFlags,
+    note: Option<&str>,
+) {
+    if !chat_nl_run_should_record(route_kind, response.command.as_deref(), message) {
+        return;
+    }
+
+    let status = chat_nl_run_status(route_kind, response, outcome);
+    let summary = chat_nl_run_summary(&response.response);
+    let details = json!({
+        "source": "api.chat",
+        "route_kind": route_kind,
+        "command": response.command,
+        "channel": req.channel,
+        "chat_type": req.chat_type,
+        "sender": req.sender,
+        "memory_scope": memory_scope,
+        "outcome": outcome,
+        "confidence": confidence,
+        "note": note,
+        "flags": {
+            "freshness_bypassed": flags.freshness_bypassed,
+            "intent_memory_hit": flags.intent_memory_hit,
+            "request_memory_hit": flags.request_memory_hit,
+            "execution_memory_hit": flags.execution_memory_hit,
+            "deterministic_used": flags.deterministic_used,
+            "llm_used": flags.llm_used,
+            "ai_digest_used": flags.ai_digest_used,
+            "local_only": flags.local_only
+        }
+    });
+    let details_json = serde_json::to_string(&details).ok();
+    let intent = response.command.as_deref().unwrap_or(route_kind);
+    if let Err(err) = db::insert_nl_run(
+        intent,
+        message,
+        status,
+        summary.as_deref(),
+        details_json.as_deref(),
+    ) {
+        eprintln!("Failed to record chat nl_run: {}", err);
+    }
+}
+
+fn respond_chat(
+    req: &ChatRequest,
+    memory_scope: Option<&str>,
+    message: &str,
+    mut response: ChatResponse,
+    route_kind: &str,
+    outcome: &str,
+    confidence: Option<f64>,
+    flags: ChatOpsFlags,
+    note: Option<&str>,
+) -> Json<ChatResponse> {
+    response.route_meta = Some(build_chat_route_meta(
+        memory_scope,
+        route_kind,
+        outcome,
+        confidence,
+        flags,
+        note,
+    ));
+    record_chat_ops_event(
+        req,
+        memory_scope,
+        message,
+        route_kind,
+        response.command.as_deref(),
+        outcome,
+        confidence,
+        flags,
+        note,
+    );
+    record_chat_nl_run(
+        req,
+        memory_scope,
+        message,
+        &response,
+        route_kind,
+        outcome,
+        confidence,
+        flags,
+        note,
+    );
+    Json(response)
+}
+
+fn execution_recently_reasked(memory_scope: Option<&str>, command: &str, intent: &Value) -> bool {
+    if !execution_memory_supported(command) {
+        return false;
+    }
+    let Some(window_secs) = repeat_request_fresh_window_secs() else {
+        return false;
+    };
+    let Some((params_key, _)) = execution_memory_params(command, intent) else {
+        return false;
+    };
+    db::get_execution_memory_scoped(memory_scope, command, &params_key)
+        .ok()
+        .flatten()
+        .is_some_and(|record| execution_memory_recent_chat_reask(&record, command, window_secs))
+}
+
+pub async fn process_chat_request(state: AppState, req: ChatRequest) -> ChatResponse {
+    handle_chat(State(state), Json(req)).await.0
+}
+
+async fn run_ai_digest_chat_response(request_text: &str) -> ChatResponse {
+    let response = match ai_digest::trigger_program_webhook_human_summary(request_text, None).await
+    {
+        Ok(summary) => summary,
+        Err(e) => format!("❌ News Digest 트리거 실패: {}", e),
+    };
+    ChatResponse {
+        response,
+        command: Some("ai_digest_program".to_string()),
+        route_meta: None,
+    }
+}
+
 async fn handle_chat(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
+    let memory_scope = chat_request_memory_scope(&req);
+    let memory_scope_ref = memory_scope.as_deref();
     let gate = crate::chat_gate::ChatGateConfig::from_env();
     let gate_ctx = crate::chat_gate::ChatGateContext {
         channel: req.channel.clone(),
@@ -2485,10 +3886,21 @@ async fn handle_chat(
         mentioned: req.mentioned,
     };
     if !gate.is_allowed(&gate_ctx) {
-        return Json(ChatResponse {
-            response: "⛔️ 이 채널에서는 현재 요청을 처리할 수 없습니다.".to_string(),
-            command: None,
-        });
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &req.message,
+            ChatResponse {
+                response: "⛔️ 이 채널에서는 현재 요청을 처리할 수 없습니다.".to_string(),
+                command: None,
+                route_meta: None,
+            },
+            "gate_blocked",
+            "blocked",
+            None,
+            ChatOpsFlags::default(),
+            Some("chat gate policy blocked this channel"),
+        );
     }
 
     let sanitized = chat_sanitize::sanitize_chat_input(&req.message);
@@ -2497,17 +3909,28 @@ async fn handle_chat(
     }
     let mut message = sanitized.text.trim().to_string();
     if message.is_empty() {
-        return Json(ChatResponse {
-            response: "❓ 메시지가 비어있어요. 다시 입력해주세요.".to_string(),
-            command: None,
-        });
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &req.message,
+            ChatResponse {
+                response: "❓ 메시지가 비어있어요. 다시 입력해주세요.".to_string(),
+                command: None,
+                route_meta: None,
+            },
+            "empty_message",
+            "error",
+            None,
+            ChatOpsFlags::default(),
+            Some("sanitization removed all content"),
+        );
     }
 
     // [Memory] Save User Message
     if let Err(e) = db::insert_chat_message("user", &message) {
         eprintln!("Failed to save user chat: {}", e);
     }
-    let message_lc = message.to_lowercase();
+    let mut message_lc = message.to_lowercase();
 
     // 1. Intercept explicit system commands (Bypass LLM)
     if message_lc == "analyze_patterns" || message == "패턴 분석" {
@@ -2522,10 +3945,24 @@ async fn handle_chat(
             )
         };
 
-        return Json(ChatResponse {
-            response: response_text,
-            command: Some("analyze_patterns".to_string()),
-        });
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            ChatResponse {
+                response: response_text,
+                command: Some("analyze_patterns".to_string()),
+                route_meta: None,
+            },
+            "system_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
 
     if message_lc == "telegram listener status"
@@ -2535,14 +3972,28 @@ async fn handle_chat(
         || message.contains("텔레그램 리스너 상태")
     {
         let active = telegram_listener_started_flag().load(Ordering::SeqCst);
-        return Json(ChatResponse {
-            response: if active {
-                "🤖 Telegram listener 상태: running".to_string()
-            } else {
-                "⚪️ Telegram listener 상태: stopped".to_string()
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            ChatResponse {
+                response: if active {
+                    "🤖 Telegram listener 상태: running".to_string()
+                } else {
+                    "⚪️ Telegram listener 상태: stopped".to_string()
+                },
+                command: Some("telegram_listener_status".to_string()),
+                route_meta: None,
             },
-            command: Some("telegram_listener_status".to_string()),
-        });
+            "system_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
 
     if message_lc == "telegram_listen"
@@ -2553,41 +4004,89 @@ async fn handle_chat(
     {
         let started_flag = telegram_listener_started_flag();
         if started_flag.load(Ordering::SeqCst) {
-            return Json(ChatResponse {
-                response: "ℹ️ Telegram listener가 이미 실행 중입니다.".to_string(),
-                command: Some("telegram_listener_start".to_string()),
-            });
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                ChatResponse {
+                    response: "ℹ️ Telegram listener가 이미 실행 중입니다.".to_string(),
+                    command: Some("telegram_listener_start".to_string()),
+                    route_meta: None,
+                },
+                "system_command",
+                "success",
+                Some(1.0),
+                ChatOpsFlags {
+                    local_only: true,
+                    ..Default::default()
+                },
+                None,
+            );
         }
 
         let llm = match state.llm_client.clone() {
             Some(v) => v,
             None => {
-                return Json(ChatResponse {
-                    response: "❌ LLM 클라이언트가 없어 Telegram listener를 시작할 수 없습니다."
-                        .to_string(),
-                    command: Some("telegram_listener_start".to_string()),
-                })
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    ChatResponse {
+                        response:
+                            "❌ LLM 클라이언트가 없어 Telegram listener를 시작할 수 없습니다."
+                                .to_string(),
+                        command: Some("telegram_listener_start".to_string()),
+                        route_meta: None,
+                    },
+                    "system_command",
+                    "error",
+                    Some(1.0),
+                    ChatOpsFlags {
+                        local_only: true,
+                        ..Default::default()
+                    },
+                    Some("telegram listener requires llm client"),
+                )
             }
         };
-        return match try_spawn_telegram_listener(llm) {
-            Ok(TelegramListenerStartOutcome::Started) => Json(ChatResponse {
+        let response = match try_spawn_telegram_listener(llm) {
+            Ok(TelegramListenerStartOutcome::Started) => ChatResponse {
                 response: "🤖 Telegram listener 시작됨 (long polling)".to_string(),
                 command: Some("telegram_listener_start".to_string()),
-            }),
-            Ok(TelegramListenerStartOutcome::AlreadyRunning) => Json(ChatResponse {
+                route_meta: None,
+            },
+            Ok(TelegramListenerStartOutcome::AlreadyRunning) => ChatResponse {
                 response: "ℹ️ Telegram listener가 이미 실행 중입니다.".to_string(),
                 command: Some("telegram_listener_start".to_string()),
-            }),
-            Err("missing_telegram_token") => Json(ChatResponse {
+                route_meta: None,
+            },
+            Err("missing_telegram_token") => ChatResponse {
                 response: "❌ TELEGRAM_BOT_TOKEN이 없어 listener를 시작할 수 없습니다.".to_string(),
                 command: Some("telegram_listener_start".to_string()),
-            }),
-            Err(_) => Json(ChatResponse {
+                route_meta: None,
+            },
+            Err(_) => ChatResponse {
                 response: "❌ Telegram listener 시작 중 알 수 없는 오류가 발생했습니다."
                     .to_string(),
                 command: Some("telegram_listener_start".to_string()),
-            }),
+                route_meta: None,
+            },
         };
+        let outcome = chat_ops_outcome_from_response(&response.response);
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            response,
+            "system_command",
+            outcome,
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
 
     // Issue #4 Fix: n8n restart command
@@ -2595,66 +4094,181 @@ async fn handle_chat(
         let api = match crate::n8n_api::N8nApi::from_env() {
             Ok(v) => v,
             Err(e) => {
-                return Json(ChatResponse {
-                    response: format!("❌ n8n 초기화 실패: {}", e),
-                    command: None,
-                })
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    ChatResponse {
+                        response: format!("❌ n8n 초기화 실패: {}", e),
+                        command: None,
+                        route_meta: None,
+                    },
+                    "system_command",
+                    "error",
+                    Some(1.0),
+                    ChatOpsFlags {
+                        local_only: true,
+                        ..Default::default()
+                    },
+                    Some("n8n api init failed"),
+                )
             }
         };
         match api.restart_server().await {
             Ok(_) => {
-                return Json(ChatResponse {
-                    response: "🔄 n8n 서버를 재시작했습니다.".to_string(),
-                    command: Some("n8n_restart".to_string()),
-                })
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    ChatResponse {
+                        response: "🔄 n8n 서버를 재시작했습니다.".to_string(),
+                        command: Some("n8n_restart".to_string()),
+                        route_meta: None,
+                    },
+                    "system_command",
+                    "success",
+                    Some(1.0),
+                    ChatOpsFlags {
+                        local_only: true,
+                        ..Default::default()
+                    },
+                    None,
+                )
             }
             Err(e) => {
-                return Json(ChatResponse {
-                    response: format!("❌ n8n 재시작 실패: {}", e),
-                    command: None,
-                })
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    ChatResponse {
+                        response: format!("❌ n8n 재시작 실패: {}", e),
+                        command: None,
+                        route_meta: None,
+                    },
+                    "system_command",
+                    "error",
+                    Some(1.0),
+                    ChatOpsFlags {
+                        local_only: true,
+                        ..Default::default()
+                    },
+                    Some("n8n restart failed"),
+                )
             }
         }
     }
 
-    if let Some(n8n_text) = ai_digest::extract_explicit_n8n_request(&message) {
-        match ai_digest::trigger_program_webhook(&n8n_text, None).await {
-            Ok(result) => {
-                let notion_line = result
-                    .notion_url
-                    .clone()
-                    .unwrap_or_else(|| "(웹훅 응답에 notion_url 없음)".to_string());
-                return Json(ChatResponse {
-                    response: format!(
-                        "📰 News Digest 프로그램 트리거 완료\n- scope_marker: {}\n- notion_url: {}\n- webhook: {}",
-                        result.scope_marker, notion_line, result.webhook_url
-                    ),
-                    command: Some("ai_digest_program".to_string()),
-                });
-            }
-            Err(e) => {
-                return Json(ChatResponse {
-                    response: format!("❌ News Digest 트리거 실패: {}", e),
-                    command: Some("ai_digest_program".to_string()),
-                });
-            }
-        }
+    let ai_digest_route = ai_digest::infer_program_route(&message, req.channel.as_deref());
+    if let Some(route) = ai_digest_route
+        .as_ref()
+        .filter(|route| route.kind == ai_digest::AiDigestProgramRouteKind::Explicit)
+    {
+        let response = run_ai_digest_chat_response(&route.request_text).await;
+        let outcome = chat_ops_outcome_from_response(&response.response);
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            response,
+            "ai_digest_explicit",
+            outcome,
+            Some(1.0),
+            ChatOpsFlags {
+                ai_digest_used: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
+    let auto_ai_digest_request = ai_digest_route.and_then(|route| {
+        (route.kind == ai_digest::AiDigestProgramRouteKind::Auto).then_some(route.request_text)
+    });
     message = ai_digest::strip_local_execution_prefix(&message);
+    message_lc = message.to_lowercase();
 
     // 1.5 Local lightweight chat commands (LLM-free).
     // Keep these commands available even when OpenAI quota/network is unavailable.
     if message_lc == "help" || message == "도움말" || message == "명령어" {
-        return Json(ChatResponse {
-            response: "💡 바로 실행 가능한 명령:\n• analyze_patterns / 패턴 분석\n• n8n restart / n8n 재시작\n• telegram listener start / 텔레그램 리스너 시작\n• telegram listener status / 텔레그램 리스너 상태\n• /n8n 스포츠 뉴스 5개 요약해서 노션에 정리해줘 (명시 n8n)\n• /local 메모장 열고 체크리스트 작성해줘 (로컬 실행 강제)\n• /capture (화면 분석)\n• system_status / 시스템 상태".to_string(),
-            command: Some("help_local".to_string()),
-        });
+        if let Some(cached) =
+            load_local_cached_chat_response(memory_scope_ref, &message, "help_local")
+        {
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                cached.0,
+                "request_memory",
+                "success",
+                Some(1.0),
+                ChatOpsFlags {
+                    request_memory_hit: true,
+                    local_only: true,
+                    ..Default::default()
+                },
+                Some("local help response cache hit"),
+            );
+        }
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            build_local_chat_response(
+            memory_scope_ref,
+            &message,
+            "help_local",
+            "💡 바로 실행 가능한 명령:\n• analyze_patterns / 패턴 분석\n• n8n restart / n8n 재시작\n• telegram listener start / 텔레그램 리스너 시작\n• telegram listener status / 텔레그램 리스너 상태\n• 뉴스 5개 요약해서 노션에 정리해줘\n• /n8n 스포츠 뉴스 5개 요약해서 노션에 정리해줘 (명시 digest)\n• /local 메모장 열고 체크리스트 작성해줘 (로컬 실행 강제)\n• /capture (화면 분석)\n• system_status / 시스템 상태".to_string(),
+            "api.chat.local",
+        ).0,
+            "local_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
     if message == "안녕" || message_lc == "hello" || message_lc == "hi" {
-        return Json(ChatResponse {
-            response: "👋 안녕하세요! 간단 작업은 바로 실행할 수 있어요.\n원하면 `패턴 분석` 또는 `시스템 상태`라고 입력해보세요.".to_string(),
-            command: Some("greeting_local".to_string()),
-        });
+        if let Some(cached) =
+            load_local_cached_chat_response(memory_scope_ref, &message, "greeting_local")
+        {
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                cached.0,
+                "request_memory",
+                "success",
+                Some(1.0),
+                ChatOpsFlags {
+                    request_memory_hit: true,
+                    local_only: true,
+                    ..Default::default()
+                },
+                Some("local greeting cache hit"),
+            );
+        }
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            build_local_chat_response(
+            memory_scope_ref,
+            &message,
+            "greeting_local",
+            "👋 안녕하세요! 간단 작업은 바로 실행할 수 있어요.\n원하면 `패턴 분석` 또는 `시스템 상태`라고 입력해보세요.".to_string(),
+            "api.chat.local",
+        ).0,
+            "local_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
     if message == "야"
         || message == "야!"
@@ -2662,18 +4276,89 @@ async fn handle_chat(
         || message_lc == "hey"
         || message_lc == "yo"
     {
-        return Json(ChatResponse {
-            response: "응, 듣고 있어요. 바로 할 일을 말해줘.\n예: `오늘 일정 보여줘`, `패턴 분석`, `n8n 열어줘`".to_string(),
-            command: Some("greeting_local".to_string()),
-        });
+        if let Some(cached) =
+            load_local_cached_chat_response(memory_scope_ref, &message, "greeting_local")
+        {
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                cached.0,
+                "request_memory",
+                "success",
+                Some(1.0),
+                ChatOpsFlags {
+                    request_memory_hit: true,
+                    local_only: true,
+                    ..Default::default()
+                },
+                Some("local greeting cache hit"),
+            );
+        }
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            build_local_chat_response(
+            memory_scope_ref,
+            &message,
+            "greeting_local",
+            "응, 듣고 있어요. 바로 할 일을 말해줘.\n예: `오늘 일정 보여줘`, `패턴 분석`, `n8n 열어줘`".to_string(),
+            "api.chat.local",
+        ).0,
+            "local_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
     if message_lc == "system_status" || message == "시스템 상태" || message == "코어 상태"
     {
+        if let Some(cached) =
+            load_local_cached_chat_response(memory_scope_ref, &message, "system_status")
+        {
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                cached.0,
+                "request_memory",
+                "success",
+                Some(1.0),
+                ChatOpsFlags {
+                    request_memory_hit: true,
+                    local_only: true,
+                    ..Default::default()
+                },
+                Some("local system status cache hit"),
+            );
+        }
         let mut rm = monitor::ResourceMonitor::new();
-        return Json(ChatResponse {
-            response: format!("📊 {}", rm.get_status()),
-            command: Some("system_status".to_string()),
-        });
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            build_local_chat_response(
+                memory_scope_ref,
+                &message,
+                "system_status",
+                format!("📊 {}", rm.get_status()),
+                "api.chat.local",
+            )
+            .0,
+            "local_command",
+            "success",
+            Some(1.0),
+            ChatOpsFlags {
+                local_only: true,
+                ..Default::default()
+            },
+            None,
+        );
     }
 
     // 2. Vision Command (Explicit Only)
@@ -2688,31 +4373,75 @@ async fn handle_chat(
                     let prompt = "Describe what is on the user's screen briefly. Identify active applications and context.";
                     match llm.analyze_screen(prompt, &b64).await {
                         Ok(desc) => {
-                            return Json(ChatResponse {
-                                response: format!("👁️ 화면 분석 결과:\n{}", desc),
-                                command: None,
-                            })
+                            return respond_chat(
+                                &req,
+                                memory_scope_ref,
+                                &message,
+                                ChatResponse {
+                                    response: format!("👁️ 화면 분석 결과:\n{}", desc),
+                                    command: None,
+                                    route_meta: None,
+                                },
+                                "vision_command",
+                                "success",
+                                Some(1.0),
+                                ChatOpsFlags::default(),
+                                None,
+                            )
                         }
                         Err(e) => {
-                            return Json(ChatResponse {
-                                response: format!("❌ Vision API 오류: {}", e),
-                                command: None,
-                            })
+                            return respond_chat(
+                                &req,
+                                memory_scope_ref,
+                                &message,
+                                ChatResponse {
+                                    response: format!("❌ Vision API 오류: {}", e),
+                                    command: None,
+                                    route_meta: None,
+                                },
+                                "vision_command",
+                                "error",
+                                Some(1.0),
+                                ChatOpsFlags::default(),
+                                Some("vision model analysis failed"),
+                            )
                         }
                     }
                 }
                 Err(e) => {
-                    return Json(ChatResponse {
-                        response: format!("❌ 화면 캡처 실패: {}", e),
-                        command: None,
-                    })
+                    return respond_chat(
+                        &req,
+                        memory_scope_ref,
+                        &message,
+                        ChatResponse {
+                            response: format!("❌ 화면 캡처 실패: {}", e),
+                            command: None,
+                            route_meta: None,
+                        },
+                        "vision_command",
+                        "error",
+                        Some(1.0),
+                        ChatOpsFlags::default(),
+                        Some("screen capture failed"),
+                    )
                 }
             }
         } else {
-            return Json(ChatResponse {
-                response: "❌ LLM 클라이언트가 초기화되지 않았습니다.".to_string(),
-                command: None,
-            });
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                ChatResponse {
+                    response: "❌ LLM 클라이언트가 초기화되지 않았습니다.".to_string(),
+                    command: None,
+                    route_meta: None,
+                },
+                "vision_command",
+                "error",
+                None,
+                ChatOpsFlags::default(),
+                Some("vision command requires llm client"),
+            );
         }
     }
 
@@ -2756,182 +4485,467 @@ async fn handle_chat(
                 }
             });
 
-            return Json(ChatResponse {
-                response: "🚀 Vision 검증 데모(Smart Mode)를 시작합니다.\n(Google 접속 -> [검증] -> 키 입력 -> [검증])".to_string(),
-                command: None
-            });
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                ChatResponse {
+                    response: "🚀 Vision 검증 데모(Smart Mode)를 시작합니다.\n(Google 접속 -> [검증] -> 키 입력 -> [검증])".to_string(),
+                    command: None,
+                route_meta: None,
+                },
+                "vision_demo",
+                "success",
+                Some(1.0),
+                ChatOpsFlags::default(),
+                None,
+            );
         }
     }
 
-    if let Some(brain) = &state.llm_client {
-        // [Context] Fetch recent history
+    let (intent, confidence, ops_route_kind, mut ops_flags) = if let Some((
+        cached_intent,
+        cached_confidence,
+    )) =
+        load_cached_request_intent(memory_scope_ref, &message)
+    {
+        (
+            cached_intent,
+            cached_confidence,
+            "intent_memory",
+            ChatOpsFlags {
+                intent_memory_hit: true,
+                ..Default::default()
+            },
+        )
+    } else if let Some((deterministic_intent, deterministic_confidence)) =
+        load_deterministic_chat_intent(&message)
+    {
+        (
+            deterministic_intent,
+            deterministic_confidence,
+            "deterministic",
+            ChatOpsFlags {
+                deterministic_used: true,
+                ..Default::default()
+            },
+        )
+    } else {
+        let Some(brain) = &state.llm_client else {
+            if let Some(request_text) = auto_ai_digest_request.as_deref() {
+                let response = run_ai_digest_chat_response(request_text).await;
+                let outcome = chat_ops_outcome_from_response(&response.response);
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    response,
+                    "ai_digest_auto",
+                    outcome,
+                    None,
+                    ChatOpsFlags {
+                        ai_digest_used: true,
+                        ..Default::default()
+                    },
+                    Some("llm unavailable, used digest auto fallback"),
+                );
+            }
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                ChatResponse {
+                    response: "⚠️ LLM 클라이언트가 없습니다.".to_string(),
+                    command: None,
+                    route_meta: None,
+                },
+                "llm_unavailable",
+                "error",
+                None,
+                ChatOpsFlags::default(),
+                None,
+            );
+        };
         let history =
             db::get_recent_chat_history(context_pruning::history_fetch_limit()).unwrap_or_default();
-
         match brain.parse_intent_with_history(&message, &history).await {
             Ok(intent) => {
-                let command = intent["command"].as_str().unwrap_or("unknown").to_string();
                 let confidence = intent["confidence"].as_f64().unwrap_or(0.0);
-
-                if confidence < 0.5 {
-                    return Json(ChatResponse {
-                        response: "❓ 무슨 말인지 잘 모르겠어요. 다시 말씀해주세요.".to_string(),
-                        command: None,
-                    });
-                }
-
-                let response = match command.as_str() {
-                    "analyze_patterns" => {
-                         let results = run_analysis_internal();
-                         if results.is_empty() {
-                             "🔍 분석 완료! 새로운 패턴을 찾지 못했습니다.".to_string()
-                         } else {
-                             format!("🔍 분석 완료!:\n{}", results.join("\n"))
-                         }
+                (
+                    intent,
+                    confidence,
+                    "llm",
+                    ChatOpsFlags {
+                        llm_used: true,
+                        ..Default::default()
                     },
-                    "gmail_list" => {
-                        match integrations::gmail::GmailClient::new().await {
-                            Ok(client) => match client.list_messages(5).await {
-                                Ok(msgs) => {
-                                    if msgs.is_empty() {
-                                        "📭 새 메일이 없습니다.".to_string()
-                                    } else {
-                                        let mut s = String::from("📧 최근 이메일 5건:\n");
-                                        for (_, subj, from) in msgs {
-                                            s.push_str(&format!("• {} ({})\n", subj, from));
-                                        }
-                                        s
-                                    }
-                                },
-                                Err(e) => format!("❌ 이메일 가져오기 실패: {}", e),
-                            },
-                            Err(e) => format!("⚠️ Gmail 인증 실패: {}", e),
-                        }
-                    },
-                    "calendar_today" => {
-                        match integrations::calendar::CalendarClient::new().await {
-                            Ok(client) => match client.list_today().await {
-                                Ok(events) => {
-                                    if events.is_empty() {
-                                        "📅 오늘 일정이 없습니다.".to_string()
-                                    } else {
-                                        let mut s = String::from("📅 오늘 일정:\n");
-                                        for (_, summary, start_time) in events {
-                                            s.push_str(&format!("• {} ({})\n", summary, start_time));
-                                        }
-                                        s
-                                    }
-                                },
-                                Err(e) => format!("❌ 일정 확인 실패: {}", e),
-                            },
-                            Err(e) => format!("⚠️ Calendar 인증 실패: {}", e),
-                        }
-                    },
-                    "calendar_week" => {
-                        match integrations::calendar::CalendarClient::new().await {
-                            Ok(client) => match client.list_week().await {
-                                Ok(events) => {
-                                    if events.is_empty() {
-                                        "📅 이번 주 일정이 없습니다.".to_string()
-                                    } else {
-                                        let mut s = String::from("📅 이번 주 일정:\n");
-                                        for (_, summary, start_time) in events {
-                                            s.push_str(&format!("• {} ({})\n", summary, start_time));
-                                        }
-                                        s
-                                    }
-                                },
-                                Err(e) => format!("❌ 일정 확인 실패: {}", e),
-                            },
-                            Err(e) => format!("⚠️ Calendar 인증 실패: {}", e),
-                        }
-                    },
-                    "system_status" => {
-                        let mut rm = monitor::ResourceMonitor::new();
-                        format!("📊 {}", rm.get_status())
-                    }
-                    "build_workflow" => {
-                        let prompt_str = intent["params"]["prompt"].as_str()
-                            .or_else(|| intent["params"]["description"].as_str())
-                            .unwrap_or(&message);
-                        match workflow_intake::queue_manual_workflow_recommendation(
-                            prompt_str,
-                            "api.chat.build_workflow",
-                        ) {
-                            Ok(outcome) => {
-                                let rec_id = outcome.recommendation_id;
-                                let inserted = outcome.inserted;
-                                let queued = if inserted { "생성" } else { "재사용" };
-                                format!(
-                                    "📝 워크플로우 제안을 {}했습니다 (ID: {}).\n승인 게이트 정책상 즉시 생성은 차단되며, `/api/recommendations/{}/approve` 또는 CLI `approve {}`로 승인 후 생성됩니다.",
-                                    queued, rec_id, rec_id, rec_id
-                                )
-                            }
-                            Err(e) => format!("❌ 워크플로우 제안 저장 실패: {}", e),
-                        }
-                    },
-                    "create_routine" => {
-                        let params = intent["params"].as_object();
-                        if let Some(p) = params {
-                            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("New Routine");
-                            let cron = p.get("cron").and_then(|v| v.as_str()).unwrap_or("* * * * *");
-
-                            // Validate Cron
-                            if std::str::FromStr::from_str(cron as &str).map(|_: cron::Schedule| ()).is_err() {
-                                format!("❌ 잘못된 Cron 표현식입니다: {}", cron)
-                            } else {
-                                let prompt = p.get("prompt").and_then(|v| v.as_str()).unwrap_or("Check status");
-
-                            match crate::db::create_routine(name, cron, prompt) {
-                                Ok(_id) => format!("✅ 루틴이 등록되었습니다!\n• 이름: {}\n• 주기: {}\n• 명령: {}", name, cron, prompt),
-                                Err(e) => format!("❌ 루틴 등록 실패: {}", e),
-                            }
-                            }
-                        } else {
-                             "❌ 루틴 정보를 파악할 수 없습니다.".to_string()
-                        }
-                    },
-                    "help" => "💡 사용 가능한 명령:\n• '이메일 보여줘'\n• '오늘 일정 뭐야?'\n• '매일 아침 9시 뉴스 요약해줘' (New!)".to_string(),
-                    _ => "🤔 요청을 정확히 해석하지 못했어요.\n원하는 작업을 한 문장으로 더 구체적으로 말해줘.\n예: `오늘 일정 보여줘`, `최근 메일 5개 요약해줘`, `n8n 열어줘`".to_string(),
-                };
-
-                let response_command = if command == "unknown" {
-                    None
-                } else {
-                    Some(command.clone())
-                };
-
-                let final_response = ChatResponse {
-                    response: response.clone(),
-                    command: response_command,
-                };
-
-                // [Memory] Save Assistant Response
-                if let Err(e) = db::insert_chat_message("assistant", &response) {
-                    eprintln!("Failed to save AI chat: {}", e);
-                }
-
-                Json(final_response)
+                )
             }
             Err(e) => {
+                if let Some(request_text) = auto_ai_digest_request.as_deref() {
+                    let response = run_ai_digest_chat_response(request_text).await;
+                    let outcome = chat_ops_outcome_from_response(&response.response);
+                    return respond_chat(
+                        &req,
+                        memory_scope_ref,
+                        &message,
+                        response,
+                        "ai_digest_auto",
+                        outcome,
+                        None,
+                        ChatOpsFlags {
+                            llm_used: true,
+                            ai_digest_used: true,
+                            ..Default::default()
+                        },
+                        Some("llm parse failed, used digest auto fallback"),
+                    );
+                }
                 let err_text = e.to_string();
                 let response = if err_text.to_lowercase().contains("insufficient_quota") {
                     "⚠️ OpenAI 사용량 한도를 초과했습니다. 잠시 후 다시 시도하거나 API 키/요금제를 확인해주세요.\n\n지금도 가능한 로컬 명령:\n• 패턴 분석\n• 시스템 상태\n• n8n 재시작".to_string()
                 } else {
                     format!("❌ 오류: {}", err_text)
                 };
-                Json(ChatResponse {
-                    response,
-                    command: None,
-                })
+                return respond_chat(
+                    &req,
+                    memory_scope_ref,
+                    &message,
+                    ChatResponse {
+                        response,
+                        command: None,
+                        route_meta: None,
+                    },
+                    "llm_error",
+                    "error",
+                    None,
+                    ChatOpsFlags {
+                        llm_used: true,
+                        ..Default::default()
+                    },
+                    Some("llm parse_intent_with_history failed"),
+                );
             }
         }
-    } else {
-        Json(ChatResponse {
-            response: "⚠️ LLM 클라이언트가 없습니다.".to_string(),
-            command: None,
-        })
+    };
+
+    let command = intent["command"].as_str().unwrap_or("unknown").to_string();
+    ops_flags.freshness_bypassed = request_prefers_fresh_data(&message, &command)
+        || request_recently_reasked(memory_scope_ref, &message, &command)
+        || execution_recently_reasked(memory_scope_ref, &command, &intent);
+
+    if confidence < 0.5 {
+        if let Some(request_text) = auto_ai_digest_request.as_deref() {
+            let mut flags = ops_flags;
+            flags.ai_digest_used = true;
+            let response = run_ai_digest_chat_response(request_text).await;
+            let outcome = chat_ops_outcome_from_response(&response.response);
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                response,
+                "ai_digest_auto",
+                outcome,
+                Some(confidence),
+                flags,
+                Some("low confidence route used digest auto fallback"),
+            );
+        }
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            ChatResponse {
+                response: "❓ 무슨 말인지 잘 모르겠어요. 다시 말씀해주세요.".to_string(),
+                command: None,
+                route_meta: None,
+            },
+            "low_confidence",
+            "error",
+            Some(confidence),
+            ops_flags,
+            None,
+        );
     }
+
+    if let Some(cached_response) =
+        load_cached_execution_response(memory_scope_ref, &message, &command, &intent)
+    {
+        if let Err(e) = db::insert_chat_message("assistant", &cached_response) {
+            eprintln!("Failed to save cached execution chat: {}", e);
+        }
+        let _ = db::upsert_request_memory_scoped(
+            memory_scope_ref,
+            &message,
+            Some(&intent),
+            Some(&cached_response),
+            request_memory_response_mode(&command),
+            "api.chat.execution_cache",
+            confidence,
+        );
+        let mut flags = ops_flags;
+        flags.execution_memory_hit = true;
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            ChatResponse {
+                response: cached_response,
+                command: if command == "unknown" {
+                    None
+                } else {
+                    Some(command)
+                },
+                route_meta: None,
+            },
+            "execution_memory",
+            "success",
+            Some(confidence),
+            flags,
+            None,
+        );
+    }
+
+    if let Some(cached_response) =
+        load_cached_request_response(memory_scope_ref, &message, &command)
+    {
+        if let Err(e) = db::insert_chat_message("assistant", &cached_response) {
+            eprintln!("Failed to save cached assistant chat: {}", e);
+        }
+        let _ = db::upsert_request_memory_scoped(
+            memory_scope_ref,
+            &message,
+            Some(&intent),
+            Some(&cached_response),
+            request_memory_response_mode(&command),
+            "api.chat.response_cache",
+            confidence,
+        );
+        let mut flags = ops_flags;
+        flags.request_memory_hit = true;
+        return respond_chat(
+            &req,
+            memory_scope_ref,
+            &message,
+            ChatResponse {
+                response: cached_response,
+                command: if command == "unknown" {
+                    None
+                } else {
+                    Some(command)
+                },
+                route_meta: None,
+            },
+            "request_memory",
+            "success",
+            Some(confidence),
+            flags,
+            None,
+        );
+    }
+
+    if command == "unknown" {
+        if let Some(request_text) = auto_ai_digest_request.as_deref() {
+            let mut flags = ops_flags;
+            flags.ai_digest_used = true;
+            let response = run_ai_digest_chat_response(request_text).await;
+            let outcome = chat_ops_outcome_from_response(&response.response);
+            return respond_chat(
+                &req,
+                memory_scope_ref,
+                &message,
+                response,
+                "ai_digest_auto",
+                outcome,
+                Some(confidence),
+                flags,
+                Some("unknown command route used digest auto fallback"),
+            );
+        }
+    }
+
+    let response = match command.as_str() {
+        "analyze_patterns" => {
+            let results = run_analysis_internal();
+            if results.is_empty() {
+                "🔍 분석 완료! 새로운 패턴을 찾지 못했습니다.".to_string()
+            } else {
+                format!("🔍 분석 완료!:\n{}", results.join("\n"))
+            }
+        }
+        "gmail_list" => {
+            let count = parse_u32_param(intent["params"].get("count"), 5, 1, 20);
+            match integrations::gmail::GmailClient::new().await {
+                Ok(client) => match client.list_messages(count).await {
+                    Ok(msgs) => {
+                        if msgs.is_empty() {
+                            "📭 새 메일이 없습니다.".to_string()
+                        } else {
+                            let mut s = format!("📧 최근 이메일 {}건:\n", count);
+                            for (_, subj, from) in msgs {
+                                s.push_str(&format!("• {} ({})\n", subj, from));
+                            }
+                            s
+                        }
+                    }
+                    Err(e) => format!("❌ 이메일 가져오기 실패: {}", e),
+                },
+                Err(e) => format!("⚠️ Gmail 인증 실패: {}", e),
+            }
+        }
+        "calendar_today" => match integrations::calendar::CalendarClient::new().await {
+            Ok(client) => match client.list_today().await {
+                Ok(events) => {
+                    if events.is_empty() {
+                        "📅 오늘 일정이 없습니다.".to_string()
+                    } else {
+                        let mut s = String::from("📅 오늘 일정:\n");
+                        for (_, summary, start_time) in events {
+                            s.push_str(&format!("• {} ({})\n", summary, start_time));
+                        }
+                        s
+                    }
+                }
+                Err(e) => format!("❌ 일정 확인 실패: {}", e),
+            },
+            Err(e) => format!("⚠️ Calendar 인증 실패: {}", e),
+        },
+        "calendar_week" => match integrations::calendar::CalendarClient::new().await {
+            Ok(client) => match client.list_week().await {
+                Ok(events) => {
+                    if events.is_empty() {
+                        "📅 이번 주 일정이 없습니다.".to_string()
+                    } else {
+                        let mut s = String::from("📅 이번 주 일정:\n");
+                        for (_, summary, start_time) in events {
+                            s.push_str(&format!("• {} ({})\n", summary, start_time));
+                        }
+                        s
+                    }
+                }
+                Err(e) => format!("❌ 일정 확인 실패: {}", e),
+            },
+            Err(e) => format!("⚠️ Calendar 인증 실패: {}", e),
+        },
+        "system_status" => {
+            let mut rm = monitor::ResourceMonitor::new();
+            format!("📊 {}", rm.get_status())
+        }
+        "build_workflow" => {
+            let prompt_str = intent["params"]["prompt"]
+                .as_str()
+                .or_else(|| intent["params"]["description"].as_str())
+                .unwrap_or(&message);
+            match workflow_intake::queue_manual_workflow_recommendation(
+                prompt_str,
+                "api.chat.build_workflow",
+            ) {
+                Ok(outcome) => {
+                    let rec_id = outcome.recommendation_id;
+                    let inserted = outcome.inserted;
+                    let queued = if inserted { "생성" } else { "재사용" };
+                    format!(
+                        "📝 워크플로우 제안을 {}했습니다 (ID: {}).\n승인 게이트 정책상 즉시 생성은 차단되며, `/api/recommendations/{}/approve` 또는 CLI `approve {}`로 승인 후 생성됩니다.",
+                        queued, rec_id, rec_id, rec_id
+                    )
+                }
+                Err(e) => format!("❌ 워크플로우 제안 저장 실패: {}", e),
+            }
+        }
+        "create_routine" => {
+            let params = intent["params"].as_object();
+            if let Some(p) = params {
+                let name = p
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("New Routine");
+                let cron = p
+                    .get("cron")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("* * * * *");
+
+                if std::str::FromStr::from_str(cron as &str)
+                    .map(|_: cron::Schedule| ())
+                    .is_err()
+                {
+                    format!("❌ 잘못된 Cron 표현식입니다: {}", cron)
+                } else {
+                    let prompt = p
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Check status");
+
+                    match crate::db::create_routine(name, cron, prompt) {
+                        Ok(_id) => format!(
+                            "✅ 루틴이 등록되었습니다!\n• 이름: {}\n• 주기: {}\n• 명령: {}",
+                            name, cron, prompt
+                        ),
+                        Err(e) => format!("❌ 루틴 등록 실패: {}", e),
+                    }
+                }
+            } else {
+                "❌ 루틴 정보를 파악할 수 없습니다.".to_string()
+            }
+        }
+        "help" => "💡 사용 가능한 명령:\n• '이메일 보여줘'\n• '오늘 일정 뭐야?'\n• '매일 아침 9시 뉴스 요약해줘' (New!)".to_string(),
+        _ => "🤔 요청을 정확히 해석하지 못했어요.\n원하는 작업을 한 문장으로 더 구체적으로 말해줘.\n예: `오늘 일정 보여줘`, `최근 메일 5개 요약해줘`, `n8n 열어줘`".to_string(),
+    };
+
+    let response_command = if command == "unknown" {
+        None
+    } else {
+        Some(command.clone())
+    };
+
+    let final_response = ChatResponse {
+        response: response.clone(),
+        command: response_command,
+        route_meta: None,
+    };
+
+    if let Err(e) = db::insert_chat_message("assistant", &response) {
+        eprintln!("Failed to save AI chat: {}", e);
+    }
+
+    persist_execution_memory(
+        memory_scope_ref,
+        &message,
+        &command,
+        &intent,
+        &response,
+        "api.chat.execution",
+    );
+
+    if request_memory_should_store(&command, confidence, &response) {
+        let _ = db::upsert_request_memory_scoped(
+            memory_scope_ref,
+            &message,
+            Some(&intent),
+            Some(&response),
+            request_memory_response_mode(&command),
+            chat_response_memory_source(&intent),
+            confidence,
+        );
+    }
+
+    let route_kind = if command == "unknown" {
+        "unknown"
+    } else {
+        ops_route_kind
+    };
+    let outcome = chat_ops_outcome_from_response(&response);
+    respond_chat(
+        &req,
+        memory_scope_ref,
+        &message,
+        final_response,
+        route_kind,
+        outcome,
+        Some(confidence),
+        ops_flags,
+        None,
+    )
 }
 
 // --- Routine Handlers ---
@@ -3023,6 +5037,7 @@ async fn toggle_routine_handler(
 #[derive(serde::Deserialize)]
 struct RecQueryParams {
     status: Option<String>,
+    category: Option<String>,
 }
 
 fn n8n_editor_base_url() -> String {
@@ -3078,6 +5093,257 @@ fn workflow_editor_url(workflow_id: &str) -> Option<String> {
     Some(format!("{}/workflow/{}", n8n_editor_base_url(), trimmed))
 }
 
+fn auto_recommendation_allowed(
+    proposal: &crate::recommendation::AutomationProposal,
+    source: &str,
+) -> bool {
+    let history_limit = crate::recommendation_policy::auto_recommendation_history_limit();
+    let recent = db::get_recent_recommendations(history_limit).unwrap_or_default();
+    let decision = crate::recommendation_policy::admit_auto_recommendation(proposal, &recent);
+    if decision.accepted {
+        return true;
+    }
+
+    eprintln!(
+        "🧹 [{}] Suppressing auto recommendation: {} [{} / {} / {:.2}] {}",
+        source,
+        proposal.title,
+        decision.pending_same_category,
+        decision.pending_limit,
+        decision.priority_score,
+        decision.reasons.join(", ")
+    );
+    false
+}
+
+fn recommendation_effective_category_and_score(rec: &db::Recommendation) -> (String, f64) {
+    let derived = crate::recommendation_policy::classify_recommendation_record(rec);
+    let effective_category = if rec.category.trim().is_empty()
+        || rec
+            .category
+            .eq_ignore_ascii_case(crate::recommendation_policy::CATEGORY_UNKNOWN)
+    {
+        derived.category
+    } else {
+        rec.category.clone()
+    };
+    let effective_business_score = if rec.business_score > 0.0 {
+        rec.business_score
+    } else {
+        derived.business_score
+    };
+    (effective_category, effective_business_score)
+}
+
+fn recommendation_is_snoozed(rec: &db::Recommendation) -> bool {
+    let Some(snoozed_until) = rec
+        .snoozed_until
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    chrono::DateTime::parse_from_rfc3339(snoozed_until)
+        .map(|ts| ts.with_timezone(&chrono::Utc) > chrono::Utc::now())
+        .unwrap_or(false)
+}
+
+fn recommendation_effective_status(rec: &db::Recommendation) -> String {
+    if rec.status.eq_ignore_ascii_case("pending")
+        && rec
+            .last_error
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some()
+    {
+        "failed".to_string()
+    } else if rec.status.eq_ignore_ascii_case("pending") && recommendation_is_snoozed(rec) {
+        "later".to_string()
+    } else {
+        rec.status.clone()
+    }
+}
+
+fn recommendation_approval_block_message(id: i64, reasons: &[String]) -> String {
+    if reasons.is_empty() {
+        return format!("Recommendation {} is not ready for approval yet.", id);
+    }
+    format!(
+        "Recommendation {} needs stronger business evidence before approval: {}",
+        id,
+        reasons.join(" ")
+    )
+}
+
+fn recommendation_review_actor(actor: Option<&str>, fallback: &str) -> String {
+    actor
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn log_recommendation_review_event(
+    recommendation_id: i64,
+    recommendation_title: &str,
+    status_after: Option<&str>,
+    category: Option<&str>,
+    action: &str,
+    actor: Option<&str>,
+    note: Option<&str>,
+    ok: bool,
+    message: Option<&str>,
+) {
+    let _ = db::record_recommendation_review_event(
+        recommendation_id,
+        recommendation_title,
+        status_after,
+        category,
+        action,
+        actor,
+        note,
+        ok,
+        message,
+    );
+}
+
+fn recommendation_feedback_snooze_hours() -> i64 {
+    std::env::var("ALLVIA_RECOMMENDATION_REFINE_SNOOZE_HOURS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .map(|v| v.clamp(1, 24 * 30))
+        .unwrap_or(24 * 14)
+}
+
+fn classify_recommendation_feedback(feedback: &str) -> &'static str {
+    let normalized = feedback.trim().to_lowercase();
+    if normalized.is_empty() {
+        return "refine";
+    }
+
+    let has_negative_signal = [
+        "싫",
+        "별로",
+        "원치",
+        "필요없",
+        "아냐",
+        "아님",
+        "잘못",
+        "틀렸",
+        "노이즈",
+        "중복",
+        "spam",
+        "duplicate",
+        "irrelevant",
+        "wrong",
+        "not useful",
+        "don't",
+        "do not",
+        "no need",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token));
+    if has_negative_signal {
+        return "negative";
+    }
+
+    let has_positive_signal = [
+        "좋",
+        "괜찮",
+        "유용",
+        "원하던",
+        "마음에",
+        "keep",
+        "good",
+        "great",
+        "helpful",
+        "useful",
+        "correct",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token));
+    if has_positive_signal {
+        return "positive";
+    }
+
+    "refine"
+}
+
+fn limit_visible_recommendations(
+    recs: Vec<db::Recommendation>,
+    category_filter: Option<&str>,
+    preference_history: &[db::Recommendation],
+) -> Vec<db::Recommendation> {
+    let limit = crate::recommendation_policy::pending_recommendation_display_limit();
+    let preference_profile =
+        crate::recommendation_policy::build_recommendation_preference_profile(preference_history);
+    if limit == 0 {
+        return recs
+            .into_iter()
+            .filter(|rec| {
+                let (category, _) = recommendation_effective_category_and_score(rec);
+                crate::recommendation_policy::matches_category_filter(&category, category_filter)
+            })
+            .collect();
+    }
+
+    let mut manual_pending = Vec::new();
+    let mut auto_pending = Vec::new();
+    let mut others = Vec::new();
+
+    for rec in recs {
+        let (effective_category, _) = recommendation_effective_category_and_score(&rec);
+        if !crate::recommendation_policy::matches_category_filter(
+            &effective_category,
+            category_filter,
+        ) {
+            continue;
+        }
+        let effective_status = recommendation_effective_status(&rec);
+        if effective_status.eq_ignore_ascii_case("pending") {
+            if rec.pattern_id.is_some() {
+                let readiness =
+                    crate::recommendation_policy::evaluate_recommendation_approval_readiness(&rec);
+                if !readiness.ready {
+                    continue;
+                }
+                auto_pending.push(rec);
+            } else {
+                manual_pending.push(rec);
+            }
+        } else {
+            others.push(rec);
+        }
+    }
+
+    auto_pending.sort_by(|left, right| {
+        let right_ready =
+            crate::recommendation_policy::evaluate_recommendation_approval_readiness(right).ready;
+        let left_ready =
+            crate::recommendation_policy::evaluate_recommendation_approval_readiness(left).ready;
+        right_ready.cmp(&left_ready).then_with(|| {
+            crate::recommendation_policy::recommendation_record_priority_score_with_profile(
+                right,
+                &preference_profile,
+            )
+            .partial_cmp(
+                &crate::recommendation_policy::recommendation_record_priority_score_with_profile(
+                    left,
+                    &preference_profile,
+                ),
+            )
+            .unwrap_or(CmpOrdering::Equal)
+        })
+    });
+
+    let mut visible = manual_pending;
+    visible.extend(auto_pending.into_iter().take(limit));
+    visible.extend(others);
+    visible
+}
+
 async fn list_recommendations(
     Query(params): Query<RecQueryParams>,
 ) -> Json<Vec<RecommendationItem>> {
@@ -3088,23 +5354,49 @@ async fn list_recommendations(
         .as_deref()
         .filter(|s| !s.is_empty())
         .or(Some("all"));
+    let category_filter =
+        crate::recommendation_policy::normalize_list_category_filter(params.category.as_deref());
 
     match db::get_recommendations_with_filter(filter) {
-        Ok(recs) => Json(
-            recs.into_iter()
-                .map(|r| RecommendationItem {
-                    id: r.id,
-                    status: r.status,
-                    title: r.title,
-                    summary: r.summary,
-                    confidence: r.confidence,
-                    evidence: r.evidence, // [NEW] Pass evidence
-                    last_error: r.last_error,
-                    workflow_id: r.workflow_id.clone(),
-                    workflow_url: r.workflow_id.as_deref().and_then(workflow_editor_url),
+        Ok(recs) => {
+            let preference_history = db::get_recent_recommendations(
+                crate::recommendation_policy::auto_recommendation_history_limit(),
+            )
+            .unwrap_or_default();
+            Json(
+                limit_visible_recommendations(
+                    recs,
+                    category_filter.as_deref(),
+                    &preference_history,
+                )
+                .into_iter()
+                .map(|r| {
+                    let (effective_category, effective_business_score) =
+                        recommendation_effective_category_and_score(&r);
+                    let approval_readiness =
+                        crate::recommendation_policy::evaluate_recommendation_approval_readiness(
+                            &r,
+                        );
+                    RecommendationItem {
+                        id: r.id,
+                        status: recommendation_effective_status(&r),
+                        title: r.title,
+                        summary: r.summary,
+                        confidence: r.confidence,
+                        category: effective_category,
+                        business_score: effective_business_score,
+                        evidence: r.evidence,
+                        last_error: r.last_error,
+                        workflow_id: r.workflow_id.clone(),
+                        workflow_url: r.workflow_id.as_deref().and_then(workflow_editor_url),
+                        snoozed_until: r.snoozed_until.clone(),
+                        approval_ready: approval_readiness.ready,
+                        approval_reasons: approval_readiness.reasons,
+                    }
                 })
                 .collect(),
-        ),
+            )
+        }
         Err(_) => Json(vec![]),
     }
 }
@@ -3112,6 +5404,7 @@ async fn list_recommendations(
 async fn approve_recommendation(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<i64>,
+    payload: Option<Json<RecommendationReviewActionRequest>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     println!("🔔 Received approval request for Recommendation ID: {}", id);
     // NOTE: keep approve endpoint async-only to avoid frontend request timeout and duplicate submissions.
@@ -3122,18 +5415,46 @@ async fn approve_recommendation(
             .flatten()
             .map(|op| (op.id, op.status, op.updated_at))
     };
+    let actor = recommendation_review_actor(
+        payload.as_ref().and_then(|p| p.actor.as_deref()),
+        "api.recommendation_review",
+    );
+    let note = payload.as_ref().and_then(|p| p.note.as_deref());
 
     let rec = db::get_recommendation(id)
         .map_err(|e| {
+            let details = e.to_string();
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("error"),
+                None,
+                "approve",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "error": "recommendation_lookup_failed",
-                    "details": e.to_string()
+                    "details": details
                 })),
             )
         })?
         .ok_or_else(|| {
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("missing"),
+                None,
+                "approve",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some("recommendation not found"),
+            );
             (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({
@@ -3144,6 +5465,17 @@ async fn approve_recommendation(
         })?;
 
     if rec.status.eq_ignore_ascii_case("rejected") {
+        log_recommendation_review_event(
+            rec.id,
+            &rec.title,
+            Some(rec.status.as_str()),
+            Some(rec.category.as_str()),
+            "approve",
+            Some(actor.as_str()),
+            note,
+            false,
+            Some("recommendation is rejected"),
+        );
         return Err((
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -3153,14 +5485,51 @@ async fn approve_recommendation(
         ));
     }
 
+    let approval_readiness =
+        crate::recommendation_policy::evaluate_recommendation_approval_readiness(&rec);
+    if !approval_readiness.ready {
+        let details = recommendation_approval_block_message(id, &approval_readiness.reasons);
+        log_recommendation_review_event(
+            rec.id,
+            &rec.title,
+            Some(rec.status.as_str()),
+            Some(rec.category.as_str()),
+            "approve",
+            Some(actor.as_str()),
+            note,
+            false,
+            Some(&details),
+        );
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": details,
+                "details": details,
+                "reasons": approval_readiness.reasons,
+            })),
+        ));
+    }
+
     let approved_now = !rec.status.eq_ignore_ascii_case("approved");
     if approved_now {
         db::update_recommendation_review_status(id, "approved").map_err(|e| {
+            let details = e.to_string();
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some(rec.status.as_str()),
+                Some(rec.category.as_str()),
+                "approve",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
                     "error": "recommendation_approve_update_failed",
-                    "details": e.to_string(),
+                    "details": details,
                 })),
             )
         })?;
@@ -3174,6 +5543,17 @@ async fn approve_recommendation(
     {
         if existing_id.starts_with("provisioning:") {
             let latest_op = latest_op_snapshot(id);
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some("approved"),
+                Some(rec.category.as_str()),
+                "approve",
+                Some(actor.as_str()),
+                note,
+                true,
+                Some("workflow provisioning already in progress"),
+            );
             return Ok((
                 StatusCode::ACCEPTED,
                 Json(serde_json::json!({
@@ -3193,6 +5573,17 @@ async fn approve_recommendation(
         }
 
         let workflow_url = workflow_editor_url(existing_id);
+        log_recommendation_review_event(
+            rec.id,
+            &rec.title,
+            Some("approved"),
+            Some(rec.category.as_str()),
+            "approve",
+            Some(actor.as_str()),
+            note,
+            true,
+            Some("workflow already existed; reused existing workflow_id"),
+        );
         return Ok((
             StatusCode::OK,
             Json(serde_json::json!({
@@ -3216,6 +5607,17 @@ async fn approve_recommendation(
             let message = error.to_string();
             if message.contains("already being provisioned") {
                 let latest_op = latest_op_snapshot(id);
+                log_recommendation_review_event(
+                    rec.id,
+                    &rec.title,
+                    Some("approved"),
+                    Some(rec.category.as_str()),
+                    "approve",
+                    Some(actor.as_str()),
+                    note,
+                    true,
+                    Some("workflow provisioning already in progress"),
+                );
                 return Ok((
                     StatusCode::ACCEPTED,
                     Json(serde_json::json!({
@@ -3242,6 +5644,17 @@ async fn approve_recommendation(
                         .filter(|s| !s.starts_with("provisioning:"))
                     {
                         let workflow_url = workflow_editor_url(existing_id);
+                        log_recommendation_review_event(
+                            latest_rec.id,
+                            &latest_rec.title,
+                            Some("approved"),
+                            Some(latest_rec.category.as_str()),
+                            "approve",
+                            Some(actor.as_str()),
+                            note,
+                            true,
+                            Some("workflow already existed; reused existing workflow_id"),
+                        );
                         return Ok((
                             StatusCode::OK,
                             Json(serde_json::json!({
@@ -3260,6 +5673,17 @@ async fn approve_recommendation(
                     }
                 }
             }
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some("approved"),
+                Some(rec.category.as_str()),
+                "approve",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&message),
+            );
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -3296,6 +5720,17 @@ async fn approve_recommendation(
     });
 
     let latest_op = latest_op_snapshot(id);
+    log_recommendation_review_event(
+        rec.id,
+        &rec.title,
+        Some("approved"),
+        Some(rec.category.as_str()),
+        "approve",
+        Some(actor.as_str()),
+        note,
+        true,
+        Some("approval accepted; workflow provisioning running asynchronously"),
+    );
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
@@ -3320,25 +5755,337 @@ async fn approve_recommendation(
     ))
 }
 
-async fn reject_recommendation(axum::extract::Path(id): axum::extract::Path<i64>) -> StatusCode {
+async fn reject_recommendation(
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    payload: Option<Json<RecommendationReviewActionRequest>>,
+) -> StatusCode {
+    let actor = recommendation_review_actor(
+        payload.as_ref().and_then(|p| p.actor.as_deref()),
+        "api.recommendation_review",
+    );
+    let note = payload.as_ref().and_then(|p| p.note.as_deref());
+    let rec = match db::get_recommendation(id) {
+        Ok(Some(rec)) => rec,
+        Ok(None) => {
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("missing"),
+                None,
+                "reject",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some("recommendation not found"),
+            );
+            return StatusCode::NOT_FOUND;
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("error"),
+                None,
+                "reject",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
     match db::update_recommendation_review_status(id, "rejected") {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        Ok(_) => {
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some("rejected"),
+                Some(rec.category.as_str()),
+                "reject",
+                Some(actor.as_str()),
+                note,
+                true,
+                Some("recommendation rejected"),
+            );
+            StatusCode::OK
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some(rec.status.as_str()),
+                Some(rec.category.as_str()),
+                "reject",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            if details.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if details.contains("invalid recommendation transition") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
     }
 }
 
-async fn later_recommendation(axum::extract::Path(id): axum::extract::Path<i64>) -> StatusCode {
-    // "Later" keeps the recommendation in pending review state.
-    match db::update_recommendation_review_status(id, "pending") {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+async fn submit_recommendation_feedback(
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(req): Json<RecommendationFeedbackRequest>,
+) -> Result<(StatusCode, Json<RecommendationFeedbackResponse>), StatusCode> {
+    let feedback = req.feedback.trim();
+    let actor = recommendation_review_actor(req.actor.as_deref(), "api.recommendation_feedback");
+    if feedback.is_empty() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(RecommendationFeedbackResponse {
+                ok: false,
+                sentiment: "refine".to_string(),
+                status: "invalid".to_string(),
+                message: "피드백 내용을 입력해 주세요.".to_string(),
+                suppressed_similar: false,
+            }),
+        ));
+    }
+
+    let rec = db::get_recommendation(id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let sentiment = classify_recommendation_feedback(feedback).to_string();
+    let recorded = db::record_recommendation_feedback(id, &sentiment, feedback)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !recorded {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match sentiment.as_str() {
+        "negative" => {
+            db::update_recommendation_review_status(id, "rejected")
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        "refine" => {
+            if !rec.status.eq_ignore_ascii_case("approved")
+                && !rec.status.eq_ignore_ascii_case("rejected")
+            {
+                db::snooze_recommendation(id, recommendation_feedback_snooze_hours())
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            }
+        }
+        _ => {}
+    }
+
+    let updated = db::get_recommendation(id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let effective_status = recommendation_effective_status(&updated);
+
+    let message = match sentiment.as_str() {
+        "negative" => "피드백을 기록했고 이 추천은 거절 처리했습니다. 유사 자동 추천도 계속 억제됩니다.",
+        "refine" => "피드백을 기록했고 이 추천은 잠시 숨겼습니다. 승인하면 수정 지시를 워크플로우 생성에 반영합니다.",
+        _ => "피드백을 기록했습니다.",
+    };
+    let review_action = match sentiment.as_str() {
+        "negative" => "feedback_negative",
+        "refine" => "feedback_refine",
+        _ => "feedback_positive",
+    };
+    log_recommendation_review_event(
+        updated.id,
+        &updated.title,
+        Some(effective_status.as_str()),
+        Some(updated.category.as_str()),
+        review_action,
+        Some(actor.as_str()),
+        Some(feedback),
+        true,
+        Some(message),
+    );
+
+    Ok((
+        StatusCode::OK,
+        Json(RecommendationFeedbackResponse {
+            ok: true,
+            sentiment,
+            status: effective_status,
+            message: message.to_string(),
+            suppressed_similar: updated
+                .feedback_status
+                .as_deref()
+                .map(|value| value != "positive")
+                .unwrap_or(false),
+        }),
+    ))
+}
+
+async fn later_recommendation(
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    payload: Option<Json<RecommendationReviewActionRequest>>,
+) -> StatusCode {
+    let actor = recommendation_review_actor(
+        payload.as_ref().and_then(|p| p.actor.as_deref()),
+        "api.recommendation_review",
+    );
+    let note = payload.as_ref().and_then(|p| p.note.as_deref());
+    let rec = match db::get_recommendation(id) {
+        Ok(Some(rec)) => rec,
+        Ok(None) => {
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("missing"),
+                None,
+                "later",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some("recommendation not found"),
+            );
+            return StatusCode::NOT_FOUND;
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("error"),
+                None,
+                "later",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+    let hours = std::env::var("ALLVIA_RECOMMENDATION_SNOOZE_HOURS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .map(|v| v.clamp(1, 24 * 30))
+        .unwrap_or(24 * 7);
+    match db::snooze_recommendation(id, hours) {
+        Ok(_) => {
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some("pending"),
+                Some(rec.category.as_str()),
+                "later",
+                Some(actor.as_str()),
+                note,
+                true,
+                Some("recommendation snoozed"),
+            );
+            StatusCode::OK
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some(rec.status.as_str()),
+                Some(rec.category.as_str()),
+                "later",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            if details.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if details.contains("cannot snooze recommendation") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
     }
 }
 
-async fn restore_recommendation(axum::extract::Path(id): axum::extract::Path<i64>) -> StatusCode {
-    match db::update_recommendation_review_status(id, "pending") {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+async fn restore_recommendation(
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    payload: Option<Json<RecommendationReviewActionRequest>>,
+) -> StatusCode {
+    let actor = recommendation_review_actor(
+        payload.as_ref().and_then(|p| p.actor.as_deref()),
+        "api.recommendation_review",
+    );
+    let note = payload.as_ref().and_then(|p| p.note.as_deref());
+    let rec = match db::get_recommendation(id) {
+        Ok(Some(rec)) => rec,
+        Ok(None) => {
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("missing"),
+                None,
+                "restore",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some("recommendation not found"),
+            );
+            return StatusCode::NOT_FOUND;
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                id,
+                &format!("recommendation:{}", id),
+                Some("error"),
+                None,
+                "restore",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+    match db::restore_recommendation(id) {
+        Ok(_) => {
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some("pending"),
+                Some(rec.category.as_str()),
+                "restore",
+                Some(actor.as_str()),
+                note,
+                true,
+                Some("recommendation restored"),
+            );
+            StatusCode::OK
+        }
+        Err(error) => {
+            let details = error.to_string();
+            log_recommendation_review_event(
+                rec.id,
+                &rec.title,
+                Some(rec.status.as_str()),
+                Some(rec.category.as_str()),
+                "restore",
+                Some(actor.as_str()),
+                note,
+                false,
+                Some(&details),
+            );
+            if details.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if details.contains("cannot restore recommendation") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
     }
 }
 
@@ -3709,7 +6456,7 @@ async fn remove_exec_allowlist(Path(id): Path<i64>) -> StatusCode {
 }
 
 #[derive(Serialize)]
-struct RecommendationMetricsResponse {
+pub struct RecommendationMetricsResponse {
     total: i64,
     approved: i64,
     rejected: i64,
@@ -3732,6 +6479,39 @@ async fn get_recommendation_metrics() -> Json<RecommendationMetricsResponse> {
         legacy_other: 0,
         last_created_at: None,
     });
+    let visible_queue_counts = db::get_recommendations_with_filter(Some("all"))
+        .ok()
+        .map(|recs| {
+            let work_filter =
+                crate::recommendation_policy::normalize_list_category_filter(None);
+            let mut pending = 0_i64;
+            let mut later = 0_i64;
+            let mut failed = 0_i64;
+            for rec in recs {
+                let (category, _) = recommendation_effective_category_and_score(&rec);
+                if !crate::recommendation_policy::matches_category_filter(
+                    &category,
+                    work_filter.as_deref(),
+                ) {
+                    continue;
+                }
+                match recommendation_effective_status(&rec).as_str() {
+                    "pending" => {
+                        if rec.pattern_id.is_some()
+                            && !crate::recommendation_policy::evaluate_recommendation_approval_readiness(&rec).ready
+                        {
+                            continue;
+                        }
+                        pending += 1;
+                    }
+                    "later" => later += 1,
+                    "failed" => failed += 1,
+                    _ => {}
+                }
+            }
+            (pending, later, failed)
+        })
+        .unwrap_or((metrics.pending, metrics.later, metrics.failed));
 
     let approval_rate = if metrics.total > 0 {
         (metrics.approved as f64 / metrics.total as f64) * 100.0
@@ -3743,13 +6523,395 @@ async fn get_recommendation_metrics() -> Json<RecommendationMetricsResponse> {
         total: metrics.total,
         approved: metrics.approved,
         rejected: metrics.rejected,
-        failed: metrics.failed,
-        pending: metrics.pending,
-        later: metrics.later,
+        failed: visible_queue_counts.2,
+        pending: visible_queue_counts.0,
+        later: visible_queue_counts.1,
         legacy_other: metrics.legacy_other,
         approval_rate,
         last_created_at: metrics.last_created_at,
     })
+}
+
+async fn list_recommendation_review_events_handler(
+    Query(query): Query<RecommendationReviewEventsQuery>,
+) -> Json<Vec<db::RecommendationReviewEventRecord>> {
+    let limit = memory_admin_limit(query.limit);
+    Json(db::list_recommendation_review_events(limit).unwrap_or_default())
+}
+
+fn launch_ops_limit(limit: Option<i64>) -> i64 {
+    limit.unwrap_or(200).clamp(20, 500)
+}
+
+fn launch_eval_candidate_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(12).clamp(1, 30)
+}
+
+async fn get_launch_ops_handler(Query(query): Query<LaunchOpsQuery>) -> Json<LaunchOpsResponse> {
+    let limit = launch_ops_limit(query.limit);
+    let chat_metrics = db::get_launch_ops_metrics(limit).unwrap_or(db::LaunchOpsMetrics {
+        window_size: limit,
+        total_requests: 0,
+        blocked_requests: 0,
+        intent_memory_hits: 0,
+        request_memory_hits: 0,
+        execution_memory_hits: 0,
+        cached_response_hit_rate: 0.0,
+        deterministic_routes: 0,
+        llm_routes: 0,
+        ai_digest_routes: 0,
+        ai_digest_auto_routes: 0,
+        local_routes: 0,
+        freshness_bypasses: 0,
+        low_confidence_routes: 0,
+        unknown_routes: 0,
+        error_routes: 0,
+        last_event_at: None,
+        route_breakdown: Vec::new(),
+    });
+    let memory_metrics = db::get_memory_ops_metrics().unwrap_or(db::MemoryOpsMetrics {
+        request_active: 0,
+        request_suppressed: 0,
+        execution_active: 0,
+        execution_suppressed: 0,
+        last_request_used_at: None,
+        last_execution_used_at: None,
+    });
+    let nl_run_metrics = db::get_nl_run_metrics(limit).unwrap_or(db::NLRunMetrics {
+        total: 0,
+        completed: 0,
+        manual_required: 0,
+        approval_required: 0,
+        blocked: 0,
+        error: 0,
+        success_rate: 0.0,
+    });
+    let exec_approval_metrics =
+        db::get_exec_approval_metrics(limit).unwrap_or(db::ExecApprovalMetrics {
+            window_size: limit,
+            total: 0,
+            pending: 0,
+            approved: 0,
+            rejected: 0,
+            expired_pending: 0,
+            allow_once: 0,
+            allow_always: 0,
+            deny: 0,
+            approval_rate: 0.0,
+            oldest_pending_created_at: None,
+            last_created_at: None,
+            last_resolved_at: None,
+        });
+    let recommendation_metrics = get_recommendation_metrics().await.0;
+    let recommendation_review_metrics =
+        db::get_recommendation_review_metrics(limit).unwrap_or(db::RecommendationReviewMetrics {
+            window_size: limit,
+            total_events: 0,
+            approve_actions: 0,
+            reject_actions: 0,
+            later_actions: 0,
+            restore_actions: 0,
+            feedback_positive: 0,
+            feedback_refine: 0,
+            feedback_negative: 0,
+            failed_actions: 0,
+            action_failure_rate: 0.0,
+            non_positive_feedback_rate: 0.0,
+            last_event_at: None,
+        });
+    let recent_events = db::list_launch_ops_events(limit.min(12)).unwrap_or_default();
+
+    Json(LaunchOpsResponse {
+        chat_metrics,
+        memory_metrics,
+        nl_run_metrics,
+        exec_approval_metrics,
+        recommendation_metrics,
+        recommendation_review_metrics,
+        recent_events,
+    })
+}
+
+async fn get_launch_eval_candidates_handler(
+    Query(query): Query<LaunchEvalCandidatesQuery>,
+) -> Json<Vec<launch_eval::LaunchEvalCandidate>> {
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let provenance_filter =
+        launch_eval::parse_launch_eval_candidate_provenance_filter(query.provenance.as_deref());
+    Json(launch_eval::generate_launch_eval_candidates_with_filter(
+        &workdir,
+        launch_eval_candidate_limit(query.limit),
+        provenance_filter,
+    ))
+}
+
+async fn get_launch_eval_candidate_snapshot_info_handler(
+    Query(query): Query<LaunchEvalSnapshotInfoQuery>,
+) -> Result<Json<launch_eval::LaunchEvalCandidateSnapshotInfo>, StatusCode> {
+    if requested_operational_override(query.output_path.as_deref())
+        && !allow_operational_path_override()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let workdir = resolve_operational_workdir(query.workdir.as_deref());
+    let provenance_filter =
+        launch_eval::parse_launch_eval_candidate_provenance_filter(query.provenance.as_deref());
+    let output_path = resolve_operational_file_override(query.output_path.as_deref())
+        .map(|value| value.display().to_string());
+    Ok(Json(
+        launch_eval::read_launch_eval_candidate_snapshot_info_with_filter(
+            &workdir,
+            output_path.as_deref(),
+            provenance_filter,
+        ),
+    ))
+}
+
+async fn write_launch_eval_candidate_snapshot_handler(
+    Json(payload): Json<LaunchEvalSnapshotRequest>,
+) -> Result<Json<launch_eval::LaunchEvalCandidateSnapshot>, StatusCode> {
+    if requested_operational_override(payload.output_path.as_deref())
+        && !allow_operational_path_override()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let limit = launch_eval_candidate_limit(payload.limit);
+    let workdir = resolve_operational_workdir(payload.workdir.as_deref());
+    let provenance_filter =
+        launch_eval::parse_launch_eval_candidate_provenance_filter(payload.provenance.as_deref());
+    let output_path = resolve_operational_file_override(payload.output_path.as_deref())
+        .map(|value| value.display().to_string());
+    let snapshot = launch_eval::write_launch_eval_candidate_snapshot_with_filter(
+        &workdir,
+        output_path.as_deref(),
+        limit,
+        provenance_filter,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(snapshot))
+}
+
+fn memory_admin_limit(limit: Option<i64>) -> i64 {
+    limit.unwrap_or(12).clamp(1, 50)
+}
+
+fn memory_admin_action_message(ok: bool, kind: &str, action: &str) -> String {
+    if ok {
+        format!("{} {} succeeded.", kind, action)
+    } else {
+        format!("{} {} target was not found.", kind, action)
+    }
+}
+
+fn memory_admin_action_response(
+    ok: bool,
+    kind: &str,
+    action: &str,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let message = memory_admin_action_message(ok, kind, action);
+    (
+        if ok {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        },
+        Json(MemoryAdminActionResponse {
+            ok,
+            kind: kind.to_string(),
+            action: action.to_string(),
+            message,
+        }),
+    )
+}
+
+async fn list_memory_records_handler(
+    Query(query): Query<MemoryRecordsQuery>,
+) -> Json<MemoryRecordsResponse> {
+    let limit = memory_admin_limit(query.limit);
+    let include_suppressed = query.include_suppressed.unwrap_or(true);
+    let metrics = db::get_memory_ops_metrics().unwrap_or(crate::db::MemoryOpsMetrics {
+        request_active: 0,
+        request_suppressed: 0,
+        execution_active: 0,
+        execution_suppressed: 0,
+        last_request_used_at: None,
+        last_execution_used_at: None,
+    });
+    let request_memory =
+        db::list_request_memory_records(limit, include_suppressed).unwrap_or_default();
+    let execution_memory =
+        db::list_execution_memory_records(limit, include_suppressed).unwrap_or_default();
+    let recent_admin_events = db::list_memory_admin_events(limit).unwrap_or_default();
+    Json(MemoryRecordsResponse {
+        metrics,
+        request_memory,
+        execution_memory,
+        recent_admin_events,
+    })
+}
+
+async fn suppress_request_memory_handler(
+    Json(req): Json<RequestMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.request_text.trim().is_empty() {
+        false
+    } else {
+        db::suppress_request_memory_scoped(
+            req.memory_scope.as_deref(),
+            &req.request_text,
+            req.reason.as_deref(),
+        )
+        .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "request_memory", "suppress");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let _ = db::record_memory_admin_event(
+        "request_memory",
+        "suppress",
+        req.memory_scope.as_deref(),
+        &req.request_text,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "request_memory", "suppress")
+}
+
+async fn restore_request_memory_handler(
+    Json(req): Json<RequestMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.request_text.trim().is_empty() {
+        false
+    } else {
+        db::restore_request_memory_scoped(req.memory_scope.as_deref(), &req.request_text)
+            .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "request_memory", "restore");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let _ = db::record_memory_admin_event(
+        "request_memory",
+        "restore",
+        req.memory_scope.as_deref(),
+        &req.request_text,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "request_memory", "restore")
+}
+
+async fn delete_request_memory_handler(
+    Json(req): Json<RequestMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.request_text.trim().is_empty() {
+        false
+    } else {
+        db::delete_request_memory_scoped(req.memory_scope.as_deref(), &req.request_text)
+            .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "request_memory", "delete");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let _ = db::record_memory_admin_event(
+        "request_memory",
+        "delete",
+        req.memory_scope.as_deref(),
+        &req.request_text,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "request_memory", "delete")
+}
+
+async fn suppress_execution_memory_handler(
+    Json(req): Json<ExecutionMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.intent_command.trim().is_empty() || req.params_key.trim().is_empty() {
+        false
+    } else {
+        db::suppress_execution_memory_scoped(
+            req.memory_scope.as_deref(),
+            &req.intent_command,
+            &req.params_key,
+            req.reason.as_deref(),
+        )
+        .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "execution_memory", "suppress");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let target_key = format!("{}::{}", req.intent_command.trim(), req.params_key.trim());
+    let _ = db::record_memory_admin_event(
+        "execution_memory",
+        "suppress",
+        req.memory_scope.as_deref(),
+        &target_key,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "execution_memory", "suppress")
+}
+
+async fn restore_execution_memory_handler(
+    Json(req): Json<ExecutionMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.intent_command.trim().is_empty() || req.params_key.trim().is_empty() {
+        false
+    } else {
+        db::restore_execution_memory_scoped(
+            req.memory_scope.as_deref(),
+            &req.intent_command,
+            &req.params_key,
+        )
+        .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "execution_memory", "restore");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let target_key = format!("{}::{}", req.intent_command.trim(), req.params_key.trim());
+    let _ = db::record_memory_admin_event(
+        "execution_memory",
+        "restore",
+        req.memory_scope.as_deref(),
+        &target_key,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "execution_memory", "restore")
+}
+
+async fn delete_execution_memory_handler(
+    Json(req): Json<ExecutionMemoryAdminActionRequest>,
+) -> (StatusCode, Json<MemoryAdminActionResponse>) {
+    let ok = if req.intent_command.trim().is_empty() || req.params_key.trim().is_empty() {
+        false
+    } else {
+        db::delete_execution_memory_scoped(
+            req.memory_scope.as_deref(),
+            &req.intent_command,
+            &req.params_key,
+        )
+        .unwrap_or(false)
+    };
+    let message = memory_admin_action_message(ok, "execution_memory", "delete");
+    let actor = req.actor.as_deref().unwrap_or("api.memory_admin");
+    let target_key = format!("{}::{}", req.intent_command.trim(), req.params_key.trim());
+    let _ = db::record_memory_admin_event(
+        "execution_memory",
+        "delete",
+        req.memory_scope.as_deref(),
+        &target_key,
+        req.reason.as_deref(),
+        Some(actor),
+        ok,
+        Some(&message),
+    );
+    memory_admin_action_response(ok, "execution_memory", "delete")
 }
 
 // Add at top: use crate::recommendation::AutomationProposal;
@@ -3761,22 +6923,51 @@ async fn analyze_patterns() -> Json<Vec<String>> {
 fn run_analysis_internal() -> Vec<String> {
     let detector = pattern_detector::PatternDetector::new();
     let patterns = detector.analyze();
+    let preference_history = db::get_recent_recommendations(
+        crate::recommendation_policy::auto_recommendation_history_limit(),
+    )
+    .unwrap_or_default();
 
     // 1. Save detected patterns to DB
     for p in &patterns {
+        if !detector.should_recommend(p) {
+            continue;
+        }
         let proposal = crate::recommendation::AutomationProposal {
             title: format!("New Pattern: {}", p.description),
             summary: format!(
-                "Detected {} repeats. AI suggests automating this.",
-                p.occurrences
+                "Detected {} repeats across {} distinct day(s). AI suggests automating this.",
+                p.occurrences, p.distinct_days
             ),
             trigger: format!("Pattern Type: {:?}", p.pattern_type),
             actions: vec!["Analyze".to_string(), "Automate".to_string()],
             n8n_prompt: format!("Create an automation for: {}", p.description),
             confidence: p.similarity_score,
-            evidence: vec![format!("Pattern: {}", p.description)],
+            evidence: vec![
+                format!("Pattern: {}", p.description),
+                format!("Frequency: {} occurrences", p.occurrences),
+                format!("Span: {} distinct day(s)", p.distinct_days),
+                format!(
+                    "Work context: weekday {} / work-hour {} occurrences",
+                    p.weekday_occurrences, p.work_hour_occurrences
+                ),
+            ],
             pattern_id: Some(p.pattern_id.clone()),
+            category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+            business_score: 0.0,
         };
+        let mut proposal = proposal;
+        let decision = crate::recommendation_policy::apply_mvp_policy(&mut proposal, Some(p));
+        if !decision.accepted {
+            continue;
+        }
+        crate::recommendation_policy::apply_recommendation_preferences(
+            &mut proposal,
+            &preference_history,
+        );
+        if !auto_recommendation_allowed(&proposal, "api.patterns.analyze") {
+            continue;
+        }
         if let Err(e) = db::insert_recommendation(&proposal) {
             eprintln!("Failed to save pattern: {}", e);
         }
@@ -3794,6 +6985,8 @@ fn run_analysis_internal() -> Vec<String> {
             actions: vec!["Log Activity".to_string(), "Send Notification".to_string()],
             n8n_prompt: "Create a workflow that logs system activity and sends a summary notification.".to_string(),
             confidence: 0.85,
+            category: crate::recommendation_policy::CATEGORY_UNKNOWN.to_string(),
+            business_score: 0.0,
         };
         if let Err(e) = db::insert_recommendation(&proposal) {
             eprintln!("⚠️ Failed to save recommendation analysis: {}", e);
@@ -3804,6 +6997,7 @@ fn run_analysis_internal() -> Vec<String> {
 
     patterns
         .into_iter()
+        .filter(|pattern| detector.should_recommend(pattern))
         .map(|p| format!("{} ({} occurrences)", p.description, p.occurrences))
         .collect()
 }
@@ -4713,6 +7907,22 @@ struct ArtifactEvidenceAssertion {
     evidence: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BusinessEvidenceAssertionSummary {
+    pub key: String,
+    pub expected: String,
+    pub actual: String,
+    pub passed: bool,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BusinessEvidenceEvaluation {
+    pub ok: bool,
+    pub detail: String,
+    pub assertions: Vec<BusinessEvidenceAssertionSummary>,
+}
+
 fn parse_pipe_fields_with_prefix(line: &str, prefix: &str) -> Option<HashMap<String, String>> {
     let trimmed = line.trim();
     if !trimmed
@@ -5345,6 +8555,28 @@ fn evaluate_business_evidence(
     (false, issues.join("; "))
 }
 
+pub(crate) fn evaluate_business_evidence_with_assertions(
+    plan: &crate::nl_automation::Plan,
+    logs: &[String],
+) -> BusinessEvidenceEvaluation {
+    let (ok, detail) = evaluate_business_evidence(plan, logs);
+    let assertions = detect_artifact_evidence_assertions(plan, logs)
+        .into_iter()
+        .map(|assertion| BusinessEvidenceAssertionSummary {
+            key: assertion.key.to_string(),
+            expected: assertion.expected,
+            actual: assertion.actual,
+            passed: assertion.passed,
+            evidence: assertion.evidence,
+        })
+        .collect();
+    BusinessEvidenceEvaluation {
+        ok,
+        detail,
+        assertions,
+    }
+}
+
 fn normalize_contract_token(input: &str) -> String {
     input
         .trim()
@@ -5889,6 +9121,72 @@ fn extract_summary(logs: &[String]) -> Option<String> {
         .find_map(|line| line.strip_prefix("Summary: ").map(|s| s.to_string()))
 }
 
+async fn handle_chat_feedback(Json(req): Json<ChatFeedbackRequest>) -> Json<ChatFeedbackResponse> {
+    let sentiment = req.sentiment.trim().to_ascii_lowercase();
+    if !matches!(sentiment.as_str(), "positive" | "negative") {
+        return Json(ChatFeedbackResponse {
+            ok: false,
+            request_memory_updated: false,
+            execution_memory_updated: false,
+            reuse_suppressed: false,
+        });
+    }
+
+    let memory_scope = chat_feedback_memory_scope(&req);
+    let memory_scope_ref = memory_scope.as_deref();
+    let request_memory_updated = db::record_request_memory_feedback_scoped(
+        memory_scope_ref,
+        &req.request_text,
+        &req.response_text,
+        &sentiment,
+    )
+    .unwrap_or(false);
+
+    let intent = request_memory_intent_for_feedback(memory_scope_ref, &req.request_text);
+    let command = req
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            intent
+                .as_ref()
+                .and_then(|value| value.get("command"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        });
+
+    let execution_memory_updated = if let (Some(command), Some(intent)) = (command, intent) {
+        if execution_memory_supported(&command) {
+            if let Some((params_key, _)) = execution_memory_params(&command, &intent) {
+                db::record_execution_memory_feedback_scoped(
+                    memory_scope_ref,
+                    &command,
+                    &params_key,
+                    &req.response_text,
+                    &sentiment,
+                )
+                .unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    Json(ChatFeedbackResponse {
+        ok: request_memory_updated || execution_memory_updated,
+        request_memory_updated,
+        execution_memory_updated,
+        reuse_suppressed: sentiment == "negative"
+            && (request_memory_updated || execution_memory_updated),
+    })
+}
+
 async fn handle_feedback(
     State(state): State<AppState>,
     Json(req): Json<FeedbackRequest>,
@@ -6094,7 +9392,17 @@ mod tests {
     use super::*;
     use crate::nl_automation::{IntentType, Plan, PlanStep, StepType};
     use serde_json::json;
+    use serial_test::serial;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn reset_memory_tables() {
+        crate::db::clear_request_memory_for_tests();
+        crate::db::clear_execution_memory_for_tests();
+        crate::db::clear_memory_admin_events_for_tests();
+        crate::db::clear_launch_ops_events_for_tests();
+        crate::db::clear_nl_runs_for_tests();
+    }
 
     fn test_plan(intent: IntentType) -> Plan {
         Plan {
@@ -6189,6 +9497,1615 @@ mod tests {
         ];
         let (ok, detail) = evaluate_business_evidence(&plan, &logs);
         assert!(ok, "expected ok but got {}", detail);
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_signature_cache_reuses_calendar_today_for_safe_paraphrase() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-cache-calendar-today-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.92
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 오늘 일정 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📅 오늘 일정이 없습니다."),
+            "intent_only",
+            "unit.test",
+            0.92,
+        )
+        .expect("seed request memory");
+
+        let cached =
+            load_cached_request_intent(None, &format!("{} 오늘 캘린더 알려줘", seed_prefix))
+                .expect("signature cache hit");
+        assert_eq!(cached.0["command"].as_str(), Some("calendar_today"));
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_signature_cache_keeps_time_scope_distinct() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-cache-calendar-week-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_week",
+            "params": {},
+            "confidence": 0.93
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 이번 주 일정 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📅 이번 주 일정이 없습니다."),
+            "intent_only",
+            "unit.test",
+            0.93,
+        )
+        .expect("seed request memory");
+
+        let cached = load_cached_request_intent(None, &format!("{} 오늘 일정 알려줘", seed_prefix));
+        assert!(cached.is_none(), "today request must not reuse week intent");
+    }
+
+    #[test]
+    fn request_memory_signature_cache_skips_parametric_commands() {
+        crate::db::init().ok();
+        let seed_prefix = format!("allvia-cache-build-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "build_workflow",
+            "params": {
+                "prompt": "회의록을 노션에 저장"
+            },
+            "confidence": 0.96
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 회의록 노션 워크플로우 만들어줘", seed_prefix),
+            Some(&intent),
+            Some("📝 워크플로우 제안을 생성했습니다."),
+            "intent_only",
+            "unit.test",
+            0.96,
+        )
+        .expect("seed request memory");
+
+        let cached = load_cached_request_intent(
+            None,
+            &format!("{} 리포트 슬랙 워크플로우 생성해줘", seed_prefix),
+        );
+        assert!(
+            cached.is_none(),
+            "parametric commands must stay exact-match only"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_response_cache_reuses_fresh_calendar_response_for_paraphrase() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-response-calendar-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 오늘 일정 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📅 오늘 일정이 없습니다."),
+            request_memory_response_mode("calendar_today"),
+            "unit.test",
+            0.95,
+        )
+        .expect("seed response cache");
+
+        let cached = load_cached_request_response(
+            None,
+            &format!("{} 오늘 캘린더 알려줘", seed_prefix),
+            "calendar_today",
+        );
+        assert_eq!(cached.as_deref(), Some("📅 오늘 일정이 없습니다."));
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_response_cache_bypasses_recent_equivalent_chat_repeat() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-response-repeat-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95,
+            "source": "deterministic"
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 오늘 일정 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📅 오늘 일정이 없습니다."),
+            request_memory_response_mode("calendar_today"),
+            "api.chat.deterministic",
+            0.95,
+        )
+        .expect("seed recent chat response");
+
+        let cached = load_cached_request_response(
+            None,
+            &format!("{} 오늘 캘린더 알려줘", seed_prefix),
+            "calendar_today",
+        );
+        assert!(
+            cached.is_none(),
+            "recent equivalent chat request should bypass response cache"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_response_cache_bypasses_when_user_requests_fresh_data() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-response-refresh-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 오늘 일정 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📅 오늘 일정이 없습니다."),
+            request_memory_response_mode("calendar_today"),
+            "unit.test",
+            0.95,
+        )
+        .expect("seed response cache");
+
+        let cached = load_cached_request_response(
+            None,
+            &format!("{} 지금 오늘 일정 새로고침해서 보여줘", seed_prefix),
+            "calendar_today",
+        );
+        assert!(
+            cached.is_none(),
+            "freshness request must bypass response cache"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_response_cache_respects_zero_ttl() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-response-ttl-zero-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "gmail_list",
+            "params": {},
+            "confidence": 0.95
+        });
+
+        crate::db::upsert_request_memory(
+            &format!("{} 최근 이메일 5개 보여줘", seed_prefix),
+            Some(&intent),
+            Some("📭 새 메일이 없습니다."),
+            request_memory_response_mode("gmail_list"),
+            "unit.test",
+            0.95,
+        )
+        .expect("seed response cache");
+
+        std::env::set_var("ALLVIA_RESPONSE_CACHE_TTL_GMAIL_LIST", "0");
+        let cached = load_cached_request_response(
+            None,
+            &format!("{} 최근 이메일 5개 알려줘", seed_prefix),
+            "gmail_list",
+        );
+        std::env::remove_var("ALLVIA_RESPONSE_CACHE_TTL_GMAIL_LIST");
+
+        assert!(cached.is_none(), "zero ttl must disable response reuse");
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_response_cache_reuses_help_local_exact_match() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!("allvia-help-cache-{}", uuid::Uuid::new_v4());
+        let response = "💡 바로 실행 가능한 명령".to_string();
+
+        persist_chat_response_memory(
+            None,
+            &request,
+            "help_local",
+            &response,
+            "api.chat.local",
+            1.0,
+        );
+
+        let cached = load_cached_request_response(None, &request, "help_local");
+        assert_eq!(cached.as_deref(), Some("💡 바로 실행 가능한 명령"));
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_negative_feedback_suppresses_response_reuse() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!("allvia-feedback-suppress-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95
+        });
+        let response = "📅 오늘 일정이 없습니다.";
+
+        crate::db::upsert_request_memory(
+            &request,
+            Some(&intent),
+            Some(response),
+            request_memory_response_mode("calendar_today"),
+            "unit.test",
+            0.95,
+        )
+        .expect("seed request memory");
+        crate::db::record_request_memory_feedback(&request, response, "negative")
+            .expect("negative feedback");
+
+        let cached = load_cached_request_response(None, &request, "calendar_today");
+        assert!(
+            cached.is_none(),
+            "negative feedback must suppress response reuse"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_suppressed_record_does_not_reuse_response() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!("allvia-suppress-request-{}", uuid::Uuid::new_v4());
+        let response = format!("📅 suppressed-request-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95
+        });
+        crate::db::upsert_request_memory(
+            &request,
+            Some(&intent),
+            Some(&response),
+            request_memory_response_mode("calendar_today"),
+            "unit.test",
+            0.95,
+        )
+        .expect("seed request memory");
+        crate::db::suppress_request_memory(&request, Some("ops suppress"))
+            .expect("suppress request memory");
+
+        let cached = load_cached_request_response(None, &request, "calendar_today");
+        assert!(
+            cached.is_none(),
+            "suppressed request memory must not be reused"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn request_memory_negative_feedback_suppresses_intent_reuse() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!("allvia-intent-suppress-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "calendar_today",
+            "params": {},
+            "confidence": 0.95
+        });
+        let response = "📅 오늘 일정이 없습니다.";
+
+        crate::db::upsert_request_memory(
+            &request,
+            Some(&intent),
+            Some(response),
+            "intent_only",
+            "unit.test",
+            0.95,
+        )
+        .expect("seed request memory");
+        crate::db::record_request_memory_feedback(&request, response, "negative")
+            .expect("negative feedback");
+
+        let cached = load_cached_request_intent(None, &request);
+        assert!(
+            cached.is_none(),
+            "negative feedback must suppress intent reuse"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_reuses_gmail_default_count_across_paraphrase() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-exec-gmail-{}", uuid::Uuid::new_v4());
+        let explicit_intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 5 },
+            "confidence": 0.95
+        });
+        let implicit_intent = json!({
+            "command": "gmail_list",
+            "params": {},
+            "confidence": 0.95
+        });
+        let response = format!("📧 execution-cache-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &format!("{} 최근 이메일 5개 보여줘", seed_prefix),
+            "gmail_list",
+            &explicit_intent,
+            &response,
+            "unit.test",
+        );
+
+        let cached = load_cached_execution_response(
+            None,
+            &format!("{} 최근 이메일 보여줘", seed_prefix),
+            "gmail_list",
+            &implicit_intent,
+        );
+        assert_eq!(cached.as_deref(), Some(response.as_str()));
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_bypasses_when_user_requests_fresh_data() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-exec-refresh-{}", uuid::Uuid::new_v4());
+        let intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 5 },
+            "confidence": 0.95
+        });
+        let response = format!("📧 execution-refresh-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &format!("{} 최근 이메일 5개 보여줘", seed_prefix),
+            "gmail_list",
+            &intent,
+            &response,
+            "unit.test",
+        );
+
+        let cached = load_cached_execution_response(
+            None,
+            &format!("{} 지금 최근 이메일 5개 새로고침", seed_prefix),
+            "gmail_list",
+            &intent,
+        );
+        assert!(
+            cached.is_none(),
+            "freshness request must bypass execution cache"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_bypasses_recent_chat_repeat() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!(
+            "allvia-exec-repeat-{} 최근 이메일 5개 보여줘",
+            uuid::Uuid::new_v4()
+        );
+        let intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 5 },
+            "confidence": 0.95
+        });
+        let response = format!("📧 execution-repeat-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &request,
+            "gmail_list",
+            &intent,
+            &response,
+            "api.chat.execution",
+        );
+
+        let cached = load_cached_execution_response(None, &request, "gmail_list", &intent);
+        assert!(
+            cached.is_none(),
+            "recent chat repeat should bypass execution cache"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_keeps_gmail_count_distinct() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let seed_prefix = format!("allvia-exec-gmail-count-{}", uuid::Uuid::new_v4());
+        let five_intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 5 },
+            "confidence": 0.95
+        });
+        let ten_intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 10 },
+            "confidence": 0.95
+        });
+        let response = format!("📧 execution-cache-five-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &format!("{} 최근 이메일 5개 보여줘", seed_prefix),
+            "gmail_list",
+            &five_intent,
+            &response,
+            "unit.test",
+        );
+
+        let cached = load_cached_execution_response(
+            None,
+            &format!("{} 최근 이메일 10개 보여줘", seed_prefix),
+            "gmail_list",
+            &ten_intent,
+        );
+        assert!(
+            cached.is_none(),
+            "different counts must not share execution cache"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_negative_feedback_suppresses_reuse() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!(
+            "allvia-exec-feedback-{} 최근 이메일 17개 보여줘",
+            uuid::Uuid::new_v4()
+        );
+        let intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 17 },
+            "confidence": 0.95
+        });
+        let response = format!("📧 execution-negative-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &request,
+            "gmail_list",
+            &intent,
+            &response,
+            "unit.test",
+        );
+        crate::db::record_execution_memory_feedback(
+            "gmail_list",
+            "count=17",
+            &response,
+            "negative",
+        )
+        .expect("execution negative feedback");
+        let found = crate::db::get_execution_memory("gmail_list", "count=17")
+            .expect("get execution memory")
+            .expect("execution memory row");
+        assert_eq!(found.negative_feedback_count, 1);
+
+        let cached = load_cached_execution_response(None, &request, "gmail_list", &intent);
+        assert!(
+            cached.is_none(),
+            "negative feedback must suppress execution reuse"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn execution_memory_suppressed_record_does_not_reuse_response() {
+        crate::db::init().ok();
+        reset_memory_tables();
+        let request = format!(
+            "allvia-suppress-execution-{} 최근 이메일 5개 보여줘",
+            uuid::Uuid::new_v4()
+        );
+        let intent = json!({
+            "command": "gmail_list",
+            "params": { "count": 5 },
+            "confidence": 0.95
+        });
+        let response = format!("📧 suppressed-execution-{}", uuid::Uuid::new_v4());
+
+        persist_execution_memory(
+            None,
+            &request,
+            "gmail_list",
+            &intent,
+            &response,
+            "unit.test",
+        );
+        crate::db::suppress_execution_memory("gmail_list", "count=5", Some("ops suppress"))
+            .expect("suppress execution memory");
+
+        let cached = load_cached_execution_response(None, &request, "gmail_list", &intent);
+        assert!(
+            cached.is_none(),
+            "suppressed execution memory must not be reused"
+        );
+    }
+
+    #[test]
+    fn recommendation_visibility_keeps_manual_pending_and_caps_auto_pending() {
+        let manual = crate::db::Recommendation {
+            id: 1,
+            status: "pending".to_string(),
+            title: "Manual Workflow".to_string(),
+            summary: "manual".to_string(),
+            trigger: "manual".to_string(),
+            actions: vec![],
+            n8n_prompt: "manual".to_string(),
+            confidence: 0.6,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![],
+            pattern_id: None,
+            last_error: None,
+            snoozed_until: None,
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.1,
+            feedback_status: None,
+            feedback_note: None,
+            feedback_count: 0,
+            last_feedback_at: None,
+        };
+        let auto = (0..6)
+            .map(|idx| crate::db::Recommendation {
+                id: idx + 10,
+                status: "pending".to_string(),
+                title: format!("Auto Workflow {}", idx),
+                summary: "auto".to_string(),
+                trigger: format!("pattern {}", idx),
+                actions: vec![],
+                n8n_prompt: "auto".to_string(),
+                confidence: 0.84 + (idx as f64 * 0.01),
+                workflow_id: None,
+                workflow_json: None,
+                evidence: vec![
+                    format!("Frequency: Found {} occurrences", 6 + idx),
+                    "Span: 4 distinct day(s)".to_string(),
+                    "policy.reason=strong_work_signals=slack,calendar".to_string(),
+                    "policy.reason=pattern.context_score=0.82".to_string(),
+                    "policy.reason=pattern.work_context=strong".to_string(),
+                ],
+                pattern_id: Some(format!("pattern-{}", idx)),
+                last_error: None,
+                snoozed_until: None,
+                category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+                business_score: 0.75 + (idx as f64 * 0.02),
+                feedback_status: None,
+                feedback_note: None,
+                feedback_count: 0,
+                last_feedback_at: None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut input = vec![manual];
+        input.extend(auto);
+        let visible = limit_visible_recommendations(input, Some("work"), &[]);
+
+        assert_eq!(visible.len(), 6);
+        assert_eq!(visible[0].title, "Manual Workflow");
+        assert!(visible.iter().any(|rec| rec.title == "Auto Workflow 5"));
+        assert!(!visible.iter().any(|rec| rec.title == "Auto Workflow 0"));
+    }
+
+    #[test]
+    fn recommendation_visibility_prefers_aligned_delivery_channel() {
+        let history = vec![
+            crate::db::Recommendation {
+                id: 1,
+                status: "approved".to_string(),
+                title: "Notion Notes".to_string(),
+                summary: "Save notes to Notion".to_string(),
+                trigger: "meeting".to_string(),
+                actions: vec![],
+                n8n_prompt: "Create a workflow that writes meeting notes to Notion.".to_string(),
+                confidence: 0.8,
+                workflow_id: Some("wf-1".to_string()),
+                workflow_json: None,
+                evidence: vec![],
+                pattern_id: Some("hist-notion".to_string()),
+                last_error: None,
+                snoozed_until: None,
+                category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+                business_score: 0.8,
+                feedback_status: None,
+                feedback_note: None,
+                feedback_count: 0,
+                last_feedback_at: None,
+            },
+            crate::db::Recommendation {
+                id: 2,
+                status: "rejected".to_string(),
+                title: "Telegram Digest".to_string(),
+                summary: "Send digest to Telegram".to_string(),
+                trigger: "digest".to_string(),
+                actions: vec![],
+                n8n_prompt: "Create a workflow that sends updates to Telegram.".to_string(),
+                confidence: 0.8,
+                workflow_id: None,
+                workflow_json: None,
+                evidence: vec![],
+                pattern_id: Some("hist-telegram".to_string()),
+                last_error: None,
+                snoozed_until: None,
+                category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+                business_score: 0.8,
+                feedback_status: None,
+                feedback_note: None,
+                feedback_count: 0,
+                last_feedback_at: None,
+            },
+        ];
+        let pending = vec![
+            crate::db::Recommendation {
+                id: 10,
+                status: "pending".to_string(),
+                title: "Telegram Status Digest".to_string(),
+                summary: "Send digest to Telegram".to_string(),
+                trigger: "digest".to_string(),
+                actions: vec![],
+                n8n_prompt: "Create a workflow that sends a work digest to Telegram.".to_string(),
+                confidence: 0.91,
+                workflow_id: None,
+                workflow_json: None,
+                evidence: vec![
+                    "Frequency: Found 6 occurrences".to_string(),
+                    "Span: 4 distinct day(s)".to_string(),
+                    "policy.reason=strong_work_signals=slack,gmail".to_string(),
+                    "policy.reason=pattern.context_score=0.80".to_string(),
+                    "policy.reason=pattern.work_context=strong".to_string(),
+                ],
+                pattern_id: Some("pending-telegram".to_string()),
+                last_error: None,
+                snoozed_until: None,
+                category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+                business_score: 0.90,
+                feedback_status: None,
+                feedback_note: None,
+                feedback_count: 0,
+                last_feedback_at: None,
+            },
+            crate::db::Recommendation {
+                id: 11,
+                status: "pending".to_string(),
+                title: "Notion Meeting Brief".to_string(),
+                summary: "Save briefing to Notion".to_string(),
+                trigger: "meeting".to_string(),
+                actions: vec![],
+                n8n_prompt: "Create a workflow that stores meeting briefs in Notion.".to_string(),
+                confidence: 0.88,
+                workflow_id: None,
+                workflow_json: None,
+                evidence: vec![
+                    "Frequency: Found 5 occurrences".to_string(),
+                    "Span: 4 distinct day(s)".to_string(),
+                    "policy.reason=strong_work_signals=notion,calendar".to_string(),
+                    "policy.reason=pattern.context_score=0.81".to_string(),
+                    "policy.reason=pattern.work_context=strong".to_string(),
+                ],
+                pattern_id: Some("pending-notion".to_string()),
+                last_error: None,
+                snoozed_until: None,
+                category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+                business_score: 0.86,
+                feedback_status: None,
+                feedback_note: None,
+                feedback_count: 0,
+                last_feedback_at: None,
+            },
+        ];
+
+        let visible = limit_visible_recommendations(pending, Some("work"), &history);
+
+        assert_eq!(visible[0].title, "Notion Meeting Brief");
+        assert_eq!(visible[1].title, "Telegram Status Digest");
+    }
+
+    #[test]
+    fn recommendation_visibility_prefers_approval_ready_auto_items() {
+        let ready = crate::db::Recommendation {
+            id: 10,
+            status: "pending".to_string(),
+            title: "Ready Workflow".to_string(),
+            summary: "Detected 6 repeats across 4 distinct day(s).".to_string(),
+            trigger: "ready".to_string(),
+            actions: vec![],
+            n8n_prompt: "Create a workflow that uses Slack and Calendar.".to_string(),
+            confidence: 0.90,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![
+                "Frequency: Found 6 occurrences".to_string(),
+                "Span: 4 distinct day(s)".to_string(),
+                "policy.reason=strong_work_signals=slack,calendar".to_string(),
+                "policy.reason=pattern.context_score=0.82".to_string(),
+                "policy.reason=pattern.work_context=strong".to_string(),
+            ],
+            pattern_id: Some("ready-pattern".to_string()),
+            last_error: None,
+            snoozed_until: None,
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.82,
+            feedback_status: None,
+            feedback_note: None,
+            feedback_count: 0,
+            last_feedback_at: None,
+        };
+        let weak = crate::db::Recommendation {
+            id: 11,
+            status: "pending".to_string(),
+            title: "Weak Workflow".to_string(),
+            summary: "Detected 3 repeats across 1 distinct day(s).".to_string(),
+            trigger: "weak".to_string(),
+            actions: vec![],
+            n8n_prompt: "Create a workflow that uses VSCode.".to_string(),
+            confidence: 0.91,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![
+                "Frequency: Found 3 occurrences".to_string(),
+                "Span: 1 distinct day(s)".to_string(),
+                "policy.reason=support_work_signals=vscode,terminal".to_string(),
+            ],
+            pattern_id: Some("weak-pattern".to_string()),
+            last_error: None,
+            snoozed_until: None,
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.90,
+            feedback_status: None,
+            feedback_note: None,
+            feedback_count: 0,
+            last_feedback_at: None,
+        };
+
+        let visible = limit_visible_recommendations(vec![weak, ready], Some("work"), &[]);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].title, "Ready Workflow");
+    }
+
+    #[test]
+    fn recommendation_visibility_hides_non_ready_auto_pending_items() {
+        let weak = crate::db::Recommendation {
+            id: 11,
+            status: "pending".to_string(),
+            title: "Weak Workflow".to_string(),
+            summary: "Detected 3 repeats across 1 distinct day(s).".to_string(),
+            trigger: "weak".to_string(),
+            actions: vec![],
+            n8n_prompt: "Create a workflow that uses VSCode.".to_string(),
+            confidence: 0.91,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![
+                "Frequency: Found 3 occurrences".to_string(),
+                "Span: 1 distinct day(s)".to_string(),
+                "policy.reason=support_work_signals=vscode,terminal".to_string(),
+            ],
+            pattern_id: Some("weak-pattern".to_string()),
+            last_error: None,
+            snoozed_until: None,
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.90,
+            feedback_status: None,
+            feedback_note: None,
+            feedback_count: 0,
+            last_feedback_at: None,
+        };
+
+        let visible = limit_visible_recommendations(vec![weak], Some("work"), &[]);
+
+        assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn recommendation_effective_status_maps_snoozed_pending_to_later() {
+        let snoozed = crate::db::Recommendation {
+            id: 1,
+            status: "pending".to_string(),
+            title: "Snoozed Workflow".to_string(),
+            summary: "manual".to_string(),
+            trigger: "manual".to_string(),
+            actions: vec![],
+            n8n_prompt: "manual".to_string(),
+            confidence: 0.6,
+            workflow_id: None,
+            workflow_json: None,
+            evidence: vec![],
+            pattern_id: None,
+            last_error: None,
+            snoozed_until: Some((chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.1,
+            feedback_status: None,
+            feedback_note: None,
+            feedback_count: 0,
+            last_feedback_at: None,
+        };
+
+        assert_eq!(recommendation_effective_status(&snoozed), "later");
+    }
+
+    #[test]
+    fn recommendation_feedback_classifier_is_conservative() {
+        assert_eq!(
+            classify_recommendation_feedback("텔레그램 말고 노션으로 바꿔줘"),
+            "refine"
+        );
+        assert_eq!(
+            classify_recommendation_feedback("이건 필요없고 중복이라 싫어"),
+            "negative"
+        );
+        assert_eq!(
+            classify_recommendation_feedback("좋아요. 이 방향이 맞아요"),
+            "positive"
+        );
+    }
+
+    #[test]
+    fn parse_u32_param_uses_bounds_and_string_values() {
+        assert_eq!(parse_u32_param(Some(&json!("12")), 5, 1, 20), 12);
+        assert_eq!(parse_u32_param(Some(&json!(99)), 5, 1, 20), 20);
+        assert_eq!(parse_u32_param(Some(&json!(0)), 5, 1, 20), 1);
+        assert_eq!(parse_u32_param(None, 5, 1, 20), 5);
+    }
+
+    #[test]
+    fn feedback_tie_suppresses_response_reuse() {
+        assert!(feedback_allows_response_reuse(1, 0));
+        assert!(feedback_allows_response_reuse(2, 1));
+        assert!(!feedback_allows_response_reuse(1, 1));
+        assert!(!feedback_allows_response_reuse(0, 1));
+    }
+
+    #[test]
+    fn request_prefers_fresh_data_is_precise() {
+        assert!(request_prefers_fresh_data(
+            "지금 최근 이메일 5개 새로고침",
+            "gmail_list"
+        ));
+        assert!(!request_prefers_fresh_data(
+            "새로운 이메일 5개 보여줘",
+            "gmail_list"
+        ));
+        assert!(!request_prefers_fresh_data(
+            "최근 이메일 5개 보여줘",
+            "build_workflow"
+        ));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_auto_routes_ai_digest_on_web_without_llm() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|| async {
+                axum::Json(json!({
+                    "status": "ok",
+                    "notion_url": "https://www.notion.so/test-ai-digest",
+                    "top_headlines_text": "1. 헤드라인 A\n2. 헤드라인 B"
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        std::env::remove_var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS");
+        std::env::set_var(
+            "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+            format!("http://{addr}/"),
+        );
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+        let request = ChatRequest {
+            message: "AI 뉴스 5개 요약해서 노션에 정리해줘".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("web-test".to_string()),
+            mentioned: None,
+        };
+
+        let Json(response) = handle_chat(State(state), Json(request)).await;
+
+        assert_eq!(response.command.as_deref(), Some("ai_digest_program"));
+        assert_eq!(
+            response
+                .route_meta
+                .as_ref()
+                .map(|meta| meta.route_kind.as_str()),
+            Some("ai_digest_auto")
+        );
+        assert_eq!(
+            response.route_meta.as_ref().map(|meta| meta.ai_digest_used),
+            Some(true)
+        );
+        assert!(response
+            .response
+            .contains("노션 링크: https://www.notion.so/test-ai-digest"));
+        assert!(response.response.contains("헤드라인 A"));
+
+        std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_recomputes_local_prefix_commands_after_strip() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+        let request = ChatRequest {
+            message: "/local help".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("prefix-user".to_string()),
+            mentioned: None,
+        };
+
+        let Json(response) = handle_chat(State(state), Json(request)).await;
+
+        assert_eq!(response.command.as_deref(), Some("help_local"));
+        assert!(response
+            .response
+            .contains("뉴스 5개 요약해서 노션에 정리해줘"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn approve_recommendation_blocks_auto_items_without_readiness() {
+        crate::db::init().ok();
+        crate::db::clear_recommendations_for_tests();
+        crate::db::clear_recommendation_review_events_for_tests();
+
+        let proposal = crate::recommendation::AutomationProposal {
+            title: "Weak Approval Candidate".to_string(),
+            summary: "Detected 3 repeats across 1 distinct day(s).".to_string(),
+            trigger: "weak-approval".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.74,
+            n8n_prompt: "Create a workflow for weak approval candidate.".to_string(),
+            evidence: vec![
+                "Frequency: Found 3 occurrences".to_string(),
+                "Span: 1 distinct day(s)".to_string(),
+                "policy.reason=support_work_signals=vscode,terminal".to_string(),
+            ],
+            pattern_id: Some("weak-approval-pattern".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.61,
+        };
+        crate::db::insert_recommendation(&proposal).expect("insert recommendation");
+        let rec_id = crate::db::get_recommendations_with_filter(Some("pending"))
+            .expect("list recs")
+            .into_iter()
+            .find(|rec| rec.title == "Weak Approval Candidate")
+            .map(|rec| rec.id)
+            .expect("recommendation id");
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+
+        let result = approve_recommendation(
+            State(state),
+            axum::extract::Path(rec_id),
+            Some(Json(RecommendationReviewActionRequest {
+                actor: Some("test_dashboard".to_string()),
+                note: Some("manual approve attempt".to_string()),
+            })),
+        )
+        .await;
+
+        let (status, Json(body)) = result.expect_err("approval should be blocked");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body["details"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("needs stronger business evidence"));
+
+        let events = crate::db::list_recommendation_review_events(10).expect("review events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, "approve");
+        assert!(!events[0].ok);
+        assert_eq!(events[0].actor.as_deref(), Some("test_dashboard"));
+        assert_eq!(events[0].note.as_deref(), Some("manual approve attempt"));
+        assert_eq!(events[0].status_after.as_deref(), Some("pending"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn later_recommendation_rejects_approved_items_and_logs_event() {
+        crate::db::init().ok();
+        crate::db::clear_recommendations_for_tests();
+        crate::db::clear_recommendation_review_events_for_tests();
+
+        let proposal = crate::recommendation::AutomationProposal {
+            title: "Approved Later Candidate".to_string(),
+            summary: "Detected 5 repeats across 4 distinct day(s).".to_string(),
+            trigger: "approved-later".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.91,
+            n8n_prompt: "Create a workflow.".to_string(),
+            evidence: vec![
+                "Frequency: Found 5 occurrences".to_string(),
+                "Span: 4 distinct day(s)".to_string(),
+                "policy.reason=strong_work_signals=slack,calendar".to_string(),
+                "policy.reason=pattern.context_score=0.86".to_string(),
+                "policy.reason=pattern.work_context=strong".to_string(),
+            ],
+            pattern_id: Some("approved-later".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.83,
+        };
+        crate::db::insert_recommendation(&proposal).expect("insert recommendation");
+        let rec_id = crate::db::get_recommendations_with_filter(Some("pending"))
+            .expect("list recommendations")
+            .into_iter()
+            .find(|rec| rec.title == "Approved Later Candidate")
+            .map(|rec| rec.id)
+            .expect("recommendation id");
+        crate::db::update_recommendation_review_status(rec_id, "approved")
+            .expect("approve recommendation");
+
+        let status = later_recommendation(
+            axum::extract::Path(rec_id),
+            Some(Json(RecommendationReviewActionRequest {
+                actor: Some("test_workflows".to_string()),
+                note: Some("should not snooze approved item".to_string()),
+            })),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        let rec = crate::db::get_recommendation(rec_id)
+            .expect("get recommendation")
+            .expect("recommendation");
+        assert_eq!(rec.status, "approved");
+        assert!(rec.snoozed_until.is_none());
+
+        let events = crate::db::list_recommendation_review_events(10).expect("review events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, "later");
+        assert!(!events[0].ok);
+        assert_eq!(events[0].status_after.as_deref(), Some("approved"));
+        assert_eq!(events[0].actor.as_deref(), Some("test_workflows"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn recommendation_metrics_hide_non_ready_auto_pending_items() {
+        crate::db::init().ok();
+        crate::db::clear_recommendations_for_tests();
+
+        crate::db::insert_recommendation(&crate::recommendation::AutomationProposal {
+            title: "Ready Metric Candidate".to_string(),
+            summary: "Detected 6 repeats across 4 distinct day(s).".to_string(),
+            trigger: "ready-metric".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.88,
+            n8n_prompt: "Create a workflow.".to_string(),
+            evidence: vec![
+                "Frequency: Found 6 occurrences".to_string(),
+                "Span: 4 distinct day(s)".to_string(),
+                "policy.reason=strong_work_signals=slack,calendar".to_string(),
+                "policy.reason=pattern.context_score=0.82".to_string(),
+                "policy.reason=pattern.work_context=strong".to_string(),
+            ],
+            pattern_id: Some("ready-metric".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.82,
+        })
+        .expect("insert ready recommendation");
+        crate::db::insert_recommendation(&crate::recommendation::AutomationProposal {
+            title: "Weak Metric Candidate".to_string(),
+            summary: "Detected 3 repeats across 1 distinct day(s).".to_string(),
+            trigger: "weak-metric".to_string(),
+            actions: vec!["n8n Workflow".to_string()],
+            confidence: 0.74,
+            n8n_prompt: "Create a workflow.".to_string(),
+            evidence: vec![
+                "Frequency: Found 3 occurrences".to_string(),
+                "Span: 1 distinct day(s)".to_string(),
+                "policy.reason=support_work_signals=vscode,terminal".to_string(),
+            ],
+            pattern_id: Some("weak-metric".to_string()),
+            category: crate::recommendation_policy::CATEGORY_WORK.to_string(),
+            business_score: 0.61,
+        })
+        .expect("insert weak recommendation");
+
+        let Json(metrics) = get_recommendation_metrics().await;
+
+        assert_eq!(metrics.pending, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_uses_deterministic_workflow_intent_without_llm() {
+        crate::db::init().ok();
+        crate::db::clear_recommendations_for_tests();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+        let request = ChatRequest {
+            message: "노션에 회의록 정리하는 워크플로우 만들어줘".to_string(),
+            channel: None,
+            chat_type: None,
+            sender: None,
+            mentioned: None,
+        };
+
+        let Json(response) = handle_chat(State(state), Json(request)).await;
+
+        assert_eq!(response.command.as_deref(), Some("build_workflow"));
+        assert_eq!(
+            response
+                .route_meta
+                .as_ref()
+                .map(|meta| meta.route_kind.as_str()),
+            Some("deterministic")
+        );
+        assert_eq!(
+            response
+                .route_meta
+                .as_ref()
+                .map(|meta| meta.deterministic_used),
+            Some(true)
+        );
+        assert!(response.response.contains("워크플로우 제안을"));
+        let stored = crate::db::get_request_memory("노션에 회의록 정리하는 워크플로우 만들어줘")
+            .expect("request memory lookup")
+            .expect("request memory row");
+        assert_eq!(stored.source, "api.chat.deterministic");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_scopes_local_memory_by_sender() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+
+        let request_alice = ChatRequest {
+            message: "도움말".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("alice".to_string()),
+            mentioned: None,
+        };
+        let request_bob = ChatRequest {
+            message: "도움말".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("bob".to_string()),
+            mentioned: None,
+        };
+
+        let Json(response_alice) = handle_chat(State(state.clone()), Json(request_alice)).await;
+        let Json(response_bob) = handle_chat(State(state), Json(request_bob)).await;
+
+        assert_eq!(response_alice.command.as_deref(), Some("help_local"));
+        assert_eq!(response_bob.command.as_deref(), Some("help_local"));
+
+        let alice = crate::db::get_request_memory_scoped(
+            Some("channel_web__type_direct__sender_alice"),
+            "도움말",
+        )
+        .expect("alice scoped lookup")
+        .expect("alice scoped row");
+        let bob = crate::db::get_request_memory_scoped(
+            Some("channel_web__type_direct__sender_bob"),
+            "도움말",
+        )
+        .expect("bob scoped lookup")
+        .expect("bob scoped row");
+
+        assert_eq!(alice.memory_scope, "channel_web_type_direct_sender_alice");
+        assert_eq!(bob.memory_scope, "channel_web_type_direct_sender_bob");
+        assert!(crate::db::get_request_memory("도움말")
+            .expect("global lookup")
+            .is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_records_launch_ops_for_local_cache_hit() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+        let request = ChatRequest {
+            message: "도움말".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("launch-ops-user".to_string()),
+            mentioned: None,
+        };
+
+        let Json(first) = handle_chat(State(state.clone()), Json(request.clone())).await;
+        let Json(second) = handle_chat(State(state), Json(request)).await;
+
+        assert_eq!(first.command.as_deref(), Some("help_local"));
+        assert_eq!(second.command.as_deref(), Some("help_local"));
+
+        let events = crate::db::list_launch_ops_events(4).expect("launch ops events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].route_kind, "request_memory");
+        assert!(events[0].request_memory_hit);
+        assert!(events[0].local_only);
+        assert_eq!(events[1].route_kind, "local_command");
+        assert_eq!(
+            second
+                .route_meta
+                .as_ref()
+                .map(|meta| meta.route_kind.as_str()),
+            Some("request_memory")
+        );
+        assert_eq!(
+            second
+                .route_meta
+                .as_ref()
+                .map(|meta| meta.request_memory_hit),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn memory_records_handler_returns_recent_admin_events() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        crate::db::upsert_request_memory(
+            "오늘 일정 보여줘",
+            Some(&serde_json::json!({
+                "command": "calendar_today",
+                "params": {},
+                "confidence": 0.95
+            })),
+            Some("📅 일정 2건"),
+            "ttl_response_signature",
+            "unit.test",
+            0.95,
+        )
+        .expect("seed request memory");
+
+        let (status, Json(response)) =
+            suppress_request_memory_handler(Json(RequestMemoryAdminActionRequest {
+                request_text: "오늘 일정 보여줘".to_string(),
+                memory_scope: None,
+                reason: Some("launch cache issue".to_string()),
+                actor: Some("settings_test".to_string()),
+            }))
+            .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(response.ok);
+
+        let Json(records) = list_memory_records_handler(Query(MemoryRecordsQuery {
+            limit: Some(10),
+            include_suppressed: Some(true),
+        }))
+        .await;
+
+        assert!(!records.recent_admin_events.is_empty());
+        let event = &records.recent_admin_events[0];
+        assert_eq!(event.kind, "request_memory");
+        assert_eq!(event.action, "suppress");
+        assert_eq!(event.actor.as_deref(), Some("settings_test"));
+        assert_eq!(event.reason.as_deref(), Some("launch cache issue"));
+        assert!(event.ok);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn handle_chat_records_release_nl_run_for_chat_request_but_skips_local_help_noise() {
+        crate::db::init().ok();
+        crate::db::clear_recommendations_for_tests();
+        reset_memory_tables();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+
+        let help_request = ChatRequest {
+            message: "도움말".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("nl-run-help".to_string()),
+            mentioned: None,
+        };
+        let workflow_request = ChatRequest {
+            message: "노션에 회의록 정리하는 워크플로우 만들어줘".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("nl-run-workflow".to_string()),
+            mentioned: None,
+        };
+
+        let _ = handle_chat(State(state.clone()), Json(help_request)).await;
+        let Json(response) = handle_chat(State(state), Json(workflow_request)).await;
+
+        assert_eq!(response.command.as_deref(), Some("build_workflow"));
+
+        let runs = crate::db::list_nl_runs(10).expect("list nl runs");
+        assert_eq!(
+            runs.len(),
+            1,
+            "local help should not create a release nl_run"
+        );
+        assert_eq!(runs[0].intent, "build_workflow");
+        assert_eq!(runs[0].status, "approval_required");
+        assert!(runs[0].prompt.contains("워크플로우 만들어줘"));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_launch_ops_handler_reports_recent_metrics() {
+        crate::db::init().ok();
+        reset_memory_tables();
+
+        let state = AppState {
+            llm_client: None,
+            current_goal: Arc::new(Mutex::new(None)),
+        };
+        let help_request = ChatRequest {
+            message: "도움말".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("launch-ops-metrics".to_string()),
+            mentioned: None,
+        };
+        let digest_request = ChatRequest {
+            message: "AI 뉴스 5개 요약해서 노션에 정리해줘".to_string(),
+            channel: Some("web".to_string()),
+            chat_type: Some("direct".to_string()),
+            sender: Some("launch-ops-metrics".to_string()),
+            mentioned: None,
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|| async {
+                axum::Json(json!({
+                    "status": "ok",
+                    "notion_url": "https://www.notion.so/test-launch-ops",
+                    "top_headlines_text": "1. 헤드라인 A"
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        std::env::remove_var("ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS");
+        std::env::set_var(
+            "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+            format!("http://{addr}/"),
+        );
+
+        let _ = handle_chat(State(state.clone()), Json(help_request.clone())).await;
+        let _ = handle_chat(State(state.clone()), Json(help_request)).await;
+        let _ = handle_chat(State(state), Json(digest_request)).await;
+
+        let Json(payload) = get_launch_ops_handler(Query(LaunchOpsQuery { limit: Some(50) })).await;
+
+        assert_eq!(payload.chat_metrics.total_requests, 3);
+        assert_eq!(payload.chat_metrics.request_memory_hits, 1);
+        assert_eq!(payload.chat_metrics.ai_digest_auto_routes, 1);
+        assert_eq!(payload.recommendation_metrics.pending >= 0, true);
+        assert_eq!(
+            payload.recommendation_review_metrics.total_events >= 0,
+            true
+        );
+        assert_eq!(payload.recent_events[0].route_kind, "ai_digest_auto");
+
+        std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn http_e2e_handlers_run_and_load_latest_report() {
+        let workdir = tempfile::tempdir().expect("temp workdir");
+        let workdir_str = workdir.path().to_string_lossy().to_string();
+        std::env::set_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE", "1");
+
+        let Json(run_report) = run_http_e2e_handler(Json(HttpE2ERequest {
+            workdir: Some(workdir_str.clone()),
+        }))
+        .await
+        .expect("run http e2e");
+        assert!(run_report.ok);
+        assert_eq!(run_report.passed, run_report.total);
+
+        let Json(latest) = get_latest_http_e2e_handler(Query(HttpE2ERequest {
+            workdir: Some(workdir_str),
+        }))
+        .await
+        .expect("latest http e2e");
+        let latest = latest.expect("http e2e report");
+        assert_eq!(latest.passed, run_report.passed);
+        assert_eq!(latest.total, run_report.total);
+
+        std::env::remove_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn run_release_readiness_handler_rejects_client_baseline_override_by_default() {
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+        let result = run_release_readiness_handler(Json(ReleaseReadinessRequest {
+            workdir: None,
+            config_path: None,
+            candidate_limit: None,
+            snapshot_output_path: None,
+            save_baseline: Some(true),
+        }))
+        .await;
+        assert!(matches!(result, Err(StatusCode::BAD_REQUEST)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn set_release_baseline_handler_rejects_override_payload_by_default() {
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+        let result = set_release_baseline_handler(Json(release_gate::ReleaseBaselineRequest {
+            workdir: Some("/tmp/override".to_string()),
+            max_files: Some(10),
+            consistency: None,
+            semantic: None,
+            performance: None,
+            quality: None,
+            perf_regression_pct: None,
+            quality_drop: None,
+            launch_error_rate_pct: None,
+            launch_low_confidence_rate_pct: None,
+            launch_cache_hit_rate_drop_pct: None,
+            recommendation_approval_rate_min: None,
+            launch_eval_config_path: None,
+            launch_eval_report_path: None,
+            refresh_launch_eval_candidates: Some(false),
+            launch_eval_candidate_limit: Some(1),
+            launch_eval_snapshot_output_path: Some("/tmp/override.json".to_string()),
+        }))
+        .await;
+        assert!(matches!(result, Err(StatusCode::BAD_REQUEST)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn run_release_readiness_handler_rejects_client_path_overrides_by_default() {
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+        let result = run_release_readiness_handler(Json(ReleaseReadinessRequest {
+            workdir: None,
+            config_path: Some("/tmp/custom-launch-eval.yaml".to_string()),
+            candidate_limit: None,
+            snapshot_output_path: Some("/tmp/custom-snapshot.yaml".to_string()),
+            save_baseline: Some(false),
+        }))
+        .await;
+        assert!(matches!(result, Err(StatusCode::BAD_REQUEST)));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn launch_eval_snapshot_handlers_reject_output_path_override_by_default() {
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+
+        let info_result =
+            get_launch_eval_candidate_snapshot_info_handler(Query(LaunchEvalSnapshotInfoQuery {
+                output_path: Some("/tmp/custom-launch-eval.generated.yaml".to_string()),
+                workdir: None,
+                provenance: Some("real".to_string()),
+            }))
+            .await;
+        assert!(matches!(info_result, Err(StatusCode::BAD_REQUEST)));
+
+        let write_result =
+            write_launch_eval_candidate_snapshot_handler(Json(LaunchEvalSnapshotRequest {
+                limit: Some(5),
+                output_path: Some("/tmp/custom-launch-eval.generated.yaml".to_string()),
+                workdir: None,
+                provenance: Some("real".to_string()),
+            }))
+            .await;
+        assert!(matches!(write_result, Err(StatusCode::BAD_REQUEST)));
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_operational_workdir_ignores_client_override_by_default() {
+        std::env::remove_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE");
+        let resolved = resolve_operational_workdir(Some("/tmp/should-not-be-used"));
+        assert_eq!(resolved, default_server_workdir());
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_operational_workdir_allows_override_with_env_flag() {
+        std::env::set_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE", "1");
+        let resolved = resolve_operational_workdir(Some("/tmp/allvia-override"));
+        assert_eq!(resolved, PathBuf::from("/tmp/allvia-override"));
+        std::env::remove_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_operational_file_override_requires_explicit_env_flag() {
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+        std::env::remove_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE");
+        assert!(resolve_operational_file_override(Some("/tmp/blocked")).is_none());
+
+        std::env::set_var("ALLVIA_API_ALLOW_PATH_OVERRIDE", "1");
+        assert_eq!(
+            resolve_operational_file_override(Some("/tmp/allowed")),
+            Some(PathBuf::from("/tmp/allowed"))
+        );
+        std::env::remove_var("ALLVIA_API_ALLOW_PATH_OVERRIDE");
+    }
+
+    #[test]
+    fn default_release_baseline_request_uses_fixed_server_defaults() {
+        let request = default_release_baseline_request();
+        assert_eq!(request.refresh_launch_eval_candidates, Some(true));
+        assert_eq!(request.launch_eval_candidate_limit, Some(20));
+        assert!(request.workdir.is_none());
+        assert!(request.launch_eval_config_path.is_none());
+        assert!(request.launch_eval_snapshot_output_path.is_none());
     }
 
     #[test]

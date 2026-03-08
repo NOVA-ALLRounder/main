@@ -35,6 +35,8 @@ struct User {
 #[derive(Serialize, Deserialize, Debug)]
 struct Chat {
     id: i64,
+    #[serde(rename = "type")]
+    kind: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -90,25 +92,40 @@ impl TelegramBot {
             .unwrap_or(240)
     }
 
+    fn telegram_sender_key(user: Option<&User>, chat_id: i64) -> String {
+        match user {
+            Some(user) => format!("telegram_user_{}_chat_{}", user.id, chat_id),
+            None => format!("telegram_chat_{}", chat_id),
+        }
+    }
+
+    fn build_chat_request(
+        message: &str,
+        chat_type: Option<&str>,
+        sender_key: &str,
+    ) -> crate::api_server::ChatRequest {
+        crate::api_server::ChatRequest {
+            message: message.to_string(),
+            channel: Some("telegram".to_string()),
+            chat_type: chat_type.map(str::to_string),
+            sender: Some(sender_key.to_string()),
+            mentioned: None,
+        }
+    }
+
+    fn chat_response_requires_goal_fallback(response: &crate::api_server::ChatResponse) -> bool {
+        response.command.is_none()
+            && (response
+                .response
+                .starts_with("🤔 요청을 정확히 해석하지 못했어요.")
+                || response
+                    .response
+                    .starts_with("❓ 무슨 말인지 잘 모르겠어요."))
+    }
+
     fn infer_n8n_digest_request(message: &str) -> Option<String> {
-        if let Some(explicit) = crate::ai_digest::extract_explicit_n8n_request(message) {
-            return Some(explicit);
-        }
-        if !Self::env_truthy_default("STEER_TELEGRAM_AUTO_ROUTE_AI_DIGEST", true) {
-            return None;
-        }
-        if !crate::ai_digest::looks_like_ai_digest_request(message) {
-            return None;
-        }
-        if crate::ai_digest::resolve_program_webhook_url().is_err() {
-            return None;
-        }
-        let cleaned = crate::ai_digest::strip_local_execution_prefix(message);
-        if cleaned.trim().is_empty() {
-            Some(crate::ai_digest::default_request_text().to_string())
-        } else {
-            Some(cleaned)
-        }
+        crate::ai_digest::infer_program_route(message, Some("telegram"))
+            .map(|route| route.request_text)
     }
 
     async fn delete_webhook(&self, drop_pending_updates: bool) -> Result<()> {
@@ -227,17 +244,15 @@ impl TelegramBot {
                                     info!("📩 Received command: '{}'", text);
                                     let bot_clone = self.clone();
                                     let chat_id = msg.chat.id;
+                                    let chat_type = msg.chat.kind.clone();
+                                    let sender_key =
+                                        Self::telegram_sender_key(msg.from.as_ref(), chat_id);
                                     let text_clone = text.clone();
-                                    let n8n_request =
-                                        Self::infer_n8n_digest_request(&text);
-                                    let route_to_n8n = n8n_request.is_some();
                                     let run_sem = Self::run_semaphore();
                                     let queued = run_sem.available_permits() == 0;
 
                                     // Ack reception
-                                    let ack = if route_to_n8n {
-                                        "🤖 Command received. Routing to n8n digest..."
-                                    } else if queued {
+                                    let ack = if queued {
                                         "🤖 Command received. Queued after current task..."
                                     } else {
                                         "🤖 Command received. Processing..."
@@ -263,32 +278,6 @@ impl TelegramBot {
                                             }
                                         };
 
-                                        if let Some(request_text) = n8n_request {
-                                            let reply =
-                                                match crate::ai_digest::trigger_program_webhook(
-                                                    request_text.trim(),
-                                                    None,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(result) => {
-                                                        crate::ai_digest::format_human_summary(
-                                                            &result,
-                                                        )
-                                                    }
-                                                    Err(e) => {
-                                                        format!(
-                                                            "❌ n8n digest trigger failed: {}",
-                                                            e
-                                                        )
-                                                    }
-                                                };
-                                            let _ = bot_clone
-                                                .send_message_chunked(chat_id, &reply)
-                                                .await;
-                                            return;
-                                        }
-
                                         let goal_text = {
                                             let cleaned =
                                                 crate::ai_digest::strip_local_execution_prefix(
@@ -300,11 +289,57 @@ impl TelegramBot {
                                                 cleaned
                                             }
                                         };
+                                        let chat_state = crate::api_server::AppState {
+                                            llm_client: Some(bot_clone.llm.clone()),
+                                            current_goal: Arc::new(std::sync::Mutex::new(None)),
+                                        };
+                                        let chat_request = Self::build_chat_request(
+                                            &goal_text,
+                                            chat_type.as_deref(),
+                                            &sender_key,
+                                        );
+                                        let chat_response =
+                                            crate::api_server::process_chat_request(
+                                                chat_state,
+                                                chat_request,
+                                            )
+                                            .await;
+                                        if !Self::chat_response_requires_goal_fallback(
+                                            &chat_response,
+                                        ) {
+                                            let _ = bot_clone
+                                                .send_message_chunked(
+                                                    chat_id,
+                                                    &chat_response.response,
+                                                )
+                                                .await;
+                                            return;
+                                        }
+                                        if let Some(request_text) =
+                                            Self::infer_n8n_digest_request(&text_clone)
+                                        {
+                                            let reply = match crate::ai_digest::trigger_program_webhook_human_summary(
+                                                request_text.trim(),
+                                                None,
+                                            )
+                                            .await
+                                            {
+                                                Ok(summary) => summary,
+                                                Err(e) => {
+                                                    format!("❌ n8n digest trigger failed: {}", e)
+                                                }
+                                            };
+                                            let _ = bot_clone
+                                                .send_message_chunked(chat_id, &reply)
+                                                .await;
+                                            return;
+                                        }
+
                                         let planner = crate::controller::planner::Planner::new(
                                             bot_clone.llm.clone(),
                                             bot_clone.tx_analyzer.clone(),
                                         );
-                                        let session_key = format!("telegram_chat_{}", chat_id);
+                                        let session_key = sender_key.clone();
                                         let timeout_sec = Self::task_timeout_sec();
 
                                         match tokio::time::timeout(
@@ -600,11 +635,11 @@ impl TelegramBot {
         } else if failed_assertions.is_empty() {
             lines.push(format!("검증: assertions 통과 ({})", assertions.len()));
         } else {
-        lines.push(format!(
-            "검증: assertions 실패 {}/{}",
-            failed_assertions.len(),
-            assertions.len()
-        ));
+            lines.push(format!(
+                "검증: assertions 실패 {}/{}",
+                failed_assertions.len(),
+                assertions.len()
+            ));
             lines.push("실패 근거:".to_string());
             for assertion in failed_assertions.iter().take(6) {
                 let evidence = assertion.evidence.clone().unwrap_or_default();
@@ -689,9 +724,7 @@ impl TelegramBot {
         ctx
     }
 
-    fn extract_result_links_from_steps(
-        steps: &[crate::session_store::SessionStep],
-    ) -> Vec<String> {
+    fn extract_result_links_from_steps(steps: &[crate::session_store::SessionStep]) -> Vec<String> {
         fn push_http_link(out: &mut Vec<String>, raw: &str) {
             let candidate = raw
                 .trim()
@@ -867,9 +900,10 @@ impl TelegramBot {
 
 #[cfg(test)]
 mod tests {
-    use super::TelegramBot;
+    use super::{TelegramBot, User};
     use chrono::Utc;
     use serde_json::json;
+    use serial_test::serial;
 
     #[test]
     fn webhook_conflict_detector_matches_telegram_conflict_messages() {
@@ -899,11 +933,15 @@ mod tests {
             })),
         }];
         let ctx = TelegramBot::extract_result_context_from_steps(&steps);
-        assert_eq!(ctx.links, vec!["https://www.notion.so/abcd1234".to_string()]);
+        assert_eq!(
+            ctx.links,
+            vec!["https://www.notion.so/abcd1234".to_string()]
+        );
         assert!(!ctx.highlights.is_empty());
     }
 
     #[test]
+    #[serial]
     fn infer_n8n_digest_request_auto_routes_news_to_notion() {
         std::env::remove_var("STEER_TELEGRAM_AUTO_ROUTE_AI_DIGEST");
         std::env::set_var(
@@ -914,6 +952,20 @@ mod tests {
             "최근 ai 트렌드 중요한거 5개 llm으로 요약해서 노션에 정리해줘",
         );
         assert!(routed.is_some());
+        std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
+    }
+
+    #[test]
+    #[serial]
+    fn infer_n8n_digest_request_respects_local_execution_prefix() {
+        std::env::set_var(
+            "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+            "http://127.0.0.1:5678/webhook/test/programtrigger/ai-digest-program",
+        );
+        let routed = TelegramBot::infer_n8n_digest_request(
+            "/local 스포츠 뉴스 5개 요약해서 노션에 정리해줘",
+        );
+        assert!(routed.is_none());
         std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
     }
 
@@ -941,5 +993,40 @@ mod tests {
         assert!(report.contains("노션 링크:"));
         assert!(report.contains("https://www.notion.so/abcd1234"));
         assert!(report.contains("핵심 요약:"));
+    }
+
+    #[test]
+    fn telegram_sender_key_prefers_user_id_and_chat_id() {
+        let user = User {
+            id: 42,
+            username: Some("alice".to_string()),
+        };
+        assert_eq!(
+            TelegramBot::telegram_sender_key(Some(&user), 9001),
+            "telegram_user_42_chat_9001"
+        );
+        assert_eq!(
+            TelegramBot::telegram_sender_key(None, 9001),
+            "telegram_chat_9001"
+        );
+    }
+
+    #[test]
+    fn chat_response_requires_goal_fallback_only_for_unknown_reply() {
+        let unknown = crate::api_server::ChatResponse {
+            response: "🤔 요청을 정확히 해석하지 못했어요.\n더 구체적으로 말해줘.".to_string(),
+            command: None,
+            route_meta: None,
+        };
+        let deterministic = crate::api_server::ChatResponse {
+            response: "📅 오늘 일정이 없습니다.".to_string(),
+            command: Some("calendar_today".to_string()),
+            route_meta: None,
+        };
+
+        assert!(TelegramBot::chat_response_requires_goal_fallback(&unknown));
+        assert!(!TelegramBot::chat_response_requires_goal_fallback(
+            &deterministic
+        ));
     }
 }
