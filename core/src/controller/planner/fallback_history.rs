@@ -1,0 +1,126 @@
+use super::Planner;
+
+impl Planner {
+    pub(super) fn history_has_mail_subject(history: &[String]) -> bool {
+        history.iter().any(|h| {
+            let lower = h.to_lowercase();
+            lower.contains("(mail subject)") || lower.contains("mail subject")
+        })
+    }
+
+    pub(super) fn history_has_read_result(history: &[String]) -> bool {
+        history.iter().any(|h| h.starts_with("READ_RESULT: "))
+    }
+
+    pub(super) fn history_has_telegram_send_done(history: &[String]) -> bool {
+        history.iter().any(|entry| {
+            let lower = entry.to_lowercase();
+            lower.contains("telegram send completed")
+                || lower.contains("telegram: sent")
+                || lower.contains("target=telegram|event=send|status=sent")
+        })
+    }
+
+    pub(super) fn history_has_type_permission_block(history: &[String]) -> bool {
+        history.iter().any(|entry| {
+            let lower = entry.to_lowercase();
+            if !lower.contains("type failed") && !lower.contains("critical type action failed") {
+                return false;
+            }
+            lower.contains("keystroke")
+                || lower.contains("키스트로크")
+                || lower.contains("(1002)")
+                || lower.contains("native fallback timed out")
+        })
+    }
+
+    pub(super) fn history_has_n8n_workflow_created(history: &[String]) -> bool {
+        history.iter().any(|entry| {
+            let lower = entry.to_lowercase();
+            lower.contains("n8n workflow created:")
+                || lower.contains("target=n8n|event=workflow|status=confirmed")
+        })
+    }
+
+    pub(super) fn history_has_n8n_execution_done(history: &[String]) -> bool {
+        history.iter().any(|entry| {
+            let lower = entry.to_lowercase();
+            lower.contains("n8n execution completed:")
+                || lower.contains("target=n8n|event=execution|status=completed")
+                || (lower.contains("execution_id=")
+                    && (lower.contains("status=success") || lower.contains("status=completed")))
+        })
+    }
+
+    pub(super) fn last_opened_app(history: &[String]) -> Option<String> {
+        for entry in history.iter().rev() {
+            if let Some(rest) = entry.strip_prefix("Opened app: ") {
+                let app = rest.trim();
+                if !app.is_empty() {
+                    return Some(app.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn has_recent_created_item(history: &[String]) -> bool {
+        history
+            .iter()
+            .rev()
+            .take(8)
+            .any(|h| h.to_lowercase().contains("created new item"))
+    }
+
+    pub(super) fn plan_is_cmd_n_shortcut(plan: &serde_json::Value) -> bool {
+        if plan["action"].as_str() != Some("shortcut") {
+            return false;
+        }
+        let key_is_n = plan["key"]
+            .as_str()
+            .map(|k| k.eq_ignore_ascii_case("n"))
+            .unwrap_or(false);
+        if !key_is_n {
+            return false;
+        }
+        plan["modifiers"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .any(|m| m.as_str().unwrap_or("").eq_ignore_ascii_case("command"))
+            })
+            .unwrap_or(false)
+    }
+
+    pub(super) fn history_has_recent_new_item_for_app(history: &[String], app_name: &str) -> bool {
+        let target = app_name.to_lowercase();
+        let mut in_target_context = Self::last_opened_app(history)
+            .map(|app| app.eq_ignore_ascii_case(app_name))
+            .unwrap_or(false);
+
+        for entry in history.iter().rev().take(24) {
+            let lower = entry.to_lowercase();
+            if let Some(rest) = lower.strip_prefix("opened app: ") {
+                let opened = rest.trim();
+                if opened.eq_ignore_ascii_case(&target) {
+                    in_target_context = true;
+                    continue;
+                }
+                if in_target_context {
+                    break;
+                }
+                continue;
+            }
+            if !in_target_context {
+                continue;
+            }
+            if lower.contains("shortcut 'n'") && lower.contains("created new item") {
+                return true;
+            }
+            if lower.contains("mail send completed") || lower.contains("(mail sent)") {
+                return false;
+            }
+        }
+        false
+    }
+}

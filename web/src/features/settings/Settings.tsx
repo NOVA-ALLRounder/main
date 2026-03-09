@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Check, ShieldCheck, Database, Server, RefreshCw, Power } from "lucide-react";
 import { motion } from "framer-motion";
 import axios from "axios";
+import { LaunchReadinessOpsCard } from "@/features/settings/components/LaunchReadinessOpsCard";
+import { MemorySafetyCard } from "@/features/settings/components/MemorySafetyCard";
 import {
     API_BASE_URL,
     deleteExecutionMemory,
@@ -24,9 +26,7 @@ import type {
     ExecutionMemoryRecord,
     LaunchEvalCandidate,
     LaunchEvalCandidateSnapshotInfo,
-    MemoryAdminEventRecord,
     LaunchOpsResponse,
-    RecommendationReviewEventRecord,
     RequestMemoryRecord,
 } from "@/lib/types";
 
@@ -35,23 +35,6 @@ type LaunchEvalCandidateMode = "real" | "synthetic";
 type SystemHealth = {
     missing_deps?: { name?: string; install_cmd?: string }[];
 };
-
-function previewText(value?: string | null): string {
-    if (!value) return "No cached response text";
-    return value.length > 140 ? `${value.slice(0, 140)}...` : value;
-}
-
-function formatLaunchEventTime(value?: string | null): string {
-    if (!value) return "—";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-    });
-}
 
 export default function Settings() {
     const [n8nRestarting, setN8nRestarting] = useState(false);
@@ -413,423 +396,37 @@ export default function Settings() {
                 </motion.div>
 
                 <motion.div variants={itemVariants} className="md:col-span-2">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Launch Readiness Ops</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Recent Requests</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {launchChatMetrics?.total_requests ?? 0}
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        window {launchChatMetrics?.window_size ?? 0}
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Cached Response Hit Rate</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {(launchChatMetrics?.cached_response_hit_rate ?? 0).toFixed(1)}%
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        req {launchChatMetrics?.request_memory_hits ?? 0} · exec {launchChatMetrics?.execution_memory_hits ?? 0}
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Intent Acceleration</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {launchChatMetrics?.intent_memory_hits ?? 0}
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        det {launchChatMetrics?.deterministic_routes ?? 0} · llm {launchChatMetrics?.llm_routes ?? 0}
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Work Proposal Approval</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {(launchRecommendationMetrics?.approval_rate ?? 0).toFixed(1)}%
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        pending {launchRecommendationMetrics?.pending ?? 0} · later {launchRecommendationMetrics?.later ?? 0}
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Write Safety</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {(launchNlRunMetrics?.success_rate ?? 0).toFixed(1)}%
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        queue {launchExecApprovalMetrics?.pending ?? 0} · expired {launchExecApprovalMetrics?.expired_pending ?? 0}
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Review Friction</div>
-                                    <div className="mt-1 text-xl font-semibold">
-                                        {(launchRecommendationReviewMetrics?.non_positive_feedback_rate ?? 0).toFixed(1)}%
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground">
-                                        fail {(launchRecommendationReviewMetrics?.action_failure_rate ?? 0).toFixed(1)}% · events {launchRecommendationReviewMetrics?.total_events ?? 0}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Auto Digest</div>
-                                    <div className="mt-1 font-semibold">{launchChatMetrics?.ai_digest_auto_routes ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Freshness Bypass</div>
-                                    <div className="mt-1 font-semibold">{launchChatMetrics?.freshness_bypasses ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Blocked</div>
-                                    <div className="mt-1 font-semibold">{launchChatMetrics?.blocked_requests ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Low Confidence</div>
-                                    <div className="mt-1 font-semibold">{launchChatMetrics?.low_confidence_routes ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Errors</div>
-                                    <div className="mt-1 font-semibold text-amber-300">{launchChatMetrics?.error_routes ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Approval Required</div>
-                                    <div className="mt-1 font-semibold">{launchNlRunMetrics?.approval_required ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">NL Run Errors</div>
-                                    <div className="mt-1 font-semibold text-amber-300">
-                                        {launchNlErrorRate.toFixed(1)}%
-                                    </div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm">
-                                    <div className="text-xs text-muted-foreground">Review Failures</div>
-                                    <div className="mt-1 font-semibold">
-                                        {launchRecommendationReviewMetrics?.failed_actions ?? 0}
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-3">
-                                <div className="text-xs text-muted-foreground">
-                                    request/execution cache, deterministic route, digest fallback, 추천 승인율, 추천 리뷰 friction, write-action 승인 backlog를 한 카드에서 확인합니다.
-                                </div>
-                                <motion.button
-                                    onClick={() => refetchLaunchOps()}
-                                    disabled={launchOpsLoading}
-                                    className="rounded-lg bg-white/5 px-3 py-2 text-xs text-muted-foreground hover:bg-white/10 disabled:opacity-50"
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
-                                >
-                                    {launchOpsLoading ? "Refreshing..." : "Refresh Launch Ops"}
-                                </motion.button>
-                            </div>
-
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <div className="space-y-3">
-                                    <div className="text-sm font-semibold">Route Breakdown</div>
-                                    {(launchChatMetrics?.route_breakdown ?? []).length === 0 ? (
-                                        <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                            No launch ops data yet.
-                                        </div>
-                                    ) : (
-                                        launchChatMetrics?.route_breakdown.map((route) => (
-                                            <div key={route.route_kind} className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm">
-                                                <span className="font-mono text-white/90">{route.route_kind}</span>
-                                                <span className="text-muted-foreground">{route.count}</span>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-
-                                <div className="space-y-3">
-                                    <div className="text-sm font-semibold">Recent Routes</div>
-                                    {launchRecentEvents.length === 0 ? (
-                                        <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                            No recent route events.
-                                        </div>
-                                    ) : launchRecentEvents.map((event) => (
-                                        <div key={event.id} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                    <div className="text-sm font-medium">{event.route_kind}</div>
-                                                    <div className="text-[11px] text-muted-foreground">
-                                                        {formatLaunchEventTime(event.created_at)} · {event.channel ?? "unknown"} · {event.command ?? "no-command"}
-                                                    </div>
-                                                </div>
-                                                <span className={`rounded-full px-2 py-1 text-[10px] font-mono border ${event.outcome === "success" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : event.outcome === "blocked" ? "border-orange-400/20 bg-orange-400/10 text-orange-300" : "border-amber-400/20 bg-amber-400/10 text-amber-300"}`}>
-                                                    {event.outcome}
-                                                </span>
-                                            </div>
-                                            <div className="mt-2 text-xs text-white/90">{event.message_preview}</div>
-                                            <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                                                {event.intent_memory_hit && <span>intent-memory</span>}
-                                                {event.request_memory_hit && <span>request-cache</span>}
-                                                {event.execution_memory_hit && <span>execution-cache</span>}
-                                                {event.deterministic_used && <span>deterministic</span>}
-                                                {event.llm_used && <span>llm</span>}
-                                                {event.ai_digest_used && <span>digest</span>}
-                                                {event.freshness_bypassed && <span>fresh-bypass</span>}
-                                            </div>
-                                            {event.note && (
-                                                <div className="mt-2 text-[11px] text-muted-foreground">{event.note}</div>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <LaunchReadinessOpsCard
+                        chatMetrics={launchChatMetrics}
+                        nlRunMetrics={launchNlRunMetrics}
+                        execApprovalMetrics={launchExecApprovalMetrics}
+                        recommendationMetrics={launchRecommendationMetrics}
+                        recommendationReviewMetrics={launchRecommendationReviewMetrics}
+                        recentEvents={launchRecentEvents}
+                        nlErrorRate={launchNlErrorRate}
+                        loading={launchOpsLoading}
+                        onRefresh={() => {
+                            void refetchLaunchOps();
+                        }}
+                    />
                 </motion.div>
 
                 <motion.div variants={itemVariants} className="md:col-span-2">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Memory Safety</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-3 md:grid-cols-4">
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Request Active</div>
-                                    <div className="mt-1 text-xl font-semibold">{memoryMetrics?.request_active ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Request Suppressed</div>
-                                    <div className="mt-1 text-xl font-semibold text-amber-300">{memoryMetrics?.request_suppressed ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Execution Active</div>
-                                    <div className="mt-1 text-xl font-semibold">{memoryMetrics?.execution_active ?? 0}</div>
-                                </div>
-                                <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                    <div className="text-xs text-muted-foreground">Execution Suppressed</div>
-                                    <div className="mt-1 text-xl font-semibold text-amber-300">{memoryMetrics?.execution_suppressed ?? 0}</div>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-3">
-                                <div className="text-xs text-muted-foreground">
-                                    최근 memory를 보고 잘못 학습된 cache를 즉시 차단하거나 삭제합니다.
-                                </div>
-                                <motion.button
-                                    onClick={() => refetchMemory()}
-                                    disabled={memoryLoading || memoryActionMutation.isPending}
-                                    className="rounded-lg bg-white/5 px-3 py-2 text-xs text-muted-foreground hover:bg-white/10 disabled:opacity-50"
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
-                                >
-                                    {memoryLoading ? "Refreshing..." : "Refresh Memory"}
-                                </motion.button>
-                            </div>
-
-                            {memoryStatus && (
-                                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-muted-foreground">
-                                    {memoryStatus}
-                                </div>
-                            )}
-
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <div className="space-y-3">
-                                    <div className="text-sm font-semibold">Request Memory</div>
-                                    {requestMemory.length === 0 ? (
-                                        <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                            No request memory records.
-                                        </div>
-                                    ) : requestMemory.map((record) => (
-                                        <div key={`${record.memory_scope}-${record.normalized_request}`} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                    <div className="text-sm font-medium">{record.intent_command || "unknown"}</div>
-                                                    <div className="text-[11px] text-muted-foreground">{record.memory_scope}</div>
-                                                </div>
-                                                <span className={`rounded-full px-2 py-1 text-[10px] font-mono border ${record.suppressed ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"}`}>
-                                                    {record.suppressed ? "suppressed" : "active"}
-                                                </span>
-                                            </div>
-                                            <div className="mt-2 text-xs text-white/90">{record.original_request}</div>
-                                            <div className="mt-2 text-[11px] text-muted-foreground">{previewText(record.response_text)}</div>
-                                            <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                                                <span>use {record.use_count}</span>
-                                                <span>+{record.positive_feedback_count}</span>
-                                                <span>-{record.negative_feedback_count}</span>
-                                            </div>
-                                            {record.suppressed_reason && (
-                                                <div className="mt-2 text-[11px] text-amber-200">reason: {record.suppressed_reason}</div>
-                                            )}
-                                            <div className="mt-3 flex gap-2">
-                                                {record.suppressed ? (
-                                                    <motion.button
-                                                        onClick={() => handleRequestMemoryAction("restore", record)}
-                                                        disabled={memoryActionMutation.isPending}
-                                                        className="rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                                                        whileHover={{ scale: 1.02 }}
-                                                        whileTap={{ scale: 0.98 }}
-                                                    >
-                                                        Restore
-                                                    </motion.button>
-                                                ) : (
-                                                    <motion.button
-                                                        onClick={() => handleRequestMemoryAction("suppress", record)}
-                                                        disabled={memoryActionMutation.isPending}
-                                                        className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-                                                        whileHover={{ scale: 1.02 }}
-                                                        whileTap={{ scale: 0.98 }}
-                                                    >
-                                                        Suppress
-                                                    </motion.button>
-                                                )}
-                                                <motion.button
-                                                    onClick={() => handleRequestMemoryAction("delete", record)}
-                                                    disabled={memoryActionMutation.isPending}
-                                                    className="rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-50"
-                                                    whileHover={{ scale: 1.02 }}
-                                                    whileTap={{ scale: 0.98 }}
-                                                >
-                                                    Delete
-                                                </motion.button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                <div className="space-y-3">
-                                    <div className="text-sm font-semibold">Execution Memory</div>
-                                    {executionMemory.length === 0 ? (
-                                        <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                            No execution memory records.
-                                        </div>
-                                    ) : executionMemory.map((record) => (
-                                        <div key={`${record.memory_scope}-${record.intent_command}-${record.params_key}`} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                    <div className="text-sm font-medium">{record.intent_command}</div>
-                                                    <div className="text-[11px] text-muted-foreground">{record.memory_scope}</div>
-                                                </div>
-                                                <span className={`rounded-full px-2 py-1 text-[10px] font-mono border ${record.suppressed ? "border-amber-400/30 bg-amber-400/10 text-amber-300" : "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"}`}>
-                                                    {record.suppressed ? "suppressed" : "active"}
-                                                </span>
-                                            </div>
-                                            <div className="mt-2 text-xs text-white/90">{record.params_key}</div>
-                                            <div className="mt-2 text-[11px] text-muted-foreground">{previewText(record.response_text)}</div>
-                                            <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                                                <span>ttl {record.freshness_ttl_seconds}s</span>
-                                                <span>use {record.use_count}</span>
-                                                <span>+{record.positive_feedback_count}</span>
-                                                <span>-{record.negative_feedback_count}</span>
-                                            </div>
-                                            {record.suppressed_reason && (
-                                                <div className="mt-2 text-[11px] text-amber-200">reason: {record.suppressed_reason}</div>
-                                            )}
-                                            <div className="mt-3 flex gap-2">
-                                                {record.suppressed ? (
-                                                    <motion.button
-                                                        onClick={() => handleExecutionMemoryAction("restore", record)}
-                                                        disabled={memoryActionMutation.isPending}
-                                                        className="rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-                                                        whileHover={{ scale: 1.02 }}
-                                                        whileTap={{ scale: 0.98 }}
-                                                    >
-                                                        Restore
-                                                    </motion.button>
-                                                ) : (
-                                                    <motion.button
-                                                        onClick={() => handleExecutionMemoryAction("suppress", record)}
-                                                        disabled={memoryActionMutation.isPending}
-                                                        className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-                                                        whileHover={{ scale: 1.02 }}
-                                                        whileTap={{ scale: 0.98 }}
-                                                    >
-                                                        Suppress
-                                                    </motion.button>
-                                                )}
-                                                <motion.button
-                                                    onClick={() => handleExecutionMemoryAction("delete", record)}
-                                                    disabled={memoryActionMutation.isPending}
-                                                    className="rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-50"
-                                                    whileHover={{ scale: 1.02 }}
-                                                    whileTap={{ scale: 0.98 }}
-                                                >
-                                                    Delete
-                                                </motion.button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="mt-4 space-y-3">
-                                <div className="text-sm font-semibold">Recent Memory Admin Events</div>
-                                {recentMemoryAdminEvents.length === 0 ? (
-                                    <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                        No memory admin events.
-                                    </div>
-                                ) : recentMemoryAdminEvents.map((event: MemoryAdminEventRecord) => (
-                                    <div key={event.id} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="space-y-1">
-                                                <div className="text-sm font-medium">
-                                                    {event.kind} {event.action}
-                                                </div>
-                                                <div className="text-[11px] text-muted-foreground">
-                                                    {formatLaunchEventTime(event.created_at)}
-                                                    {event.memory_scope ? ` · ${event.memory_scope}` : ""}
-                                                    {event.actor ? ` · ${event.actor}` : ""}
-                                                </div>
-                                            </div>
-                                            <span className={`rounded-full px-2 py-1 text-[10px] font-mono border ${event.ok ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-red-400/20 bg-red-400/10 text-red-300"}`}>
-                                                {event.ok ? "ok" : "failed"}
-                                            </span>
-                                        </div>
-                                        <div className="mt-2 text-xs text-white/90">{previewText(event.target_key)}</div>
-                                        {event.reason && (
-                                            <div className="mt-2 text-[11px] text-amber-200">reason: {event.reason}</div>
-                                        )}
-                                        {event.message && (
-                                            <div className="mt-1 text-[11px] text-muted-foreground">{event.message}</div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="mt-4 space-y-3">
-                                <div className="text-sm font-semibold">Recent Recommendation Review Events</div>
-                                {recentRecommendationReviewEvents.length === 0 ? (
-                                    <div className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-muted-foreground">
-                                        No recommendation review events.
-                                    </div>
-                                ) : recentRecommendationReviewEvents.map((event: RecommendationReviewEventRecord) => (
-                                    <div key={event.id} className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="space-y-1">
-                                                <div className="text-sm font-medium">
-                                                    {event.action} · {event.recommendation_title}
-                                                </div>
-                                                <div className="text-[11px] text-muted-foreground">
-                                                    {formatLaunchEventTime(event.created_at)}
-                                                    {event.category ? ` · ${event.category}` : ""}
-                                                    {event.status_after ? ` · ${event.status_after}` : ""}
-                                                    {event.actor ? ` · ${event.actor}` : ""}
-                                                </div>
-                                            </div>
-                                            <span className={`rounded-full px-2 py-1 text-[10px] font-mono border ${event.ok ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-red-400/20 bg-red-400/10 text-red-300"}`}>
-                                                {event.ok ? "ok" : "failed"}
-                                            </span>
-                                        </div>
-                                        {event.note && (
-                                            <div className="mt-2 text-[11px] text-amber-200">note: {event.note}</div>
-                                        )}
-                                        {event.message && (
-                                            <div className="mt-1 text-[11px] text-muted-foreground">{event.message}</div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        </CardContent>
-                    </Card>
+                    <MemorySafetyCard
+                        metrics={memoryMetrics}
+                        requestMemory={requestMemory}
+                        executionMemory={executionMemory}
+                        recentMemoryAdminEvents={recentMemoryAdminEvents}
+                        recentRecommendationReviewEvents={recentRecommendationReviewEvents}
+                        status={memoryStatus}
+                        loading={memoryLoading}
+                        actionPending={memoryActionMutation.isPending}
+                        onRefresh={() => {
+                            void refetchMemory();
+                        }}
+                        onRequestAction={handleRequestMemoryAction}
+                        onExecutionAction={handleExecutionMemoryAction}
+                    />
                 </motion.div>
 
                 <motion.div variants={itemVariants} className="md:col-span-2">
