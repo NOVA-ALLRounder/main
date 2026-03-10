@@ -1,4 +1,7 @@
 use super::Planner;
+use crate::platform::{
+    app_matches_role, app_role_aliases, app_role_primary_name, current_platform, AppRole,
+};
 
 impl Planner {
     pub(super) fn infer_news_topic_from_goal(goal: &str) -> String {
@@ -224,17 +227,49 @@ impl Planner {
         seed
     }
 
+    pub(super) fn app_name_for_role(role: AppRole) -> &'static str {
+        app_role_primary_name(current_platform().kind(), role)
+    }
+
+    pub(super) fn app_is_role(app: &str, role: AppRole) -> bool {
+        app_matches_role(current_platform().kind(), role, app)
+    }
+
+    pub(super) fn goal_mentions_app_role(text_lower: &str, role: AppRole) -> bool {
+        app_role_aliases(current_platform().kind(), role)
+            .iter()
+            .any(|alias| text_lower.contains(&alias.to_lowercase()))
+    }
+
+    pub(super) fn file_manager_app_name() -> &'static str {
+        Self::app_name_for_role(AppRole::FileManager)
+    }
+
+    pub(super) fn mail_client_app_name() -> &'static str {
+        Self::app_name_for_role(AppRole::MailClient)
+    }
+
+    pub(super) fn notes_app_name() -> &'static str {
+        Self::app_name_for_role(AppRole::NotesApp)
+    }
+
+    pub(super) fn text_editor_app_name() -> &'static str {
+        Self::app_name_for_role(AppRole::TextEditor)
+    }
+
     pub(super) fn text_staging_app() -> &'static str {
         match std::env::var("STEER_TEXT_STAGING_APP") {
             Ok(raw) => {
-                let v = raw.trim().to_lowercase();
-                if v == "notes" || v == "메모" {
-                    "Notes"
+                let v = raw.trim();
+                if Self::app_is_role(v, AppRole::NotesApp) {
+                    Self::notes_app_name()
+                } else if Self::app_is_role(v, AppRole::TextEditor) {
+                    Self::text_editor_app_name()
                 } else {
-                    "TextEdit"
+                    Self::text_editor_app_name()
                 }
             }
-            Err(_) => "TextEdit",
+            Err(_) => Self::text_editor_app_name(),
         }
     }
 
@@ -371,7 +406,7 @@ impl Planner {
 
     pub(super) fn goal_requires_notes_write(goal: &str) -> bool {
         let lower = goal.to_lowercase();
-        let mentions_notes = lower.contains("notes") || lower.contains("메모");
+        let mentions_notes = Self::goal_mentions_app_role(&lower, AppRole::NotesApp);
         mentions_notes
             && (Self::goal_has_write_signal(&lower)
                 || Self::goal_has_new_item_signal(&lower)
@@ -380,7 +415,7 @@ impl Planner {
 
     pub(super) fn goal_requires_textedit_write(goal: &str) -> bool {
         let lower = goal.to_lowercase();
-        let mentions_textedit = lower.contains("textedit") || lower.contains("텍스트에디트");
+        let mentions_textedit = Self::goal_mentions_app_role(&lower, AppRole::TextEditor);
         mentions_textedit
             && (Self::goal_has_write_signal(&lower)
                 || Self::goal_has_new_item_signal(&lower)
@@ -389,7 +424,7 @@ impl Planner {
 
     pub(super) fn goal_requires_textedit_save(goal: &str) -> bool {
         let lower = goal.to_lowercase();
-        let mentions_textedit = lower.contains("textedit") || lower.contains("텍스트에디트");
+        let mentions_textedit = Self::goal_mentions_app_role(&lower, AppRole::TextEditor);
         let mentions_save_shortcut = Self::contains_shortcut_token(&lower, "cmd", "s")
             || Self::contains_shortcut_token(&lower, "command", "s");
         let mentions_save =
@@ -411,8 +446,8 @@ impl Planner {
     }
 
     pub(super) fn is_textual_app(app: &str) -> bool {
-        app.eq_ignore_ascii_case("Notes")
-            || app.eq_ignore_ascii_case("TextEdit")
-            || app.eq_ignore_ascii_case("Mail")
+        Self::app_is_role(app, AppRole::NotesApp)
+            || Self::app_is_role(app, AppRole::TextEditor)
+            || Self::app_is_role(app, AppRole::MailClient)
     }
 }

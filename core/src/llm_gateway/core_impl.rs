@@ -1,4 +1,8 @@
 use super::*;
+use crate::platform::{
+    app_matches_role, app_role_aliases, app_role_primary_name, current_platform,
+    parse_opened_or_switched_app_history_entry, AppRole,
+};
 
 impl OpenAILLMClient {
     pub fn new() -> Result<Self> {
@@ -59,21 +63,39 @@ impl OpenAILLMClient {
             .any(|h| h.to_lowercase().contains(&needle_lower))
     }
 
+    pub(crate) fn history_contains_opened_role_app(history: &[String], role: AppRole) -> bool {
+        history.iter().any(|entry| {
+            parse_opened_or_switched_app_history_entry(entry)
+                .map(|opened| app_matches_role(current_platform().kind(), role, opened))
+                .unwrap_or(false)
+        })
+    }
+
     pub(crate) fn ordered_apps_in_goal(goal: &str) -> Vec<&'static str> {
         let goal_lower = goal.to_lowercase();
-        let app_catalog: [&'static str; 7] = [
-            "Calendar",
-            "Safari",
-            "Finder",
-            "TextEdit",
-            "Notes",
-            "Calculator",
-            "Mail",
+        let platform = current_platform().kind();
+        let app_roles = [
+            AppRole::Calendar,
+            AppRole::Browser,
+            AppRole::FileManager,
+            AppRole::TextEditor,
+            AppRole::NotesApp,
+            AppRole::Calculator,
+            AppRole::MailClient,
         ];
 
-        let mut found: Vec<(usize, &'static str)> = app_catalog
+        let mut found: Vec<(usize, &'static str)> = app_roles
             .iter()
-            .filter_map(|app| goal_lower.find(&app.to_lowercase()).map(|idx| (idx, *app)))
+            .filter_map(|role| {
+                app_role_aliases(platform, *role)
+                    .iter()
+                    .filter_map(|alias| {
+                        goal_lower
+                            .find(&alias.to_lowercase())
+                            .map(|idx| (idx, *alias))
+                    })
+                    .min_by_key(|(idx, _)| *idx)
+            })
             .collect();
         found.sort_by_key(|(idx, _)| *idx);
         found.into_iter().map(|(_, app)| app).collect()
@@ -209,7 +231,7 @@ impl OpenAILLMClient {
                     let copy_count =
                         Self::history_count_case_insensitive(history, "Copied selection");
                     let calculator_opened =
-                        Self::history_contains_case_insensitive(history, "Opened app: Calculator");
+                        Self::history_contains_opened_role_app(history, AppRole::Calculator);
                     if copy_count >= 1 && !calculator_opened {
                         if let Some(status_text) = Self::first_missing_fragment_by_keywords(
                             goal,
@@ -218,7 +240,13 @@ impl OpenAILLMClient {
                         ) {
                             json!({ "action": "type", "text": status_text })
                         } else {
-                            json!({ "action": "open_app", "name": "Calculator" })
+                            json!({
+                                "action": "open_app",
+                                "name": app_role_primary_name(
+                                    current_platform().kind(),
+                                    AppRole::Calculator,
+                                )
+                            })
                         }
                     } else {
                         json!({ "action": "copy" })
@@ -226,7 +254,7 @@ impl OpenAILLMClient {
                 }
                 'v' => {
                     let calculator_opened =
-                        Self::history_contains_case_insensitive(history, "Opened app: Calculator");
+                        Self::history_contains_opened_role_app(history, AppRole::Calculator);
                     if calculator_opened {
                         if let Some(cost_text) = Self::first_missing_fragment_by_keywords(
                             goal,
@@ -247,8 +275,12 @@ impl OpenAILLMClient {
         }
 
         for app in Self::ordered_apps_in_goal(goal) {
-            let opened_marker = format!("Opened app: {}", app);
-            if !Self::history_contains_case_insensitive(history, &opened_marker) {
+            let already_opened = history.iter().any(|entry| {
+                parse_opened_or_switched_app_history_entry(entry)
+                    .map(|opened: &str| opened.eq_ignore_ascii_case(app))
+                    .unwrap_or(false)
+            });
+            if !already_opened {
                 return json!({ "action": "open_app", "name": app });
             }
         }
@@ -385,7 +417,7 @@ impl OpenAILLMClient {
         } else {
             context.push_str("- ⚠️ MOUSE CONTROL: 'cliclick' is NOT installed.\n");
             context.push_str("  - PREFERRED: Use AppleScript via `osascript` for basic clicks if absolutely necessary, OR suggest installing cliclick.\n");
-            context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to click at {x,y}'` (Note: requires Accessibility permission)\n");
+            context.push_str("  - Command: `osascript -e 'tell application \"System Events\" to click at {x,y}'` (Note: requires UI automation permission)\n");
         }
 
         context.push_str("- ✅ KEYBOARD: Use AppleScript via `osascript`.\n");

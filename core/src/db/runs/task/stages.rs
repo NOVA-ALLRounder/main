@@ -1,7 +1,22 @@
-use rusqlite::{params, Result};
+use rusqlite::{params, params_from_iter, types::Value, Connection, Result};
 
-use super::super::super::get_db_lock;
+use super::super::super::{with_read_conn, with_write_conn_if_available};
 use super::{TaskRunArtifactRecord, TaskStageAssertionRecord, TaskStageRunRecord};
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskStageAssertionListOptions {
+    pub stage_name: Option<String>,
+    pub failed_only: bool,
+    pub limit: Option<i64>,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskRunArtifactListOptions {
+    pub artifact_type: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: i64,
+}
 
 fn parse_stage_max_retries() -> i64 {
     std::env::var("STEER_STAGE_MAX_RETRIES")
@@ -75,8 +90,7 @@ pub fn record_task_stage_run(
     status: &str,
     details: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         let status = canonical_stage_status(status);
         let details_clean = details.map(str::trim).filter(|value| !value.is_empty());
@@ -172,7 +186,8 @@ pub fn record_task_stage_run(
                 next_retry_at
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -185,8 +200,7 @@ pub fn record_task_stage_assertion(
     passed: bool,
     evidence: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO task_stage_assertions (
@@ -203,7 +217,8 @@ pub fn record_task_stage_assertion(
                 created_at
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -223,8 +238,7 @@ pub fn upsert_task_run_artifact(
         ));
     }
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO task_run_artifacts (
@@ -243,106 +257,212 @@ pub fn upsert_task_run_artifact(
                 created_at
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
-pub fn list_task_stage_runs(run_id: &str) -> Result<Vec<TaskStageRunRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT id, run_id, stage_name, stage_order, status, started_at, finished_at, details,
-                    retry_count, max_retries, next_retry_at
-             FROM task_stage_runs
-             WHERE run_id = ?1
-             ORDER BY stage_order ASC, id ASC",
-        )?;
-
-        let rows = stmt.query_map(params![run_id], |row| {
-            Ok(TaskStageRunRecord {
-                id: row.get(0)?,
-                run_id: row.get(1)?,
-                stage_name: row.get(2)?,
-                stage_order: row.get(3)?,
-                status: row.get(4)?,
-                started_at: row.get(5)?,
-                finished_at: row.get(6)?,
-                details: row.get(7).ok(),
-                retry_count: row.get::<_, i64>(8).unwrap_or(0),
-                max_retries: row.get::<_, i64>(9).unwrap_or(0),
-                next_retry_at: row.get(10).ok(),
-            })
-        })?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
+fn normalized_limit(limit: Option<i64>) -> Option<i64> {
+    limit.and_then(|value| {
+        if value > 0 {
+            Some(value.min(500))
+        } else {
+            None
         }
-        return Ok(out);
+    })
+}
+
+fn normalized_offset(offset: i64) -> i64 {
+    offset.max(0)
+}
+
+fn query_task_stage_runs(conn: &Connection, run_id: &str) -> Result<Vec<TaskStageRunRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, stage_name, stage_order, status, started_at, finished_at, details,
+                retry_count, max_retries, next_retry_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM task_stage_assertions AS assertions
+                    WHERE assertions.run_id = task_stage_runs.run_id
+                      AND assertions.stage_name = task_stage_runs.stage_name
+                ), 0) AS assertion_total,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM task_stage_assertions AS assertions
+                    WHERE assertions.run_id = task_stage_runs.run_id
+                      AND assertions.stage_name = task_stage_runs.stage_name
+                      AND assertions.passed = 0
+                ), 0) AS assertion_failed
+         FROM task_stage_runs
+         WHERE run_id = ?1
+         ORDER BY stage_order ASC, id ASC",
+    )?;
+
+    let rows = stmt.query_map(params![run_id], |row| {
+        Ok(TaskStageRunRecord {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            stage_name: row.get(2)?,
+            stage_order: row.get(3)?,
+            status: row.get(4)?,
+            started_at: row.get(5)?,
+            finished_at: row.get(6)?,
+            details: row.get(7).ok(),
+            retry_count: row.get::<_, i64>(8).unwrap_or(0),
+            max_retries: row.get::<_, i64>(9).unwrap_or(0),
+            next_retry_at: row.get(10).ok(),
+            assertion_total: row.get::<_, i64>(11).unwrap_or(0),
+            assertion_failed: row.get::<_, i64>(12).unwrap_or(0),
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
     }
-    Ok(Vec::new())
+    Ok(out)
+}
+
+fn query_task_stage_assertions(
+    conn: &Connection,
+    run_id: &str,
+    options: &TaskStageAssertionListOptions,
+) -> Result<Vec<TaskStageAssertionRecord>> {
+    let mut sql = String::from(
+        "SELECT id, run_id, stage_name, assertion_key, expected, actual, passed, evidence, created_at
+         FROM task_stage_assertions
+         WHERE run_id = ?",
+    );
+    let mut params: Vec<Value> = vec![run_id.to_string().into()];
+
+    if let Some(stage_name) = options.stage_name.as_ref().map(|value| value.trim()) {
+        if !stage_name.is_empty() {
+            sql.push_str(" AND stage_name = ?");
+            params.push(stage_name.to_string().into());
+        }
+    }
+    if options.failed_only {
+        sql.push_str(" AND passed = 0");
+    }
+    sql.push_str(" ORDER BY id ASC");
+
+    if let Some(limit) = normalized_limit(options.limit) {
+        sql.push_str(" LIMIT ?");
+        params.push(limit.into());
+        let offset = normalized_offset(options.offset);
+        if offset > 0 {
+            sql.push_str(" OFFSET ?");
+            params.push(offset.into());
+        }
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+        Ok(TaskStageAssertionRecord {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            stage_name: row.get(2)?,
+            assertion_key: row.get(3)?,
+            expected: row.get(4)?,
+            actual: row.get(5)?,
+            passed: row.get::<_, i64>(6)? != 0,
+            evidence: row.get(7).ok(),
+            created_at: row.get(8)?,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn query_task_run_artifacts(
+    conn: &Connection,
+    run_id: &str,
+    options: &TaskRunArtifactListOptions,
+) -> Result<Vec<TaskRunArtifactRecord>> {
+    let mut sql = String::from(
+        "SELECT id, run_id, artifact_type, artifact_key, value, metadata, created_at
+         FROM task_run_artifacts
+         WHERE run_id = ?",
+    );
+    let mut params: Vec<Value> = vec![run_id.to_string().into()];
+
+    if let Some(artifact_type) = options.artifact_type.as_ref().map(|value| value.trim()) {
+        if !artifact_type.is_empty() {
+            sql.push_str(" AND artifact_type = ?");
+            params.push(artifact_type.to_string().into());
+        }
+    }
+
+    sql.push_str(" ORDER BY created_at DESC, id DESC");
+
+    if let Some(limit) = normalized_limit(options.limit) {
+        sql.push_str(" LIMIT ?");
+        params.push(limit.into());
+        let offset = normalized_offset(options.offset);
+        if offset > 0 {
+            sql.push_str(" OFFSET ?");
+            params.push(offset.into());
+        }
+    }
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+        Ok(TaskRunArtifactRecord {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            artifact_type: row.get(2)?,
+            artifact_key: row.get(3)?,
+            value: row.get(4)?,
+            metadata: row.get(5).ok(),
+            created_at: row.get(6)?,
+        })
+    })?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn list_task_stage_runs(run_id: &str) -> Result<Vec<TaskStageRunRecord>> {
+    match with_read_conn(|conn| query_task_stage_runs(conn, run_id)) {
+        Ok(rows) => Ok(rows),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
 }
 
 pub fn list_task_stage_assertions(run_id: &str) -> Result<Vec<TaskStageAssertionRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT id, run_id, stage_name, assertion_key, expected, actual, passed, evidence, created_at
-             FROM task_stage_assertions
-             WHERE run_id = ?1
-             ORDER BY id ASC",
-        )?;
+    list_task_stage_assertions_with_options(run_id, &TaskStageAssertionListOptions::default())
+}
 
-        let rows = stmt.query_map(params![run_id], |row| {
-            Ok(TaskStageAssertionRecord {
-                id: row.get(0)?,
-                run_id: row.get(1)?,
-                stage_name: row.get(2)?,
-                assertion_key: row.get(3)?,
-                expected: row.get(4)?,
-                actual: row.get(5)?,
-                passed: row.get::<_, i64>(6)? != 0,
-                evidence: row.get(7).ok(),
-                created_at: row.get(8)?,
-            })
-        })?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        return Ok(out);
+pub fn list_task_stage_assertions_with_options(
+    run_id: &str,
+    options: &TaskStageAssertionListOptions,
+) -> Result<Vec<TaskStageAssertionRecord>> {
+    match with_read_conn(|conn| query_task_stage_assertions(conn, run_id, options)) {
+        Ok(rows) => Ok(rows),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(err) => Err(err),
     }
-    Ok(Vec::new())
 }
 
 pub fn list_task_run_artifacts(run_id: &str) -> Result<Vec<TaskRunArtifactRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT id, run_id, artifact_type, artifact_key, value, metadata, created_at
-             FROM task_run_artifacts
-             WHERE run_id = ?1
-             ORDER BY artifact_type ASC, artifact_key ASC, id ASC",
-        )?;
+    list_task_run_artifacts_with_options(run_id, &TaskRunArtifactListOptions::default())
+}
 
-        let rows = stmt.query_map(params![run_id], |row| {
-            Ok(TaskRunArtifactRecord {
-                id: row.get(0)?,
-                run_id: row.get(1)?,
-                artifact_type: row.get(2)?,
-                artifact_key: row.get(3)?,
-                value: row.get(4)?,
-                metadata: row.get(5).ok(),
-                created_at: row.get(6)?,
-            })
-        })?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        return Ok(out);
+pub fn list_task_run_artifacts_with_options(
+    run_id: &str,
+    options: &TaskRunArtifactListOptions,
+) -> Result<Vec<TaskRunArtifactRecord>> {
+    match with_read_conn(|conn| query_task_run_artifacts(conn, run_id, options)) {
+        Ok(rows) => Ok(rows),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(err) => Err(err),
     }
-    Ok(Vec::new())
 }

@@ -117,7 +117,7 @@ type DeriveShellStatusParams = {
 export function deriveFocusPreflightState(preflightChecks: AgentPreflightCheck[]) {
   const focusPreflight = preflightChecks.find((check) => check.key === "focus_handoff");
   const accessibilityPreflight = preflightChecks.find(
-    (check) => check.key === "accessibility"
+    (check) => check.key === "ui_automation" || check.key === "accessibility"
   );
   const screenCapturePreflight = preflightChecks.find(
     (check) => check.key === "screen_capture"
@@ -128,8 +128,8 @@ export function deriveFocusPreflightState(preflightChecks: AgentPreflightCheck[]
     !!focusPreflight &&
     focusPreflight.ok &&
     focusActualLower.length > 0 &&
-    !focusActualLower.includes("finder") &&
-    !focusActualLower.includes("skipped");
+    !focusActualLower.includes("skipped") &&
+    focusPreflight.message.toLowerCase().includes("recommended=file manager");
 
   return {
     focusPreflight,
@@ -207,8 +207,8 @@ export function deriveRecoveryActions({
         label: "접근성 설정 열기",
         description: "접근성 권한 허용 후 다시 점검",
         kind: "preflight_fix",
-        fixAction: "open_accessibility_settings",
-        assertionKey: "recovery.preflight.open_accessibility_settings",
+        fixAction: "open_ui_automation_settings",
+        assertionKey: "recovery.preflight.open_ui_automation_settings",
       });
     }
     if (screenCapturePreflight && !screenCapturePreflight.ok) {
@@ -273,8 +273,8 @@ export function deriveRecoveryActions({
       label: "Mail 초안창 정리",
       description: "누적된 outgoing 창 숨김 처리",
       kind: "preflight_fix",
-      fixAction: "mail_cleanup_outgoing_windows",
-      assertionKey: "recovery.preflight.mail_cleanup_outgoing_windows",
+      fixAction: "cleanup_outgoing_mail_drafts",
+      assertionKey: "recovery.preflight.cleanup_outgoing_mail_drafts",
     });
   }
 
@@ -317,8 +317,8 @@ export function deriveRecoveryActions({
       label: "TextEdit 저장 실행",
       description: "front document 저장(Cmd+S 대체)",
       kind: "preflight_fix",
-      fixAction: "textedit_save_front_document",
-      assertionKey: "recovery.preflight.textedit_save_front_document",
+      fixAction: "save_front_text_document",
+      assertionKey: "recovery.preflight.save_front_text_document",
     });
   }
 
@@ -394,12 +394,12 @@ export function deriveRecoveryActionForFailureKey(failureKey: string): RecoveryA
     key.includes("outgoing")
   ) {
     return {
-      key: `topfix:${failureKey}:mail_cleanup_outgoing_windows`,
+      key: `topfix:${failureKey}:cleanup_outgoing_mail_drafts`,
       label: "Mail 초안창 정리",
       description: "누적 outgoing 창 숨김 처리",
       kind: "preflight_fix",
-      fixAction: "mail_cleanup_outgoing_windows",
-      assertionKey: "recovery.preflight.mail_cleanup_outgoing_windows",
+      fixAction: "cleanup_outgoing_mail_drafts",
+      assertionKey: "recovery.preflight.cleanup_outgoing_mail_drafts",
     };
   }
   if (key.includes("textedit_save")) {
@@ -408,8 +408,8 @@ export function deriveRecoveryActionForFailureKey(failureKey: string): RecoveryA
       label: "TextEdit 저장",
       description: "TextEdit front document 저장 실행",
       kind: "preflight_fix",
-      fixAction: "textedit_save_front_document",
-      assertionKey: "recovery.preflight.textedit_save_front_document",
+      fixAction: "save_front_text_document",
+      assertionKey: "recovery.preflight.save_front_text_document",
     };
   }
   if (key.includes("textedit")) {

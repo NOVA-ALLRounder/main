@@ -11,7 +11,7 @@ import {
 } from "@/lib/api";
 import { useApprovalPolicies, useNlRunMetrics, useNlRuns } from "@/lib/hooks";
 import type { ExecutionProfile, TaskStageAssertion, TaskStageRun } from "@/lib/types";
-import { format } from "date-fns";
+import { formatDashboardLongTime } from "@/features/dashboard/formatters";
 import { useState } from "react";
 
 export function NaturalLanguageAutomationCard() {
@@ -55,7 +55,10 @@ export function NaturalLanguageAutomationCard() {
         try {
             const [stages, assertions] = await Promise.all([
                 fetchTaskRunStages(runId),
-                fetchTaskRunAssertions(runId),
+                fetchTaskRunAssertions(runId, {
+                    failedOnly: true,
+                    limit: 20,
+                }),
             ]);
             setLastRunId(runId);
             setStageRuns(stages);
@@ -144,7 +147,11 @@ export function NaturalLanguageAutomationCard() {
             setSummary(summaryLine ? summaryLine.replace("Summary: ", "") : null);
             await loadRunDiagnostics(res.run_id);
             setHistory((prev) => [
-                { time: format(new Date(), "HH:mm:ss"), prompt: prompt || "(no prompt)", status: res.status },
+                {
+                    time: formatDashboardLongTime(new Date()),
+                    prompt: prompt || "(no prompt)",
+                    status: res.status,
+                },
                 ...prev,
             ].slice(0, 5));
         } catch {
@@ -191,7 +198,7 @@ export function NaturalLanguageAutomationCard() {
             setApprovalPolicy(res.policy);
             setApprovalHistory((prev) => [
                 {
-                    time: format(new Date(), "HH:mm:ss"),
+                    time: formatDashboardLongTime(new Date()),
                     action: `${approveAction.trim()} (${approvalDecision})`,
                     result: res.status,
                 },
@@ -249,7 +256,11 @@ export function NaturalLanguageAutomationCard() {
             setSummary(summaryLine ? summaryLine.replace("Summary: ", "") : null);
             await loadRunDiagnostics(execRes.run_id);
             setHistory((prev) => [
-                { time: format(new Date(), "HH:mm:ss"), prompt: prompt || "(no prompt)", status: execRes.status },
+                {
+                    time: formatDashboardLongTime(new Date()),
+                    prompt: prompt || "(no prompt)",
+                    status: execRes.status,
+                },
                 ...prev,
             ].slice(0, 5));
 
@@ -662,7 +673,7 @@ export function NaturalLanguageAutomationCard() {
                                 .slice(0, 5)
                                 .map((run) => (
                                     <div key={run.id} className="text-[10px] text-muted-foreground">
-                                        {format(new Date(run.created_at), "HH:mm:ss")} · {run.status} · {run.intent}
+                                        {formatDashboardLongTime(run.created_at)} · {run.status} · {run.intent}
                                         {run.summary ? ` · ${run.summary}` : ""}
                                     </div>
                                 ))}

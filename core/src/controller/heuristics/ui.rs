@@ -1,4 +1,10 @@
-use crate::applescript;
+use crate::{
+    applescript,
+    platform::{
+        app_matches_role, app_role_aliases, app_role_primary_name, current_platform, AppRole,
+        PlatformKind,
+    },
+};
 use sha2::{Digest, Sha256};
 
 pub fn looks_like_subject(text: &str) -> bool {
@@ -11,13 +17,29 @@ pub fn looks_like_subject(text: &str) -> bool {
             || lower.contains("subject"))
 }
 
+fn goal_mentions_role(goal: &str, role: AppRole) -> bool {
+    let lower = goal.to_lowercase();
+    app_role_aliases(current_platform().kind(), role)
+        .iter()
+        .any(|alias| lower.contains(&alias.to_lowercase()))
+}
+
 pub fn focus_text_area(app: &str, prefer_subject: bool) -> bool {
-    let script = match app {
-        "Mail" => {
-            if prefer_subject {
+    let kind = current_platform().kind();
+    if kind != PlatformKind::MacOS {
+        return false;
+    }
+
+    let mail_app = app_role_primary_name(kind, AppRole::MailClient);
+    let notes_app = app_role_primary_name(kind, AppRole::NotesApp);
+    let text_editor_app = app_role_primary_name(kind, AppRole::TextEditor);
+
+    let script = if app_matches_role(kind, AppRole::MailClient, app) {
+        if prefer_subject {
+            format!(
                 r#"
                     tell application "System Events"
-                        tell process "Mail"
+                        tell process "{}"
                             if exists window 1 then
                                 try
                                     if exists text field 1 of window 1 then
@@ -29,11 +51,14 @@ pub fn focus_text_area(app: &str, prefer_subject: bool) -> bool {
                         end tell
                     end tell
                     return ""
-                "#
-            } else {
+                "#,
+                mail_app
+            )
+        } else {
+            format!(
                 r#"
                     tell application "System Events"
-                        tell process "Mail"
+                        tell process "{}"
                             if exists window 1 then
                                 try
                                     if exists scroll area 1 of window 1 then
@@ -45,13 +70,15 @@ pub fn focus_text_area(app: &str, prefer_subject: bool) -> bool {
                         end tell
                     end tell
                     return ""
-                "#
-            }
+                "#,
+                mail_app
+            )
         }
-        "Notes" => {
+    } else if app_matches_role(kind, AppRole::NotesApp, app) {
+        format!(
             r#"
             tell application "System Events"
-                tell process "Notes"
+                tell process "{}"
                     if exists window 1 then
                         try
                             if exists scroll area 1 of window 1 then
@@ -63,12 +90,14 @@ pub fn focus_text_area(app: &str, prefer_subject: bool) -> bool {
                 end tell
             end tell
             return ""
-        "#
-        }
-        "TextEdit" => {
+        "#,
+            notes_app
+        )
+    } else if app_matches_role(kind, AppRole::TextEditor, app) {
+        format!(
             r#"
             tell application "System Events"
-                tell process "TextEdit"
+                tell process "{}"
                     if exists window 1 then
                         set wName to ""
                         try
@@ -96,16 +125,18 @@ pub fn focus_text_area(app: &str, prefer_subject: bool) -> bool {
                 end tell
             end tell
             return ""
-        "#
-        }
-        _ => "",
+        "#,
+            text_editor_app
+        )
+    } else {
+        String::new()
     };
 
     if script.is_empty() {
         return false;
     }
 
-    if let Ok(out) = applescript::run(script) {
+    if let Ok(out) = applescript::run(&script) {
         if !out.trim().is_empty() {
             return true;
         }
@@ -187,30 +218,30 @@ pub fn try_close_front_dialog() -> bool {
 
 pub fn goal_primary_app(goal: &str) -> Option<&'static str> {
     let lower = goal.to_lowercase();
-    if lower.contains("safari") || lower.contains("사파리") {
-        return Some("Safari");
+    let kind = current_platform().kind();
+    if goal_mentions_role(goal, AppRole::Browser) || lower.contains("브라우저") {
+        return Some(app_role_primary_name(kind, AppRole::Browser));
     }
-    if lower.contains("notes") || lower.contains("노트") || lower.contains("메모") {
-        return Some("Notes");
+    if goal_mentions_role(goal, AppRole::NotesApp) {
+        return Some(app_role_primary_name(kind, AppRole::NotesApp));
     }
-    if lower.contains("mail") || lower.contains("메일") || lower.contains("gmail") {
-        return Some("Mail");
+    if goal_mentions_role(goal, AppRole::MailClient) || lower.contains("gmail") {
+        return Some(app_role_primary_name(kind, AppRole::MailClient));
     }
-    if lower.contains("textedit") || lower.contains("텍스트에디트") || lower.contains("텍스트 편집")
-    {
-        return Some("TextEdit");
+    if goal_mentions_role(goal, AppRole::TextEditor) || lower.contains("텍스트 편집") {
+        return Some(app_role_primary_name(kind, AppRole::TextEditor));
     }
-    if lower.contains("calculator") || lower.contains("계산기") {
-        return Some("Calculator");
+    if goal_mentions_role(goal, AppRole::Calculator) {
+        return Some(app_role_primary_name(kind, AppRole::Calculator));
     }
-    if lower.contains("finder") || lower.contains("파인더") {
-        return Some("Finder");
+    if goal_mentions_role(goal, AppRole::FileManager) {
+        return Some(app_role_primary_name(kind, AppRole::FileManager));
     }
-    if lower.contains("preview") || lower.contains("미리보기") {
-        return Some("Preview");
+    if goal_mentions_role(goal, AppRole::Preview) {
+        return Some(app_role_primary_name(kind, AppRole::Preview));
     }
-    if lower.contains("calendar") || lower.contains("캘린더") {
-        return Some("Calendar");
+    if goal_mentions_role(goal, AppRole::Calendar) {
+        return Some(app_role_primary_name(kind, AppRole::Calendar));
     }
     None
 }
@@ -231,7 +262,7 @@ pub async fn ensure_app_focus(target_app: &str, retries: usize) -> bool {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or_else(|| retries.clamp(1, 2));
 
-    if let Ok(front) = crate::tool_chaining::CrossAppBridge::get_frontmost_app() {
+    if let Some(front) = current_platform().frontmost_app_name().ok().flatten() {
         if front.eq_ignore_ascii_case(target_app) {
             return true;
         }
@@ -240,7 +271,7 @@ pub async fn ensure_app_focus(target_app: &str, retries: usize) -> bool {
     for _ in 0..effective_retries {
         let _ = crate::tool_chaining::CrossAppBridge::switch_to_app(target_app);
         tokio::time::sleep(tokio::time::Duration::from_millis(220)).await;
-        if let Ok(front) = crate::tool_chaining::CrossAppBridge::get_frontmost_app() {
+        if let Some(front) = current_platform().frontmost_app_name().ok().flatten() {
             if front.eq_ignore_ascii_case(target_app) {
                 return true;
             }
@@ -265,18 +296,60 @@ pub fn resume_hint_for_goal(
     let lower = goal.to_lowercase();
     let cp = checkpoint.as_deref().unwrap_or("");
     let front = front_app.unwrap_or("");
-    if lower.contains("mail") && cp == "mail_compose_open" && front.eq_ignore_ascii_case("Mail") {
-        return Some(serde_json::json!({"action":"shortcut","key":"v","modifiers":["command"]}));
-    }
-    if lower.contains("notes") && cp == "notes_note_created" && front.eq_ignore_ascii_case("Notes")
+    let kind = current_platform().kind();
+    if (lower.contains("mail")
+        || lower.contains("메일")
+        || lower.contains("gmail")
+        || lower.contains("email"))
+        && cp == "mail_compose_open"
+        && app_matches_role(kind, AppRole::MailClient, front)
     {
         return Some(serde_json::json!({"action":"shortcut","key":"v","modifiers":["command"]}));
     }
-    if lower.contains("textedit")
+    if (lower.contains("notes") || lower.contains("노트") || lower.contains("메모"))
+        && cp == "notes_note_created"
+        && app_matches_role(kind, AppRole::NotesApp, front)
+    {
+        return Some(serde_json::json!({"action":"shortcut","key":"v","modifiers":["command"]}));
+    }
+    if (lower.contains("textedit")
+        || lower.contains("텍스트에디트")
+        || lower.contains("텍스트 편집"))
         && cp == "textedit_new_doc"
-        && front.eq_ignore_ascii_case("TextEdit")
+        && app_matches_role(kind, AppRole::TextEditor, front)
     {
         return Some(serde_json::json!({"action":"type","text":"Total hours per year: "}));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::{app_role_primary_name, AppRole};
+
+    #[test]
+    fn goal_primary_app_uses_platform_role_primary_names() {
+        let kind = current_platform().kind();
+        assert_eq!(
+            goal_primary_app("메일 보내기"),
+            Some(app_role_primary_name(kind, AppRole::MailClient))
+        );
+        assert_eq!(
+            goal_primary_app("메모 정리"),
+            Some(app_role_primary_name(kind, AppRole::NotesApp))
+        );
+        assert_eq!(
+            goal_primary_app("파인더에서 파일 찾기"),
+            Some(app_role_primary_name(kind, AppRole::FileManager))
+        );
+    }
+
+    #[test]
+    fn resume_hint_accepts_role_primary_front_app() {
+        let kind = current_platform().kind();
+        let checkpoint = Some("mail_compose_open".to_string());
+        let front = app_role_primary_name(kind, AppRole::MailClient);
+        assert!(resume_hint_for_goal("메일 보내기", &checkpoint, Some(front)).is_some());
+    }
 }

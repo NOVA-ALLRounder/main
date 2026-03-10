@@ -154,8 +154,10 @@ export function useLauncherPreflight({
                         : `${fix.message}${front}${recordedMessage}`
                 );
                 if (fix.recorded && fix.run_id) {
-                    await loadRunDiagnostics(fix.run_id);
-                    await loadDodHistory();
+                    await Promise.all([
+                        loadRunDiagnostics(fix.run_id),
+                        loadDodHistory(),
+                    ]);
                 }
                 await runPreflightCheck(true);
             } catch (error) {

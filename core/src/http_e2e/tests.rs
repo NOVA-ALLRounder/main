@@ -1,11 +1,32 @@
 use super::*;
 use serial_test::serial;
 use std::fs;
+use std::io::ErrorKind;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+async fn loopback_bind_supported() -> bool {
+    match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping http_e2e test: loopback listener bind is not permitted in this environment"
+            );
+            false
+        }
+        Err(error) => panic!("bind test listener for http_e2e test: {error}"),
+    }
+}
 
 #[tokio::test]
 #[serial]
 async fn http_e2e_smoke_passes_with_temp_workdir() {
+    if !loopback_bind_supported().await {
+        return;
+    }
+
     let workdir = tempfile::tempdir().expect("temp workdir");
     let report = run_http_e2e(workdir.path()).await.expect("http e2e report");
     assert!(report.ok, "steps failed: {:?}", report.steps);

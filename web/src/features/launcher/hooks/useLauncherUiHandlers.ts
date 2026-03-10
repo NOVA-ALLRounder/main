@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { ClipboardEvent, Dispatch, KeyboardEvent, RefObject, SetStateAction } from "react";
+import type { Dispatch, KeyboardEvent, RefObject, SetStateAction } from "react";
 
 import { sendChatMessage } from "@/lib/api";
 import type {
@@ -244,30 +244,6 @@ export function useLauncherUiHandlers({
         ]
     );
 
-    const handleInputPaste = useCallback(
-        (e: ClipboardEvent<HTMLInputElement>) => {
-            const pasted = e.clipboardData.getData("text");
-            if (!pasted) return;
-            e.preventDefault();
-            const normalized = pasted.replace(/\s+/g, " ").trim();
-            const target = e.currentTarget;
-            const start = target.selectionStart ?? target.value.length;
-            const end = target.selectionEnd ?? target.value.length;
-            const nextValue =
-                target.value.slice(0, start) + normalized + target.value.slice(end);
-            setInput(nextValue);
-            requestAnimationFrame(() => {
-                const caret = start + normalized.length;
-                try {
-                    target.setSelectionRange(caret, caret);
-                } catch {
-                    // no-op
-                }
-            });
-        },
-        [setInput]
-    );
-
     return {
         cancelPendingDispatch,
         handleSend,
@@ -275,6 +251,5 @@ export function useLauncherUiHandlers({
         handleQuickProgramAction,
         handleTelegramListenerCommand,
         handleKeyDown,
-        handleInputPaste,
     };
 }

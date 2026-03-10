@@ -71,15 +71,15 @@ pub(crate) async fn handle_feedback(
 }
 
 pub(crate) async fn get_selection_context() -> Json<serde_json::Value> {
-    #[cfg(target_os = "macos")]
-    {
-        match crate::macos::accessibility::get_selected_text() {
-            Some(text) => Json(serde_json::json!({ "found": true, "text": text })),
-            None => Json(serde_json::json!({ "found": false, "text": "" })),
-        }
+    match crate::platform::current_platform().selected_text() {
+        Ok(Some(text)) => Json(serde_json::json!({ "found": true, "text": text })),
+        Ok(None) => Json(serde_json::json!({ "found": false, "text": "" })),
+        Err(error) => Json(serde_json::json!({
+            "found": false,
+            "text": "",
+            "error": error.to_string()
+        })),
     }
-    #[cfg(not(target_os = "macos"))]
-    Json(serde_json::json!({ "found": false, "text": "", "error": "Not supported on this OS" }))
 }
 
 pub(crate) async fn list_sessions_handler() -> Json<serde_json::Value> {

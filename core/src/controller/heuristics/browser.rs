@@ -1,3 +1,5 @@
+use crate::platform::{app_matches_role, current_platform, AppRole};
+
 pub fn google_search_url(query: &str) -> String {
     let encoded = urlencoding::encode(query);
     format!("https://google.com/search?q={}", encoded)
@@ -8,12 +10,9 @@ pub fn google_lucky_url(query: &str) -> String {
     format!("https://www.google.com/search?q={}&btnI=1", encoded)
 }
 
-pub fn frontmost_browser(front_app: Option<&str>) -> Option<&'static str> {
-    match front_app {
-        Some(app) if app.eq_ignore_ascii_case("Safari") => Some("Safari"),
-        Some(app) if app.eq_ignore_ascii_case("Google Chrome") => Some("Google Chrome"),
-        _ => None,
-    }
+pub fn frontmost_browser(front_app: Option<&str>) -> Option<String> {
+    let kind = current_platform().kind();
+    front_app.and_then(|app| app_matches_role(kind, AppRole::Browser, app).then(|| app.to_string()))
 }
 
 pub fn is_google_search_goal(goal: &str) -> bool {
@@ -71,4 +70,33 @@ pub fn is_redirect_alert(title: &str, url: &str) -> bool {
         || t.contains("redirect")
         || u.contains("google.com/url?")
         || u.contains("google.co.kr/url?")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frontmost_browser;
+    use crate::platform::{app_role_aliases, app_role_primary_name, current_platform, AppRole};
+
+    #[test]
+    fn frontmost_browser_accepts_primary_platform_browser_name() {
+        let expected = app_role_primary_name(current_platform().kind(), AppRole::Browser);
+        assert_eq!(frontmost_browser(Some(expected)).as_deref(), Some(expected));
+    }
+
+    #[test]
+    fn frontmost_browser_accepts_platform_browser_aliases() {
+        let alias = app_role_aliases(current_platform().kind(), AppRole::Browser)
+            .iter()
+            .copied()
+            .find(|candidate| {
+                *candidate != app_role_primary_name(current_platform().kind(), AppRole::Browser)
+            })
+            .expect("browser alias should exist");
+        assert_eq!(frontmost_browser(Some(alias)).as_deref(), Some(alias));
+    }
+
+    #[test]
+    fn frontmost_browser_rejects_non_browser_apps() {
+        assert_eq!(frontmost_browser(Some("Mail")), None);
+    }
 }

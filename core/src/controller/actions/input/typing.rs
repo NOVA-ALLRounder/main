@@ -1,6 +1,8 @@
 use serde_json::json;
+use tokio::time::{sleep, Duration};
 
 use crate::controller::heuristics;
+use crate::platform::{app_role_primary_name, current_platform, AppRole};
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 
 use super::super::ActionRunner;
@@ -29,15 +31,22 @@ impl ActionRunner {
 
         let looks_like_calc = Self::looks_like_calc_expression(&text);
         if !forced_app && looks_like_calc {
-            if let Ok(front) = crate::tool_chaining::CrossAppBridge::get_frontmost_app() {
-                if !front.eq_ignore_ascii_case("Calculator") {
-                    let _ = heuristics::ensure_app_focus("Calculator", 3).await;
+            if let Some(front) = current_platform().frontmost_app_name().ok().flatten() {
+                if !Self::app_has_role(&front, AppRole::Calculator) {
+                    let _ = heuristics::ensure_app_focus(
+                        app_role_primary_name(current_platform().kind(), AppRole::Calculator),
+                        3,
+                    )
+                    .await;
                 }
             }
         }
 
-        let front_app =
-            crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
+        let front_app = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let app_name = plan
             .get("app")
             .and_then(|v| v.as_str())
@@ -45,7 +54,7 @@ impl ActionRunner {
             .map(|v| v.to_string())
             .unwrap_or_else(|| front_app.clone());
         if !app_name.trim().is_empty() {
-            if front_app.eq_ignore_ascii_case("Calculator") {
+            if Self::app_has_role(&front_app, AppRole::Calculator) {
                 let mut cleaned = text.replace(['×', 'x', 'X'], "*").replace(' ', "");
 
                 if cleaned.chars().all(|c| c.is_ascii_digit()) {
@@ -67,7 +76,7 @@ impl ActionRunner {
                 text = cleaned;
             }
 
-            if app_name.eq_ignore_ascii_case("Mail") {
+            if Self::app_has_role(&app_name, AppRole::MailClient) {
                 let draft_id = Self::mail_ensure_draft(Some(goal), history)
                     .ok()
                     .filter(|v| !v.trim().is_empty());
@@ -186,122 +195,82 @@ impl ActionRunner {
                 if *action_status_override != Some("failed") {
                     *action_status_override = Some("success");
                 }
-            } else if app_name.eq_ignore_ascii_case("Notes") {
-                let mut write_text = text.clone();
-                if write_text.trim().is_empty() {
-                    let quoted = Self::extract_quoted_fragments(goal)
-                        .into_iter()
-                        .filter(|s| {
-                            s.len() >= 3
-                                && !s.to_lowercase().contains("status:")
-                                && !s.to_lowercase().contains("cmd+")
-                                && !s.to_uppercase().starts_with("RUN_SCOPE_")
-                        })
-                        .collect::<Vec<_>>();
-                    if !quoted.is_empty() {
-                        write_text = quoted.join("\n");
-                    }
-                }
-                match Self::notes_write_text(&write_text, Some(goal)) {
-                    Ok(result) => {
-                        *description = format!("Typed '{}' (notes body)", write_text);
-                        *action_data = Some(json!({
-                            "proof": "notes_write_text",
-                            "text_len": write_text.chars().count(),
-                            "body_len": result.body_len
-                        }));
-                        *action_status_override = Some("success");
-                        Self::log_evidence(
-                            "notes",
-                            "write",
-                            &[
-                                ("status", "confirmed".to_string()),
-                                ("note_id", result.note_id),
-                                ("note_name", result.note_name),
-                                ("body_len", result.body_len.to_string()),
-                            ],
-                        );
-                    }
-                    Err(e) => {
-                        let step =
-                            SmartStep::new(UiAction::Type(write_text.clone()), "Typing Note");
-                        driver.add_step(step);
-                        *description = format!(
-                            "Typed '{}' (notes body) [visual fallback: {}]",
-                            write_text, e
-                        );
-                        *action_data = Some(json!({
-                            "proof": "notes_write_visual_fallback",
-                            "text_len": write_text.chars().count(),
-                            "error": e.to_string()
-                        }));
-                        *action_status_override = Some("success");
-                        let len_str = write_text.chars().count().to_string();
-                        Self::log_evidence(
-                            "notes",
-                            "write",
-                            &[
-                                ("status", "fallback".to_string()),
-                                ("note_id", "visual_fallback".to_string()),
-                                ("note_name", "Visual_Note".to_string()),
-                                ("body_len", len_str),
-                            ],
-                        );
-                    }
-                }
-            } else if app_name.eq_ignore_ascii_case("Notion") {
-                let step = SmartStep::new(UiAction::Type(text.clone()), "Typing Notion");
-                driver.add_step(step);
-                std::thread::sleep(std::time::Duration::from_millis(220));
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(r#"tell application "System Events" to keystroke "a" using command down"#)
-                    .status();
-                std::thread::sleep(std::time::Duration::from_millis(120));
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(r#"tell application "System Events" to keystroke "c" using command down"#)
-                    .status();
-                std::thread::sleep(std::time::Duration::from_millis(180));
-                let readback =
-                    crate::tool_chaining::CrossAppBridge::get_clipboard().unwrap_or_default();
-                let marker = Self::preferred_run_scope_marker(Some(goal)).unwrap_or_default();
-                let expected = if !marker.trim().is_empty() {
-                    marker
+            } else if Self::app_has_role(&app_name, AppRole::NotesApp) {
+                if app_name.eq_ignore_ascii_case("Notion") {
+                    Self::handle_notion_type_readback(
+                        goal,
+                        &text,
+                        driver,
+                        description,
+                        action_status_override,
+                        action_data,
+                    )
+                    .await;
                 } else {
-                    text.lines()
-                        .find(|line| !line.trim().is_empty())
-                        .map(|line| line.trim().to_string())
-                        .unwrap_or_default()
-                };
-                let matched = !expected.is_empty() && readback.contains(&expected);
-                if matched {
-                    *description = format!("Typed '{}' (notion body)", text);
-                    *action_status_override = Some("success");
-                    *action_data = Some(json!({
-                        "proof": "notion_readback",
-                        "text_len": text.chars().count(),
-                        "expected": expected,
-                        "readback_len": readback.chars().count()
-                    }));
-                } else {
-                    *description = if expected.is_empty() {
-                        "Type failed (notion readback: empty expectation)".to_string()
-                    } else {
-                        format!(
-                            "Type failed (notion readback missing marker: '{}')",
-                            expected
-                        )
-                    };
-                    *action_status_override = Some("failed");
-                    *action_data = Some(json!({
-                        "proof": "notion_readback_failed",
-                        "text_len": text.chars().count(),
-                        "expected": expected,
-                        "readback_len": readback.chars().count()
-                    }));
+                    let mut write_text = text.clone();
+                    if write_text.trim().is_empty() {
+                        let quoted = Self::extract_quoted_fragments(goal)
+                            .into_iter()
+                            .filter(|s| {
+                                s.len() >= 3
+                                    && !s.to_lowercase().contains("status:")
+                                    && !s.to_lowercase().contains("cmd+")
+                                    && !s.to_uppercase().starts_with("RUN_SCOPE_")
+                            })
+                            .collect::<Vec<_>>();
+                        if !quoted.is_empty() {
+                            write_text = quoted.join("\n");
+                        }
+                    }
+                    match Self::notes_write_text(&write_text, Some(goal)) {
+                        Ok(result) => {
+                            *description = format!("Typed '{}' (notes body)", write_text);
+                            *action_data = Some(json!({
+                                "proof": "notes_write_text",
+                                "text_len": write_text.chars().count(),
+                                "body_len": result.body_len
+                            }));
+                            *action_status_override = Some("success");
+                            Self::log_evidence(
+                                "notes",
+                                "write",
+                                &[
+                                    ("status", "confirmed".to_string()),
+                                    ("note_id", result.note_id),
+                                    ("note_name", result.note_name),
+                                    ("body_len", result.body_len.to_string()),
+                                ],
+                            );
+                        }
+                        Err(e) => {
+                            let step =
+                                SmartStep::new(UiAction::Type(write_text.clone()), "Typing Note");
+                            driver.add_step(step);
+                            *description = format!(
+                                "Typed '{}' (notes body) [visual fallback: {}]",
+                                write_text, e
+                            );
+                            *action_data = Some(json!({
+                                "proof": "notes_write_visual_fallback",
+                                "text_len": write_text.chars().count(),
+                                "error": e.to_string()
+                            }));
+                            *action_status_override = Some("success");
+                            let len_str = write_text.chars().count().to_string();
+                            Self::log_evidence(
+                                "notes",
+                                "write",
+                                &[
+                                    ("status", "fallback".to_string()),
+                                    ("note_id", "visual_fallback".to_string()),
+                                    ("note_name", "Visual_Note".to_string()),
+                                    ("body_len", len_str),
+                                ],
+                            );
+                        }
+                    }
                 }
-            } else if app_name.eq_ignore_ascii_case("TextEdit") {
+            } else if Self::app_has_role(&app_name, AppRole::TextEditor) {
                 let step = SmartStep::new(UiAction::Type(text.clone()), "Typing TextEdit");
                 driver.add_step(step);
                 *description = format!("Typed '{}' (textedit body visual)", text);
@@ -329,6 +298,56 @@ impl ActionRunner {
             let step = SmartStep::new(UiAction::Type(text.to_string()), "Typing");
             driver.add_step(step);
             *description = format!("Typed '{}'", text);
+        }
+    }
+
+    async fn handle_notion_type_readback(
+        goal: &str,
+        text: &str,
+        driver: &mut VisualDriver,
+        description: &mut String,
+        action_status_override: &mut Option<&'static str>,
+        action_data: &mut Option<serde_json::Value>,
+    ) {
+        let step = SmartStep::new(UiAction::Type(text.to_string()), "Typing Notion");
+        driver.add_step(step);
+        sleep(Duration::from_millis(220)).await;
+        let readback = Self::capture_front_text_via_platform(true, 120, 180).await;
+        let marker = Self::preferred_run_scope_marker(Some(goal)).unwrap_or_default();
+        let expected = if !marker.trim().is_empty() {
+            marker
+        } else {
+            text.lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.trim().to_string())
+                .unwrap_or_default()
+        };
+        let matched = !expected.is_empty() && readback.contains(&expected);
+        if matched {
+            *description = format!("Typed '{}' (notion body)", text);
+            *action_status_override = Some("success");
+            *action_data = Some(json!({
+                "proof": "notion_readback",
+                "text_len": text.chars().count(),
+                "expected": expected,
+                "readback_len": readback.chars().count()
+            }));
+        } else {
+            *description = if expected.is_empty() {
+                "Type failed (notion readback: empty expectation)".to_string()
+            } else {
+                format!(
+                    "Type failed (notion readback missing marker: '{}')",
+                    expected
+                )
+            };
+            *action_status_override = Some("failed");
+            *action_data = Some(json!({
+                "proof": "notion_readback_failed",
+                "text_len": text.chars().count(),
+                "expected": expected,
+                "readback_len": readback.chars().count()
+            }));
         }
     }
 }

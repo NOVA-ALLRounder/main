@@ -1,7 +1,9 @@
 use rusqlite::{params, Result};
 use serde_json::Value;
 
-use crate::db::{get_db_lock, normalize_admin_limit, truncate_text};
+use crate::db::{
+    normalize_admin_limit, truncate_text, with_read_conn, with_write_conn_if_available,
+};
 
 use super::support::{
     map_execution_memory_row, normalize_feedback_signal, optional_truncated_signature,
@@ -35,10 +37,10 @@ pub struct ExecutionMemoryRecord {
 
 #[cfg(test)]
 pub fn clear_execution_memory_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM execution_memory", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn upsert_execution_memory(
@@ -90,8 +92,7 @@ pub fn upsert_execution_memory_scoped(
     let request_signature = request_signature.and_then(optional_truncated_signature);
     let now = chrono::Utc::now().to_rfc3339();
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO execution_memory (
                 memory_scope, intent_command, params_key, params_json, request_signature, response_text,
@@ -140,7 +141,8 @@ pub fn upsert_execution_memory_scoped(
                 now,
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -166,8 +168,7 @@ pub fn get_execution_memory_scoped(
         return Ok(None);
     }
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, memory_scope, intent_command, params_key, params_json, request_signature,
                     response_text, source, tool_path, freshness_ttl_seconds, success,
@@ -185,8 +186,12 @@ pub fn get_execution_memory_scoped(
         if let Some(row) = rows.next()? {
             return Ok(Some(map_execution_memory_row(row)?));
         }
+        Ok(None)
+    }) {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn list_execution_memory_records(
@@ -194,9 +199,8 @@ pub fn list_execution_memory_records(
     include_suppressed: bool,
 ) -> Result<Vec<ExecutionMemoryRecord>> {
     let limit = normalize_admin_limit(limit);
-    let mut out = Vec::new();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
+        let mut out = Vec::new();
         let mut stmt = if include_suppressed {
             conn.prepare(
                 "SELECT id, memory_scope, intent_command, params_key, params_json, request_signature,
@@ -225,8 +229,12 @@ pub fn list_execution_memory_records(
         for row in rows.flatten() {
             out.push(row);
         }
+        Ok(out)
+    }) {
+        Ok(records) => Ok(records),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(out)
 }
 
 pub fn suppress_execution_memory(
@@ -253,20 +261,21 @@ pub fn suppress_execution_memory_scoped(
     let reason = reason
         .map(|value| truncate_text(value, 500))
         .filter(|value| !value.is_empty());
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "UPDATE execution_memory
              SET suppressed = 1,
-                 suppressed_reason = COALESCE(?1, suppressed_reason),
-                 suppressed_at = ?2,
+                suppressed_reason = COALESCE(?1, suppressed_reason),
+                suppressed_at = ?2,
                  updated_at = ?2
              WHERE memory_scope = ?3
                AND intent_command = ?4
                AND params_key = ?5",
             params![reason, now, memory_scope, intent_command, params_key],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -287,20 +296,21 @@ pub fn restore_execution_memory_scoped(
         return Ok(false);
     };
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "UPDATE execution_memory
              SET suppressed = 0,
-                 suppressed_reason = NULL,
-                 suppressed_at = NULL,
+                suppressed_reason = NULL,
+                suppressed_at = NULL,
                  updated_at = ?1
              WHERE memory_scope = ?2
                AND intent_command = ?3
                AND params_key = ?4",
             params![now, memory_scope, intent_command, params_key],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -320,8 +330,7 @@ pub fn delete_execution_memory_scoped(
     else {
         return Ok(false);
     };
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "DELETE FROM execution_memory
              WHERE memory_scope = ?1
@@ -329,7 +338,9 @@ pub fn delete_execution_memory_scoped(
                AND params_key = ?3",
             params![memory_scope, intent_command, params_key],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -371,8 +382,7 @@ pub fn record_execution_memory_feedback_scoped(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let positive_delta = if sentiment == "positive" { 1 } else { 0 };
         let negative_delta = if sentiment == "negative" { 1 } else { 0 };
         let rows = conn.execute(
@@ -395,7 +405,9 @@ pub fn record_execution_memory_feedback_scoped(
                 response_text
             ],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }

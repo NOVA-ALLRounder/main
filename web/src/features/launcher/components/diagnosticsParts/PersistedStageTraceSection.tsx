@@ -99,7 +99,7 @@ export function PersistedStageTraceSection({
                 {row.stage.stage_order}. {row.stage.stage_name}
               </div>
               <div className="opacity-80 mt-0.5">
-                {row.stage.status} · assertions {row.assertions.length} · failed {row.failed.length}
+                {row.stage.status} · assertions {row.assertionTotal} · failed {row.assertionFailed}
               </div>
               {(row.stage.retry_count ?? 0) > 0 && (
                 <div className="opacity-80 mt-0.5">

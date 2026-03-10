@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --background: 240 10% 3.9%;
     --foreground: 0 0% 98%;
 
@@ -117,6 +118,13 @@
     background: radial-gradient(closest-side, rgba(94, 164, 255, 0.26), transparent 70%);
     filter: blur(24px);
     animation: launcher-card-glow 7s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .launcher-root::before,
+    .launcher-card::after {
+      animation: none;
+    }
   }
 
   .launcher-composer {

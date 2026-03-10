@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use rusqlite::{params, Result};
 
-use super::super::{get_db_lock, list_launch_ops_events, truncate_text, LaunchOpsEventRecord};
+use super::super::{
+    list_launch_ops_events, truncate_text, with_read_conn, with_write_conn_if_available,
+    LaunchOpsEventRecord,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NLRun {
@@ -26,10 +29,10 @@ pub struct NLRunMetrics {
     pub success_rate: f64,
 }
 pub fn clear_nl_runs_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM nl_runs", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn insert_nl_run(
@@ -52,8 +55,7 @@ pub fn insert_nl_run_with_source_key(
     summary: Option<&str>,
     details: Option<&str>,
 ) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(changed) = with_write_conn_if_available(|conn| {
         let created_at = created_at
             .map(|value| truncate_text(value, 64))
             .filter(|value| !value.is_empty())
@@ -67,14 +69,15 @@ pub fn insert_nl_run_with_source_key(
              ON CONFLICT(source_key) DO NOTHING",
             params![created_at, intent, prompt, status, summary, details, source_key],
         )?;
-        return Ok(changed > 0);
+        Ok(changed > 0)
+    })? {
+        return Ok(changed);
     }
     Ok(false)
 }
 
 pub fn list_nl_runs(limit: i64) -> Result<Vec<NLRun>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, created_at, intent, prompt, status, summary, details
              FROM nl_runs
@@ -96,14 +99,12 @@ pub fn list_nl_runs(limit: i64) -> Result<Vec<NLRun>> {
         for row in rows {
             runs.push(row?);
         }
-        return Ok(runs);
-    }
-    Ok(Vec::new())
+        Ok(runs)
+    })
 }
 
 pub fn get_nl_run_metrics(limit: i64) -> Result<NLRunMetrics> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT
                 COUNT(*) as total,
@@ -141,16 +142,7 @@ pub fn get_nl_run_metrics(limit: i64) -> Result<NLRunMetrics> {
                 success_rate,
             })
         })?;
-        return Ok(metrics);
-    }
-    Ok(NLRunMetrics {
-        total: 0,
-        completed: 0,
-        manual_required: 0,
-        approval_required: 0,
-        blocked: 0,
-        error: 0,
-        success_rate: 0.0,
+        Ok(metrics)
     })
 }
 

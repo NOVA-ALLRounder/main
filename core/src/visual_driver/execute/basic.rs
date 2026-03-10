@@ -1,7 +1,8 @@
 use super::*;
+use crate::platform::current_platform;
 
 pub(super) fn execute_open_url(url: &str) -> Result<()> {
-    crate::applescript::open_url(url).map(|_| ())?;
+    current_platform().browser_navigate(url, None)?;
     Ok(())
 }
 
@@ -10,18 +11,21 @@ pub(super) async fn execute_wait(secs: u64) {
 }
 
 pub(super) async fn execute_click(step: &SmartStep, target: &str) -> Result<()> {
-    let target_clone = target.to_string();
-    let script = format!(
-        "tell application \"System Events\" to click button {:?} of window 1 of (first application process whose frontmost is true)",
-        target_clone
-    );
+    let target_name = target.to_string();
 
     if crate::env_flag("STEER_ADAPTIVE_POLLING") {
         info!("      ⏳ Adaptive Polling: Waiting for UI settle...");
         let _ = VisualDriver::wait_for_ui_settle(2000).await;
     }
 
-    let task = tokio::task::spawn_blocking(move || applescript::run(&script));
+    let task = tokio::task::spawn_blocking(move || {
+        let mut automation = crate::browser_automation::get_browser_automation();
+        automation.take_snapshot()?;
+        let ref_id = automation.find_by_name(&target_name).ok_or_else(|| {
+            anyhow::anyhow!("Element '{}' not found in current UI snapshot", target_name)
+        })?;
+        automation.click_by_ref(&ref_id, false)
+    });
 
     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_))) => Ok(()),
@@ -47,75 +51,12 @@ pub(super) async fn execute_click(step: &SmartStep, target: &str) -> Result<()> 
 
 pub(super) async fn execute_type(text: &str) -> Result<()> {
     let text_clone = text.to_string();
-    let text_for_native_fallback = text.to_string();
-    let compact: String = text_clone.chars().filter(|c| !c.is_whitespace()).collect();
-    let calc_like = !compact.is_empty()
-        && compact.chars().all(|c| {
-            c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '=' | '.' | ',' | '(' | ')')
-        });
-
-    let task = tokio::task::spawn_blocking(move || {
-        if calc_like {
-            let script = format!(
-                "tell application \"System Events\" to keystroke {:?}",
-                text_clone
-            );
-            applescript::run(&script)
-        } else {
-            let lines = [
-                "on run argv",
-                "set targetText to item 1 of argv",
-                "set oldClipboard to the clipboard",
-                "set the clipboard to targetText",
-                "tell application \"System Events\" to keystroke \"v\" using {command down}",
-                "delay 0.35",
-                "try",
-                "set the clipboard to oldClipboard",
-                "end try",
-                "return \"ok\"",
-                "end run",
-            ];
-            applescript::run_with_args(&lines, &[text_clone])
-        }
-    });
+    let task =
+        tokio::task::spawn_blocking(move || current_platform().browser_type_text(&text_clone, 0));
 
     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_))) => Ok(()),
-        Ok(Ok(Err(e))) => {
-            #[cfg(target_os = "macos")]
-            {
-                let err_text = e.to_string();
-                if should_fallback_to_native_type(&err_text) {
-                    warn!("      (Type permission issue detected, trying native fallback)");
-                    let fallback_text = text_for_native_fallback.clone();
-                    let fallback = tokio::task::spawn_blocking(move || {
-                        crate::macos::actions::type_text(&fallback_text)
-                    });
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), fallback).await {
-                        Ok(Ok(Ok(_))) => Ok(()),
-                        Ok(Ok(Err(e2))) => Err(anyhow::anyhow!(
-                            "Type Failed: {} | Native fallback failed: {}",
-                            err_text,
-                            e2
-                        )),
-                        Ok(Err(_)) => Err(anyhow::anyhow!(
-                            "Type Failed: {} | Native fallback task panic",
-                            err_text
-                        )),
-                        Err(_) => Err(anyhow::anyhow!(
-                            "Type Failed: {} | Native fallback timed out",
-                            err_text
-                        )),
-                    }
-                } else {
-                    Err(anyhow::anyhow!("Type Failed: {}", err_text))
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                Err(anyhow::anyhow!("Type Failed: {}", e))
-            }
-        }
+        Ok(Ok(Err(e))) => Err(anyhow::anyhow!("Type Failed: {}", e)),
         Ok(Err(_)) => Err(anyhow::anyhow!("Task Panic")),
         Err(_) => Err(anyhow::anyhow!("Type Timed Out")),
     }
@@ -123,12 +64,8 @@ pub(super) async fn execute_type(text: &str) -> Result<()> {
 
 pub(super) async fn execute_scroll(direction: &str) -> Result<()> {
     let dir = direction.to_lowercase();
-    let key_code = if dir == "up" { 116 } else { 121 };
-    let script = format!(
-        "tell application \"System Events\" to key code {}",
-        key_code
-    );
-    let task = tokio::task::spawn_blocking(move || applescript::run(&script));
+    let pixels = if dir == "up" { -480 } else { 480 };
+    let task = tokio::task::spawn_blocking(move || current_platform().browser_scroll(pixels));
     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_))) => Ok(()),
         Ok(Ok(Err(e))) => Err(anyhow::anyhow!("Scroll Failed: {}", e)),
@@ -139,13 +76,8 @@ pub(super) async fn execute_scroll(direction: &str) -> Result<()> {
 
 pub(super) async fn execute_activate_app(app: &str) -> Result<()> {
     let app_name = app.to_string();
-    let task = tokio::task::spawn_blocking(move || {
-        if app_name.to_lowercase() == "frontmost" {
-            applescript::activate_frontmost_app()
-        } else {
-            applescript::activate_app(&app_name)
-        }
-    });
+    let task =
+        tokio::task::spawn_blocking(move || current_platform().activate_app_by_name(&app_name));
     match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
         Ok(Ok(Ok(_))) => Ok(()),
         Ok(Ok(Err(e))) => Err(anyhow::anyhow!("Activate Failed: {}", e)),

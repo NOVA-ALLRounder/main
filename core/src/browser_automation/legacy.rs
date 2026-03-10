@@ -1,26 +1,19 @@
 use super::*;
 
-use anyhow::Context;
+use crate::platform::{app_role_primary_name, current_platform, AppRole};
 
 pub fn open_url_in_chrome(url: &str) -> Result<()> {
-    get_browser_automation().navigate(url, Some("Google Chrome"))
+    get_browser_automation().navigate(
+        url,
+        Some(app_role_primary_name(
+            current_platform().kind(),
+            AppRole::Browser,
+        )),
+    )
 }
 
 pub fn scroll_page(pixels: i32) -> Result<()> {
-    let direction = if pixels > 0 { "down" } else { "up" };
-    let amount = pixels.abs();
-    let script = format!(
-        r#"tell application "System Events" to scroll {} by {}"#,
-        direction, amount
-    );
-
-    std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to scroll")?;
-
-    Ok(())
+    current_platform().browser_scroll(pixels)
 }
 
 pub fn apply_flight_filters(

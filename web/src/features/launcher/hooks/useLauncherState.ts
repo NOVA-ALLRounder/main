@@ -54,7 +54,7 @@ export function useLauncherState() {
     const [approvalBusy, setApprovalBusy] = useState(false);
     const [dispatchBlockedReason, setDispatchBlockedReason] = useState<string | null>(null);
     const [dispatchBlockedUntilMs, setDispatchBlockedUntilMs] = useState<number | null>(null);
-    const [dispatchNowMs, setDispatchNowMs] = useState<number>(Date.now());
+    const [dispatchNowMs, setDispatchNowMs] = useState<number>(() => Date.now());
     const [pendingDispatch, setPendingDispatch] = useState<PendingDispatch | null>(null);
     const [goalRunAvailable, setGoalRunAvailable] = useState<boolean | null>(null);
     const [artifactTypeFilter, setArtifactTypeFilter] = useState<string>("all");

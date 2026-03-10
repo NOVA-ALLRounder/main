@@ -319,22 +319,9 @@
         </p>
         <div class="speaker-notes-box" style="font-size: 0.9rem; line-height: 1.5;">
           <span class="speaker-label">Slide 15–16 통합 설명 (1:50)</span>
-          “시간이짧은관계로, 아키텍쳐에대한 설명은 Q&A에서 다시돌아와 더 자세히 드리도록하고 지금은 넘어가도록 하겠습니다.<br><br>
-          전체 시스템은 왼쪽에서 오른쪽으로 하나의 폐쇄 루프로 설계되어 있는데요.<br><br>
-          <span class="action-cue">(슬라이드 오른쪽으로)</span><br>
-          먼저 입력은 CLI, Desktop, Telegram 등에서 들어오고, 로컬 API 서버(Axum + Auth)를 통해 코어로 전달됩니다.<br>
-          코어에서는 Orchestrator가 Intent Router(4-way 분류)와 Slot Filter를 통해 작업을 구조화합니다.<br>
-          이후 Zero-Trust Security 레이어를 통과해야 합니다. 여기에는 Chat Gate, Policy Engine, Approve Gate, 그리고 Write-Lock이 포함됩니다.<br>
-          이 단계에서 위험도가 평가되고, 승인되지 않은 쓰기 작업은 차단됩니다.<br><br>
-          <span class="action-cue">(슬라이드왼쪽으로)</span><br>
-          승인이 완료되면 Executor 계층에서 Shell Executor, Browser Automation, Visual Driver를 통해 OS Native Control로 실제 실행됩니다.<br>
-          실행 이후에는 Closed-Loop 검증이 작동합니다.<br>
-          OS Sensors가 실행 이벤트를 수집하고, Foreground/Idle 상태와 File Watcher 데이터를 모읍니다.<br>
-          이 데이터는 Privacy Filter를 거쳐 Collector(Python + Rust)로 들어가고,<br>
-          SQLite(steer.db)에 events → sessions → routines 구조로 저장됩니다.<br><br>
-          결과적으로 이 구조는<br>
-          입력 → 의도 해석 → 제로트러스트 승인 → <span class="action-cue">(슬라이드 왼쪽으로)</span> 네이티브 실행 → 증거 기반 검증 → 패턴 학습 → <span
-            class="action-cue">(슬라이드오른쪽으로)</span> 자동화 추천까지 이어지는 완전한 폐쇄 루프 아키텍처입니다.”
+          “시간이 짧은 관계로, 아키텍쳐에대한 자세한설명은 Q&A때 자세히 설명드리도록하고 지금은 흐름만 설명드리도록하겠습니다. 사용자의 자연어요청을 받아서 로컬api 서버가 llm 으로 내용을 전달합니다,
+          llm이 계획을하면 만들어진 계획은 zero trust에서 검증하고 검증에통과한 통과한 실행 명령은 executor에서 실행이되고 실행된 명령들은 기록되며, db에 쌓인 로그들은 패턴이 분석되어
+          워크플로우로 추천됩니다”
         </div>
       </section>
 

@@ -69,28 +69,28 @@ pub(super) async fn execute_click_visual(
                             let y = (y_raw as f32 * scale) as i32;
                             info!("      🎯 LLM Target: ({}, {}) [Scaled x{:.2}]", x, y, scale);
 
-                            #[cfg(target_os = "macos")]
-                            {
-                                use crate::macos::accessibility;
-                                if let Some((_sx, _sy)) = accessibility::get_element_center_at(x, y)
-                                {
+                            match crate::platform::current_platform().ui_element_center_at(x, y) {
+                                Ok(Some((_sx, _sy))) => {
                                     info!(
                                         "      🧲 Grounded: Valid UI Element confirmed at ({}, {})",
                                         x, y
                                     );
-                                } else {
-                                    warn!("      ⚠️  Warning: No UI Element found at coordinates via Accessibility API.");
+                                }
+                                Ok(None) => {
+                                    warn!(
+                                        "      ⚠️  Warning: No UI Element found at coordinates via platform adapter."
+                                    );
+                                }
+                                Err(error) => {
+                                    warn!(
+                                        "      ⚠️  Warning: UI grounding probe failed: {}",
+                                        error
+                                    );
                                 }
                             }
 
-                            let script = format!(
-                                "tell application \"System Events\" to click at {{{}, {}}}",
-                                x, y
-                            );
-                            debug!("      🖱️ Executing AppleScript: {}", script);
-                            let click_script = script.clone();
                             let click_task = tokio::task::spawn_blocking(move || {
-                                applescript::run(&click_script)
+                                crate::platform::current_platform().browser_click_at(x, y, false)
                             });
                             let click_result = tokio::time::timeout(
                                 tokio::time::Duration::from_millis(click_timeout_ms),
@@ -99,7 +99,7 @@ pub(super) async fn execute_click_visual(
                             .await;
 
                             match click_result {
-                                Ok(Ok(Ok(_))) => {
+                                Ok(Ok(Ok(()))) => {
                                     info!("      ✅ Click executed successfully!");
                                     break;
                                 }

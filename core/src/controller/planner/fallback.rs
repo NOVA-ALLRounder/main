@@ -1,4 +1,5 @@
 use super::Planner;
+use crate::platform::AppRole;
 
 impl Planner {
     pub(super) fn fallback_plan_from_goal(
@@ -36,9 +37,9 @@ impl Planner {
 
         let in_mail_context =
             match Self::last_opened_app(history) {
-                Some(app) => app.eq_ignore_ascii_case("Mail"),
+                Some(app) => Self::app_is_role(&app, AppRole::MailClient),
                 None => false,
-            } || Self::history_contains_case_insensitive(history, "Opened app: Mail");
+            } || Self::history_contains_opened_role_app(history, AppRole::MailClient);
         if !in_mail_context {
             return;
         }
@@ -63,10 +64,10 @@ impl Planner {
         if let Some(subject) = Self::extract_mail_subject_from_goal(goal) {
             *plan = serde_json::json!({
                 "action": "type",
-                "app": "Mail",
+                "app": Self::mail_client_app_name(),
                 "text": subject
             });
-            println!("   🔁 Rewrote action to set Mail subject before paste.");
+            println!("   🔁 Rewrote action to set mail subject before paste.");
         }
     }
 
@@ -116,8 +117,7 @@ impl Planner {
             return;
         };
 
-        let opened_marker = format!("Opened app: {}", next_app);
-        if Self::history_contains_case_insensitive(history, &opened_marker) {
+        if Self::history_contains_opened_app(history, next_app) {
             return;
         }
 
@@ -163,18 +163,21 @@ impl Planner {
             }
         }
 
-        if app_name.eq_ignore_ascii_case("Mail") {
+        if Self::app_is_role(&app_name, AppRole::MailClient) {
             if Self::goal_requires_mail_send(goal) && !Self::history_has_mail_send_done(history) {
                 if !Self::history_has_mail_body(history) {
-                    *plan = serde_json::json!({ "action": "paste", "app": "Mail" });
-                    println!("   🔁 Rewrote redundant Cmd+N to paste (Mail body pending).");
+                    *plan = serde_json::json!({ "action": "paste", "app": Self::mail_client_app_name() });
+                    println!("   🔁 Rewrote redundant Cmd+N to paste (mail body pending).");
                 } else {
-                    *plan = serde_json::json!({ "action": "mail_send", "app": "Mail" });
-                    println!("   🔁 Rewrote redundant Cmd+N to mail_send (Mail send pending).");
+                    *plan = serde_json::json!({
+                        "action": "mail_send",
+                        "app": Self::mail_client_app_name()
+                    });
+                    println!("   🔁 Rewrote redundant Cmd+N to mail_send (mail send pending).");
                 }
             } else {
                 *plan = serde_json::json!({ "action": "done" });
-                println!("   🔁 Rewrote redundant Cmd+N to done (Mail already satisfied).");
+                println!("   🔁 Rewrote redundant Cmd+N to done (mail already satisfied).");
             }
             return;
         }

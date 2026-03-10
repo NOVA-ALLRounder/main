@@ -12,7 +12,8 @@ use super::agent::{
     ApprovalPolicyQuery, ApprovalPolicyRequest, ApprovalPolicyResponse,
     CollectorHandoffReceiptsQuery, ExecAllowlistQuery, ExecAllowlistRequest, ExecApprovalQuery,
     ExecApprovalResolve, ExecResultsQuery, NLRunMetricsQuery, NLRunQuery, RoutineRunsQuery,
-    TaskRunsQuery, VerificationRunsQuery, WorkflowProvisionOpsQuery,
+    TaskRunArtifactsQuery, TaskRunAssertionsQuery, TaskRunsQuery, VerificationRunsQuery,
+    WorkflowProvisionOpsQuery,
 };
 
 // --- Routine Handlers ---
@@ -256,7 +257,7 @@ pub(crate) async fn get_task_run_handler(Path(run_id): Path<String>) -> impl Int
 }
 
 pub(crate) async fn list_task_stage_runs_handler(Path(run_id): Path<String>) -> impl IntoResponse {
-    match db::get_task_run(&run_id) {
+    match db::get_task_run_readonly(&run_id) {
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "task_run_not_found", "run_id": run_id })),
@@ -280,8 +281,22 @@ pub(crate) async fn list_task_stage_runs_handler(Path(run_id): Path<String>) -> 
 
 pub(crate) async fn list_task_stage_assertions_handler(
     Path(run_id): Path<String>,
+    Query(query): Query<TaskRunAssertionsQuery>,
 ) -> impl IntoResponse {
-    match db::get_task_run(&run_id) {
+    let options = db::TaskStageAssertionListOptions {
+        stage_name: query.stage_name.and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
+        failed_only: query.failed_only.unwrap_or(false),
+        limit: query.limit.map(|value| value.clamp(1, 500)),
+        offset: query.offset.unwrap_or(0).max(0),
+    };
+    match db::get_task_run_readonly(&run_id) {
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "task_run_not_found", "run_id": run_id })),
@@ -292,7 +307,7 @@ pub(crate) async fn list_task_stage_assertions_handler(
             Json(json!({ "error": "task_run_lookup_failed", "details": e.to_string() })),
         )
             .into_response(),
-        Ok(Some(_)) => match db::list_task_stage_assertions(&run_id) {
+        Ok(Some(_)) => match db::list_task_stage_assertions_with_options(&run_id, &options) {
             Ok(assertions) => (StatusCode::OK, Json(json!(assertions))).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -305,8 +320,21 @@ pub(crate) async fn list_task_stage_assertions_handler(
 
 pub(crate) async fn list_task_run_artifacts_handler(
     Path(run_id): Path<String>,
+    Query(query): Query<TaskRunArtifactsQuery>,
 ) -> impl IntoResponse {
-    match db::get_task_run(&run_id) {
+    let options = db::TaskRunArtifactListOptions {
+        artifact_type: query.artifact_type.and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
+        limit: query.limit.map(|value| value.clamp(1, 500)),
+        offset: query.offset.unwrap_or(0).max(0),
+    };
+    match db::get_task_run_readonly(&run_id) {
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "task_run_not_found", "run_id": run_id })),
@@ -317,7 +345,7 @@ pub(crate) async fn list_task_run_artifacts_handler(
             Json(json!({ "error": "task_run_lookup_failed", "details": e.to_string() })),
         )
             .into_response(),
-        Ok(Some(_)) => match db::list_task_run_artifacts(&run_id) {
+        Ok(Some(_)) => match db::list_task_run_artifacts_with_options(&run_id, &options) {
             Ok(artifacts) => Json(json!({ "artifacts": artifacts })).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

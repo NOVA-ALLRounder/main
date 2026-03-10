@@ -1,4 +1,5 @@
 use super::Planner;
+use crate::platform::AppRole;
 use chrono::{Local, Utc};
 
 impl Planner {
@@ -74,15 +75,14 @@ impl Planner {
         }
 
         let target_app = Self::text_staging_app();
-        let opened_marker = format!("Opened app: {}", target_app);
-        if !Self::history_contains_case_insensitive(history, &opened_marker) {
+        if !Self::history_contains_opened_app(history, target_app) {
             return Some(serde_json::json!({
                 "action": "open_app",
                 "name": target_app
             }));
         }
 
-        if target_app.eq_ignore_ascii_case("Notes")
+        if Self::app_is_role(target_app, AppRole::NotesApp)
             && !Self::history_contains_case_insensitive(history, "Created new item")
             && !Self::history_contains_case_insensitive(history, "shortcut 'n'")
         {
@@ -90,7 +90,7 @@ impl Planner {
                 "action": "shortcut",
                 "key": "n",
                 "modifiers": ["command"],
-                "app": "Notes"
+                "app": target_app
             }));
         }
 
@@ -196,10 +196,15 @@ impl Planner {
             return Some(serde_json::json!({ "action": "done" }));
         }
 
-        if !Self::history_contains_case_insensitive(history, "Opened app: Notion") {
+        let notes_app = crate::platform::app_role_primary_name(
+            crate::platform::current_platform().kind(),
+            AppRole::NotesApp,
+        );
+
+        if !Self::history_contains_opened_app(history, notes_app) {
             return Some(serde_json::json!({
                 "action": "open_app",
-                "name": "Notion"
+                "name": notes_app
             }));
         }
 
@@ -210,7 +215,7 @@ impl Planner {
                 "action": "shortcut",
                 "key": "n",
                 "modifiers": ["command"],
-                "app": "Notion"
+                "app": notes_app
             }));
         }
 
@@ -233,11 +238,8 @@ impl Planner {
         }
 
         let goal_lower = goal.to_lowercase();
-        let target_app = if goal_lower.contains("notes")
-            || goal_lower.contains("메모")
-            || goal_lower.contains("노트")
-        {
-            "Notes"
+        let target_app = if Self::goal_mentions_app_role(&goal_lower, AppRole::NotesApp) {
+            Self::notes_app_name()
         } else {
             Self::text_staging_app()
         };
@@ -248,15 +250,14 @@ impl Planner {
             todo_header
         );
 
-        let opened_marker = format!("Opened app: {}", target_app);
-        if !Self::history_contains_case_insensitive(history, &opened_marker) {
+        if !Self::history_contains_opened_app(history, target_app) {
             return Some(serde_json::json!({
                 "action": "open_app",
                 "name": target_app
             }));
         }
 
-        if target_app.eq_ignore_ascii_case("Notes")
+        if Self::app_is_role(target_app, AppRole::NotesApp)
             && !Self::history_contains_case_insensitive(history, "Created new item")
             && !Self::history_contains_case_insensitive(history, "shortcut 'n'")
         {
@@ -264,7 +265,7 @@ impl Planner {
                 "action": "shortcut",
                 "key": "n",
                 "modifiers": ["command"],
-                "app": "Notes"
+                "app": target_app
             }));
         }
 

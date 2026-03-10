@@ -1,6 +1,3 @@
-use anyhow::{Context, Result};
-use axum::{routing::post, Json, Router};
-use serde_json::json;
 use std::path::Path;
 
 use super::super::HttpE2EStepResult;
@@ -55,7 +52,6 @@ impl Drop for DbRuntimeIsolationGuard {
         crate::db::reset_connection();
         self.env_guard.restore_in_place();
         crate::db::reset_connection();
-        let _ = crate::db::init();
     }
 }
 
@@ -95,29 +91,6 @@ pub(in crate::http_e2e) fn push_step(
         ok,
         detail: detail.into(),
     });
-}
-
-pub(in crate::http_e2e) async fn spawn_digest_stub() -> Result<(String, ServerHandle)> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .context("failed to bind digest stub listener")?;
-    let addr = listener
-        .local_addr()
-        .context("failed to read digest stub addr")?;
-    let app = Router::new().route(
-        "/",
-        post(|| async {
-            Json(json!({
-                "status": "ok",
-                "notion_url": "https://www.notion.so/http-e2e-digest",
-                "top_headlines_text": "1. 헤드라인 A\n2. 헤드라인 B"
-            }))
-        }),
-    );
-    let join = tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    Ok((format!("http://{addr}/"), ServerHandle::new(join)))
 }
 
 pub(in crate::http_e2e) fn canonical_string(path: &Path) -> String {

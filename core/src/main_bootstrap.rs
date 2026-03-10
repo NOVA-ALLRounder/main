@@ -54,7 +54,7 @@ pub(crate) fn install_panic_hook() {
 
 pub(crate) async fn print_startup_banner_and_checks() {
     println!("🤖 Local OS Agent (Rust Native Mode) Started!");
-    println!("🔍 Checking Accessibility Permissions...");
+    println!("🔍 Checking UI Automation Permissions...");
     let ax_check = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         tokio::task::spawn_blocking(|| {
@@ -68,13 +68,13 @@ pub(crate) async fn print_startup_banner_and_checks() {
 
     match ax_check {
         Ok(Ok(Ok(output))) if output.status.success() => {
-            println!("✅ Accessibility Permissions: GRANTED.");
+            println!("✅ UI Automation Permissions: GRANTED.");
         }
         _ => {
             println!("\n\n################################################################");
-            println!("❌ WARNING: ACCESSIBILITY PERMISSIONS MISSING OR REVOKED!");
+            println!("❌ WARNING: UI AUTOMATION PERMISSIONS MISSING OR REVOKED!");
             println!("   The agent can launch apps but CANNOT click or type.");
-            println!("   FIX: Go to System Settings -> Privacy -> Accessibility");
+            println!("   FIX: Go to System Settings -> Privacy & Security -> Accessibility");
             println!("   ACTION: Remove (-) and Re-add (+) your Terminal / Agent.");
             println!("################################################################\n\n");
         }
@@ -83,7 +83,7 @@ pub(crate) async fn print_startup_banner_and_checks() {
     println!("--------------------------------------------------");
     let health = local_os_agent::dependency_check::SystemHealth::check_all();
     health.print_report();
-    println!("Type 'help' for commands. (Needs Accessibility Permissions)");
+    println!("Type 'help' for commands. (Needs UI Automation Permissions)");
     println!("--------------------------------------------------");
 }
 

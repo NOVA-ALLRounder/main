@@ -26,6 +26,8 @@ pub struct TaskStageRunRecord {
     pub retry_count: i64,
     pub max_retries: i64,
     pub next_retry_at: Option<String>,
+    pub assertion_total: i64,
+    pub assertion_failed: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

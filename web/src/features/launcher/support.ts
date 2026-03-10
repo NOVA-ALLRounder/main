@@ -65,6 +65,8 @@ export type StageTraceItem = {
     stage: TaskStageRun;
     assertions: TaskStageAssertion[];
     failed: TaskStageAssertion[];
+    assertionTotal: number;
+    assertionFailed: number;
 };
 
 export type RecoveryAction = {

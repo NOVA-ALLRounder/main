@@ -2,7 +2,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useReleaseGate, useVerificationRuns } from "@/lib/hooks";
 import { fetchHttpE2EHistory, fetchLatestHttpE2E, fetchLatestReleaseReadiness, fetchReleaseReadinessHistory, runHttpE2E, runPerformanceVerification, runReleaseReadiness, runRuntimeVerification, runVisualVerification, setReleaseBaseline } from "@/lib/api";
 import type { HttpE2EHistoryEntry, HttpE2EReport, PerformanceVerification, ReleaseReadiness, ReleaseReadinessHistoryEntry, RuntimeVerifyResult, VisualVerifyResult } from "@/lib/types";
-import { format } from "date-fns";
+import {
+    formatDashboardMonthDayTime,
+    formatDashboardNumericMonthDayTime,
+} from "@/features/dashboard/formatters";
 import { useEffect, useState } from "react";
 
 function formatMetricValue(value: number): string {
@@ -43,9 +46,7 @@ export function VerificationActionsCard() {
     const [httpE2eHistory, setHttpE2eHistory] = useState<HttpE2EHistoryEntry[]>([]);
     const [httpE2eHistoryLoading, setHttpE2eHistoryLoading] = useState(false);
 
-    const baselineTime = releaseGate?.baseline?.created_at
-        ? format(new Date(releaseGate.baseline.created_at), "MMM d HH:mm")
-        : "—";
+    const baselineTime = formatDashboardMonthDayTime(releaseGate?.baseline?.created_at);
 
     const loadReleaseReadinessHistory = async () => {
         setReleaseReadinessHistoryLoading(true);
@@ -157,7 +158,7 @@ export function VerificationActionsCard() {
         try {
             const baseline = await setReleaseBaseline();
             const created = baseline.created_at
-                ? format(new Date(baseline.created_at), "MMM d HH:mm")
+                ? formatDashboardMonthDayTime(baseline.created_at)
                 : "Saved";
             setBaselineStatus(`Baseline saved (${created}).`);
             refetchReleaseGate();
@@ -272,7 +273,7 @@ export function VerificationActionsCard() {
                         disabled={runtimeLoading}
                         className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                     >
-                        {runtimeLoading ? "Running..." : "Run runtime verification"}
+                        {runtimeLoading ? "Running…" : "Run runtime verification"}
                     </button>
                     {runtimeStatus && <div className="text-[11px] text-muted-foreground">{runtimeStatus}</div>}
                     {runtimeResult && (
@@ -323,7 +324,7 @@ export function VerificationActionsCard() {
                         disabled={performanceLoading}
                         className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                     >
-                        {performanceLoading ? "Running..." : "Run performance check"}
+                        {performanceLoading ? "Running…" : "Run performance check"}
                     </button>
                     {performanceStatus && <div className="text-[11px] text-muted-foreground">{performanceStatus}</div>}
                     {performanceResult && (
@@ -354,7 +355,7 @@ export function VerificationActionsCard() {
                         disabled={visualLoading}
                         className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                     >
-                        {visualLoading ? "Running..." : "Run visual check"}
+                        {visualLoading ? "Running…" : "Run visual check"}
                     </button>
                     {visualStatus && <div className="text-[11px] text-muted-foreground">{visualStatus}</div>}
                     {visualResult && (
@@ -385,21 +386,21 @@ export function VerificationActionsCard() {
                         disabled={baselineLoading}
                         className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                     >
-                        {baselineLoading ? "Saving..." : "Set release baseline"}
+                        {baselineLoading ? "Saving…" : "Set release baseline"}
                     </button>
                     {baselineStatus && <div className="text-[11px] text-muted-foreground">{baselineStatus}</div>}
                 </div>
                 <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span>Release readiness</span>
-                        <span>{releaseReadinessReport?.generated_at ? format(new Date(releaseReadinessReport.generated_at), "MMM d HH:mm") : "—"}</span>
+                        <span>{formatDashboardMonthDayTime(releaseReadinessReport?.generated_at)}</span>
                     </div>
                     <button
                         onClick={handleRunReleaseReadiness}
                         disabled={releaseReadinessLoading}
                         className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                     >
-                        {releaseReadinessLoading ? "Running..." : "Run release readiness (read-only)"}
+                        {releaseReadinessLoading ? "Running…" : "Run release readiness (read-only)"}
                     </button>
                     {releaseReadinessStatus && <div className="text-[11px] text-muted-foreground">{releaseReadinessStatus}</div>}
                     {!releaseReadinessStatus && (
@@ -518,7 +519,7 @@ export function VerificationActionsCard() {
                         <div className="flex items-center justify-between">
                             <span className="text-xs text-muted-foreground">HTTP source-of-truth smoke</span>
                             <span className="text-[11px] text-muted-foreground">
-                                {httpE2eReport?.generated_at ? format(new Date(httpE2eReport.generated_at), "MMM d HH:mm") : "—"}
+                                {formatDashboardMonthDayTime(httpE2eReport?.generated_at)}
                             </span>
                         </div>
                         <button
@@ -526,7 +527,7 @@ export function VerificationActionsCard() {
                             disabled={httpE2eLoading}
                             className="w-full text-[11px] py-1.5 rounded bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-50"
                         >
-                            {httpE2eLoading ? "Running..." : "Run live HTTP E2E"}
+                            {httpE2eLoading ? "Running…" : "Run live HTTP E2E"}
                         </button>
                         {httpE2eStatus && <div className="text-[11px] text-muted-foreground">{httpE2eStatus}</div>}
                         {httpE2eReport && (
@@ -566,7 +567,7 @@ export function VerificationActionsCard() {
                                     <div key={`${entry.generated_at}-${entry.report_json_path}`} className="flex items-center justify-between gap-3">
                                         <div className="min-w-0">
                                             <div className="truncate">
-                                                {format(new Date(entry.generated_at), "MMM d HH:mm")} · {entry.passed}/{entry.total}
+                                                {formatDashboardMonthDayTime(entry.generated_at)} · {entry.passed}/{entry.total}
                                             </div>
                                             <div className="truncate text-muted-foreground">
                                                 {entry.report_markdown_path}
@@ -594,7 +595,7 @@ export function VerificationActionsCard() {
                                 <div key={`${entry.generated_at}-${entry.report_json_path}`} className="flex items-center justify-between gap-3">
                                     <div className="min-w-0">
                                         <div className="truncate">
-                                            {format(new Date(entry.generated_at), "MMM d HH:mm")} · snapshot {entry.candidate_snapshot_count} · eval {entry.launch_eval_passed}/{entry.launch_eval_total} · http {entry.http_e2e_passed != null && entry.http_e2e_total != null ? `${entry.http_e2e_passed}/${entry.http_e2e_total}` : "n/a"}
+                                            {formatDashboardMonthDayTime(entry.generated_at)} · snapshot {entry.candidate_snapshot_count} · eval {entry.launch_eval_passed}/{entry.launch_eval_total} · http {entry.http_e2e_passed != null && entry.http_e2e_total != null ? `${entry.http_e2e_passed}/${entry.http_e2e_total}` : "n/a"}
                                         </div>
                                         <div className="truncate text-muted-foreground">
                                             {entry.report_markdown_path}
@@ -641,7 +642,7 @@ function VerificationRunHistory() {
                             {run.mode?.toUpperCase() ?? "—"}
                         </span>
                         <span className="text-muted-foreground">
-                            {format(new Date(run.created_at), "MM/dd HH:mm")}
+                            {formatDashboardNumericMonthDayTime(run.created_at)}
                         </span>
                     </div>
                 ))}

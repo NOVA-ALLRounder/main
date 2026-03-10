@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform::app_role_primary_name;
 
 pub(crate) fn step_requires_browser_focus(step_type: &StepType) -> bool {
     matches!(
@@ -8,14 +9,7 @@ pub(crate) fn step_requires_browser_focus(step_type: &StepType) -> bool {
 }
 
 pub(crate) fn is_browser_app(app_name: &str) -> bool {
-    let lower = app_name.to_lowercase();
-    lower.contains("safari")
-        || lower.contains("chrome")
-        || lower.contains("firefox")
-        || lower.contains("brave")
-        || lower.contains("edge")
-        || lower.contains("arc")
-        || lower.contains("opera")
+    app_matches_role(current_platform().kind(), AppRole::Browser, app_name)
 }
 
 pub(crate) fn interrupt_guard_enabled() -> bool {
@@ -280,14 +274,24 @@ pub(crate) async fn recover_expected_focus(
 
         let _ = heuristics::ensure_app_focus(expected_app, 3).await;
         if use_finder_bridge {
-            let front_now = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            let front_now = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if !app_matches_expected(&front_now, expected_app) {
-                let _ = heuristics::ensure_app_focus("Finder", 2).await;
+                let file_manager =
+                    app_role_primary_name(current_platform().kind(), AppRole::FileManager);
+                let _ = heuristics::ensure_app_focus(file_manager, 2).await;
                 let _ = heuristics::ensure_app_focus(expected_app, 3).await;
             }
         }
 
-        let front_after = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+        let front_after = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         last_front = front_after.clone();
         if app_matches_expected(&front_after, expected_app) {
             focus_state.recovered_events += 1;
@@ -331,14 +335,7 @@ pub(crate) async fn recover_browser_focus(
     front_before: &str,
 ) -> (bool, String) {
     focus_state.drift_events += 1;
-    let browser_candidates = [
-        "Google Chrome",
-        "Safari",
-        "Arc",
-        "Brave Browser",
-        "Microsoft Edge",
-        "Firefox",
-    ];
+    let browser_candidates = app_role_aliases(current_platform().kind(), AppRole::Browser);
     push_run_attempt(
         logs,
         "focus_handoff_browser",
@@ -349,7 +346,11 @@ pub(crate) async fn recover_browser_focus(
     for app in browser_candidates {
         focus_state.recovery_attempts += 1;
         let _ = heuristics::ensure_app_focus(app, 2).await;
-        let front_after = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+        let front_after = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         last_front = front_after.clone();
         if is_browser_app(&front_after) {
             focus_state.recovered_events += 1;

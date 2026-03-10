@@ -5,10 +5,16 @@ use super::*;
 async fn handle_chat_auto_routes_ai_digest_on_web_without_llm() {
     crate::db::init().ok();
     reset_memory_tables();
+    let _env = TestEnvGuard::capture(&[
+        "ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS",
+        "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+    ]);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test listener");
+    let Some(listener) =
+        bind_test_listener_or_skip("handle_chat_auto_routes_ai_digest_on_web_without_llm").await
+    else {
+        return;
+    };
     let addr = listener.local_addr().expect("listener addr");
     let app = axum::Router::new().route(
         "/",
@@ -60,8 +66,6 @@ async fn handle_chat_auto_routes_ai_digest_on_web_without_llm() {
         .response
         .contains("노션 링크: https://www.notion.so/test-ai-digest"));
     assert!(response.response.contains("헤드라인 A"));
-
-    std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
 }
 
 #[tokio::test]

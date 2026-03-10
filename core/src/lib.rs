@@ -34,6 +34,7 @@ pub mod integrations;
 pub mod memory;
 pub mod orchestrator;
 pub mod pattern_detector;
+pub mod platform;
 pub mod privacy;
 pub mod recommendation;
 pub mod recommendation_executor;

@@ -1,5 +1,6 @@
 use serde_json::json;
 
+use crate::platform::{current_platform, AppRole};
 use crate::session_store::Session;
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 
@@ -14,9 +15,12 @@ impl ActionRunner {
         action_status_override: &mut Option<&'static str>,
         action_data: &mut Option<serde_json::Value>,
     ) {
-        let front_app =
-            crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
-        if front_app.eq_ignore_ascii_case("Notes") {
+        let front_app = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if Self::app_has_role(&front_app, AppRole::NotesApp) {
             match Self::notes_read_text(Some(goal)) {
                 Ok(text) => {
                     if !text.trim().is_empty() {
@@ -37,7 +41,7 @@ impl ActionRunner {
             return;
         }
 
-        if front_app.eq_ignore_ascii_case("TextEdit") {
+        if Self::app_has_role(&front_app, AppRole::TextEditor) {
             match Self::textedit_read_text(Some(goal)) {
                 Ok(text) => {
                     if !text.trim().is_empty() {
@@ -81,7 +85,8 @@ impl ActionRunner {
             && inferred_text_app
                 .as_deref()
                 .map(|app| {
-                    app.eq_ignore_ascii_case("Notes") || app.eq_ignore_ascii_case("TextEdit")
+                    Self::app_has_role(app, AppRole::NotesApp)
+                        || Self::app_has_role(app, AppRole::TextEditor)
                 })
                 .unwrap_or(false)
         {

@@ -8,6 +8,4 @@ pub use history::{
     latest_http_e2e_report_path, list_http_e2e_history, load_latest_http_e2e_report,
 };
 pub(super) use reporting::{build_archive_paths, write_http_e2e_report};
-pub(super) use runtime::{
-    canonical_string, push_step, spawn_digest_stub, DbRuntimeIsolationGuard, ServerHandle,
-};
+pub(super) use runtime::{canonical_string, push_step, DbRuntimeIsolationGuard, ServerHandle};

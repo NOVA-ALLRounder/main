@@ -1,5 +1,6 @@
 use super::{Planner, PlannerTimingStats};
 use crate::controller::heuristics;
+use crate::platform::{current_platform, AppRole, PlatformFixAction};
 use anyhow::Result;
 use chrono::Utc;
 use std::sync::Arc;
@@ -143,14 +144,14 @@ impl Planner {
 
         let lower = goal.to_lowercase();
         let mut targets: Vec<&str> = Vec::new();
-        if lower.contains("mail") || lower.contains("메일") || lower.contains("이메일") {
-            targets.push("Mail");
+        if Self::goal_mentions_app_role(&lower, AppRole::MailClient) {
+            targets.push(Self::mail_client_app_name());
         }
-        if lower.contains("notes") || lower.contains("메모") {
-            targets.push("Notes");
+        if Self::goal_mentions_app_role(&lower, AppRole::NotesApp) {
+            targets.push(Self::notes_app_name());
         }
-        if lower.contains("textedit") {
-            targets.push("TextEdit");
+        if Self::goal_mentions_app_role(&lower, AppRole::TextEditor) {
+            targets.push(Self::text_editor_app_name());
         }
 
         for app in targets {
@@ -161,20 +162,10 @@ impl Planner {
             history.push(format!("CLEANUP_APP_READY: {}", app));
         }
 
-        if lower.contains("mail") || lower.contains("메일") || lower.contains("이메일") {
-            let lines = [
-                "tell application \"Mail\"",
-                "set _count to (count of outgoing messages)",
-                "if _count = 0 then return \"0\"",
-                "repeat with _msg in outgoing messages",
-                "try",
-                "set visible of _msg to false",
-                "end try",
-                "end repeat",
-                "return (_count as text)",
-                "end tell",
-            ];
-            if let Ok(out) = crate::applescript::run_with_args(&lines, &Vec::<String>::new()) {
+        if Self::goal_mentions_app_role(&lower, AppRole::MailClient) {
+            if let Ok(out) =
+                current_platform().run_fix_action(&PlatformFixAction::CleanupOutgoingMailDrafts)
+            {
                 let count = out.trim().to_string();
                 if !count.is_empty() {
                     history.push(format!("CLEANUP_MAIL_OUTGOING_HIDDEN: {}", count));

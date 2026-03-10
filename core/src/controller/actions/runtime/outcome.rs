@@ -1,3 +1,4 @@
+use crate::platform::current_platform;
 use serde_json::json;
 
 use super::super::ActionRunner;
@@ -56,7 +57,7 @@ impl ActionRunner {
         }
         history.push(description.to_string());
         if action_data.is_none() {
-            if let Ok(front_after) = crate::tool_chaining::CrossAppBridge::get_frontmost_app() {
+            if let Some(front_after) = current_platform().frontmost_app_name().ok().flatten() {
                 *action_data = Some(json!({
                     "front_app_after": front_after
                 }));

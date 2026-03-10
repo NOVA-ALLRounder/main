@@ -768,13 +768,63 @@ export async function fetchTaskRunStages(runId: string): Promise<TaskStageRun[]>
     return z.array(TaskStageRunSchema).parse(data);
 }
 
-export async function fetchTaskRunAssertions(runId: string): Promise<TaskStageAssertion[]> {
-    const { data } = await api.get(`/agent/task-runs/${encodeURIComponent(runId)}/assertions`);
+type TaskRunAssertionsOptions = {
+    limit?: number;
+    offset?: number;
+    stageName?: string;
+    failedOnly?: boolean;
+};
+
+type TaskRunArtifactsOptions = {
+    limit?: number;
+    offset?: number;
+    artifactType?: string;
+};
+
+export async function fetchTaskRunAssertions(
+    runId: string,
+    options: TaskRunAssertionsOptions = {}
+): Promise<TaskStageAssertion[]> {
+    const query = new URLSearchParams();
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+        query.set("limit", String(Math.max(1, Math.trunc(options.limit))));
+    }
+    if (typeof options.offset === "number" && Number.isFinite(options.offset) && options.offset > 0) {
+        query.set("offset", String(Math.trunc(options.offset)));
+    }
+    if (options.stageName?.trim()) {
+        query.set("stage_name", options.stageName.trim());
+    }
+    if (options.failedOnly) {
+        query.set("failed_only", "true");
+    }
+    const queryString = query.toString();
+    const suffix = queryString ? `?${queryString}` : "";
+    const { data } = await api.get(
+        `/agent/task-runs/${encodeURIComponent(runId)}/assertions${suffix}`
+    );
     return z.array(TaskStageAssertionSchema).parse(data);
 }
 
-export async function fetchTaskRunArtifacts(runId: string): Promise<TaskRunArtifact[]> {
-    const { data } = await api.get(`/agent/task-runs/${encodeURIComponent(runId)}/artifacts`);
+export async function fetchTaskRunArtifacts(
+    runId: string,
+    options: TaskRunArtifactsOptions = {}
+): Promise<TaskRunArtifact[]> {
+    const query = new URLSearchParams();
+    if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+        query.set("limit", String(Math.max(1, Math.trunc(options.limit))));
+    }
+    if (typeof options.offset === "number" && Number.isFinite(options.offset) && options.offset > 0) {
+        query.set("offset", String(Math.trunc(options.offset)));
+    }
+    if (options.artifactType?.trim()) {
+        query.set("artifact_type", options.artifactType.trim());
+    }
+    const queryString = query.toString();
+    const suffix = queryString ? `?${queryString}` : "";
+    const { data } = await api.get(
+        `/agent/task-runs/${encodeURIComponent(runId)}/artifacts${suffix}`
+    );
     return z
         .object({
             artifacts: z.array(TaskRunArtifactSchema),

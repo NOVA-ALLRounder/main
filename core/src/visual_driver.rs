@@ -18,7 +18,7 @@ mod support;
 #[path = "visual_driver/workflows.rs"]
 mod workflows;
 
-use support::{normalize_timeout_ms, should_fallback_to_native_type};
+use support::normalize_timeout_ms;
 pub use workflows::n8n_fallback_create_workflow;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

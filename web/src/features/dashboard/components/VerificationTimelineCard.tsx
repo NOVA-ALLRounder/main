@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { VerificationRun } from "@/lib/types";
-import { format } from "date-fns";
+import { formatDashboardLongTime } from "@/features/dashboard/formatters";
 import { useState } from "react";
 
 function formatRunDetails(details: string): string {
@@ -66,11 +66,11 @@ export function VerificationTimelineCard({ verificationRuns }: Props) {
                                 key={run.id}
                                 className="flex items-start justify-between gap-3 border-b border-white/5 pb-2 last:border-0 text-xs"
                             >
-                                <div className="space-y-1">
+                                <div className="min-w-0 space-y-1">
                                     <div className="font-semibold text-white/90">{run.kind}</div>
                                     <div className="text-muted-foreground line-clamp-2">{run.summary}</div>
                                     <div className="text-[10px] text-muted-foreground">
-                                        {format(new Date(run.created_at), "HH:mm:ss")}
+                                        {formatDashboardLongTime(run.created_at)}
                                     </div>
                                     {run.details && (
                                         <button

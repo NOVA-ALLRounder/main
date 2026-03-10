@@ -2,7 +2,7 @@ use rusqlite::{params, Result};
 
 use crate::recommendation::AutomationProposal;
 
-use super::get_db_lock;
+use super::{with_read_conn, with_write_conn_if_available};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,15 +43,14 @@ pub struct RecommendationMetrics {
 
 #[cfg(test)]
 pub fn clear_recommendations_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM recommendations", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn insert_recommendation(proposal: &AutomationProposal) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(inserted) = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         let actions_json =
             serde_json::to_string(&proposal.actions).unwrap_or_else(|_| "[]".to_string());
@@ -80,28 +79,31 @@ pub fn insert_recommendation(proposal: &AutomationProposal) -> Result<bool> {
                 None::<String>,
             ],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(inserted);
     }
     Ok(false)
 }
 
 pub fn count_recent_recommendations(hours: i64) -> Result<i64> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM recommendations WHERE created_at >= ?1",
             params![cutoff],
             |row| row.get(0),
         )?;
-        return Ok(count);
+        Ok(count)
+    }) {
+        Ok(count) => Ok(count),
+        Err(rusqlite::Error::InvalidQuery) => Ok(0),
+        Err(error) => Err(error),
     }
-    Ok(0)
 }
 
 pub fn get_recommendation_metrics() -> Result<RecommendationMetrics> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT
@@ -137,18 +139,21 @@ pub fn get_recommendation_metrics() -> Result<RecommendationMetrics> {
             })
         })?;
 
-        return Ok(metrics);
+        Ok(metrics)
+    }) {
+        Ok(metrics) => Ok(metrics),
+        Err(rusqlite::Error::InvalidQuery) => Ok(RecommendationMetrics {
+            total: 0,
+            approved: 0,
+            rejected: 0,
+            failed: 0,
+            pending: 0,
+            later: 0,
+            legacy_other: 0,
+            last_created_at: None,
+        }),
+        Err(error) => Err(error),
     }
-    Ok(RecommendationMetrics {
-        total: 0,
-        approved: 0,
-        rejected: 0,
-        failed: 0,
-        pending: 0,
-        later: 0,
-        legacy_other: 0,
-        last_created_at: None,
-    })
 }
 
 fn normalize_recommendation_feedback_status(value: &str) -> Option<&'static str> {
@@ -174,8 +179,7 @@ pub fn record_recommendation_feedback(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(updated) = with_write_conn_if_available(|conn| {
         let updated = conn.execute(
             "UPDATE recommendations
              SET feedback_status = ?1,
@@ -185,28 +189,31 @@ pub fn record_recommendation_feedback(
              WHERE id = ?4",
             params![normalized_status, note, now, id],
         )?;
-        return Ok(updated > 0);
+        Ok(updated > 0)
+    })? {
+        return Ok(updated);
     }
     Ok(false)
 }
 
 pub fn has_recent_pattern_recommendation(pattern_id: &str, hours: i64) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let cutoff = (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM recommendations WHERE pattern_id = ?1 AND created_at >= ?2",
             params![pattern_id, cutoff],
             |row| row.get(0),
         )?;
-        return Ok(count > 0);
+        Ok(count > 0)
+    }) {
+        Ok(found) => Ok(found),
+        Err(rusqlite::Error::InvalidQuery) => Ok(false),
+        Err(error) => Err(error),
     }
-    Ok(false)
 }
 
 pub fn insert_routine_candidate(pattern: &crate::pattern_detector::DetectedPattern) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         let samples_json = serde_json::to_string(&pattern.sample_events).unwrap_or_default();
 
@@ -224,13 +231,13 @@ pub fn insert_routine_candidate(pattern: &crate::pattern_detector::DetectedPatte
                 samples_json
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn seed_advanced_examples() -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let count: i64 =
             conn.query_row("SELECT count(*) FROM recommendations", [], |row| row.get(0))?;
 
@@ -309,13 +316,13 @@ pub fn seed_advanced_examples() -> Result<()> {
                 0.9
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_recommendations_with_filter(status_filter: Option<&str>) -> Result<Vec<Recommendation>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let sql = match status_filter {
             Some("all") => "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error, snoozed_until, category, business_score, feedback_status, feedback_note, feedback_count, last_feedback_at FROM recommendations ORDER BY created_at DESC",
             Some(_) => "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error, snoozed_until, category, business_score, feedback_status, feedback_note, feedback_count, last_feedback_at FROM recommendations WHERE status = ?1 ORDER BY created_at DESC",
@@ -345,8 +352,10 @@ pub fn get_recommendations_with_filter(status_filter: Option<&str>) -> Result<Ve
         };
 
         Ok(recs)
-    } else {
-        Ok(Vec::new())
+    }) {
+        Ok(recs) => Ok(recs),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
@@ -359,8 +368,7 @@ pub fn list_recommendations(status: &str, _limit: i64) -> Result<Vec<Recommendat
 }
 
 pub fn get_recent_recommendations(limit: i64) -> Result<Vec<Recommendation>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error, snoozed_until, category, business_score, feedback_status, feedback_note, feedback_count, last_feedback_at
              FROM recommendations
@@ -374,9 +382,12 @@ pub fn get_recent_recommendations(limit: i64) -> Result<Vec<Recommendation>> {
         for r in rows {
             recs.push(r?);
         }
-        return Ok(recs);
+        Ok(recs)
+    }) {
+        Ok(recs) => Ok(recs),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Recommendation> {
@@ -410,8 +421,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Recommendation> {
 }
 
 pub fn get_recommendation(id: i64) -> Result<Option<Recommendation>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, status, title, summary, trigger, actions, n8n_prompt, confidence, workflow_id, workflow_json, evidence, pattern_id, last_error, snoozed_until, category, business_score, feedback_status, feedback_note, feedback_count, last_feedback_at
              FROM recommendations
@@ -451,13 +461,16 @@ pub fn get_recommendation(id: i64) -> Result<Option<Recommendation>> {
                 last_feedback_at: row.get(19).ok(),
             }));
         }
+        Ok(None)
+    }) {
+        Ok(rec) => Ok(rec),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn update_recommendation_status(id: i64, status: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE recommendations
              SET status = ?1,
@@ -468,13 +481,13 @@ pub fn update_recommendation_status(id: i64, status: &str) -> Result<()> {
              WHERE id = ?2",
             params![status, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn mark_recommendation_failed(id: i64, error: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE recommendations
              SET status = CASE
@@ -485,13 +498,13 @@ pub fn mark_recommendation_failed(id: i64, error: &str) -> Result<()> {
              WHERE id = ?2",
             params![error, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn claim_recommendation_provisioning(id: i64, claim_token: &str) -> Result<Option<String>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(claimed) = with_write_conn_if_available(|conn| {
         let mut stmt = conn.prepare(
             "SELECT workflow_id
              FROM recommendations
@@ -538,6 +551,9 @@ pub fn claim_recommendation_provisioning(id: i64, claim_token: &str) -> Result<O
                 return Ok(Some(current.to_string()));
             }
         }
+        Ok(None)
+    })? {
+        return Ok(claimed);
     }
     Ok(None)
 }

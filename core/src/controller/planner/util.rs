@@ -1,4 +1,5 @@
 use super::Planner;
+use crate::platform::current_platform;
 use std::path::{Path, PathBuf};
 
 pub(super) fn notion_api_ready() -> bool {
@@ -73,8 +74,11 @@ pub(super) fn capture_node_evidence(
 
     match status {
         Ok(s) if s.success() => {
-            let front_app = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-                .unwrap_or_else(|_| "unknown".to_string());
+            let front_app = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "unknown".to_string());
             println!(
                 "   📸 Node evidence: {} | step={} action={} phase={} front_app={} note={}",
                 full_path.display(),

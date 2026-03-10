@@ -26,10 +26,14 @@ export function deriveSuggestionRecommendations({
   watchRecommendationCache,
 }: DeriveSuggestionRecommendationsParams) {
   const pendingRecs = recs?.filter((rec) => rec.status === "pending") ?? [];
+  const liveRecommendations = new Map<number, Recommendation>();
+  for (const rec of recs ?? []) {
+    liveRecommendations.set(rec.id, rec);
+  }
   const merged = new Map<number, Recommendation>();
   pendingRecs.forEach((rec) => merged.set(rec.id, rec));
   for (const id of watchRecommendationIds) {
-    const live = recs?.find((rec) => rec.id === id);
+    const live = liveRecommendations.get(id);
     if (live) {
       merged.set(id, live);
       continue;

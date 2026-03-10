@@ -32,7 +32,17 @@ pub fn build_api_router(state: AppState) -> Router {
 pub async fn start_api_server(
     llm_client: Option<std::sync::Arc<dyn llm_gateway::LLMClient>>,
 ) -> anyhow::Result<()> {
+    let port = std::env::var("STEER_API_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(5680);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to bind port {}: {}", port, error))?;
+
     mark_api_server_started_at();
+    println!("🌐 Desktop API server running on http://localhost:{}", port);
 
     let telegram_polling_explicit = std::env::var("STEER_TELEGRAM_POLLING").ok();
     if telegram_polling_requested() {
@@ -79,19 +89,8 @@ pub async fn start_api_server(
         llm_client,
         current_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
-
     spawn_workflow_provision_recovery_loop(state.llm_client.clone());
     let app = build_api_router(state);
-
-    let port = std::env::var("STEER_API_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(5680);
-    println!("🌐 Desktop API server running on http://localhost:{}", port);
-
-    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to bind port {}: {}", port, error))?;
 
     axum::serve(listener, app)
         .await

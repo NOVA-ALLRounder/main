@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::controller::actions::ActionRunner;
+use crate::platform::current_platform;
 
 impl ActionRunner {
     pub(in crate::controller::actions) async fn handle_n8n_create_workflow(
@@ -35,7 +36,7 @@ impl ActionRunner {
             Ok(n8n) => match n8n.create_workflow(&name, &workflow, false).await {
                 Ok(workflow_id) => {
                     let editor_url = format!("http://localhost:5678/workflow/{}", workflow_id);
-                    let _ = crate::applescript::open_url(&editor_url);
+                    let _ = current_platform().browser_navigate(&editor_url, None);
                     *description =
                         format!("n8n workflow created: {} ({})", workflow_id, editor_url);
                     *action_status_override = Some("success");

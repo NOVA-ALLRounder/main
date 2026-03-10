@@ -25,7 +25,7 @@ async fn main() -> ExitCode {
             }
         }
         Err(error) => {
-            eprintln!("Allvia HTTP E2E failed: {}", error);
+            eprintln!("Allvia HTTP E2E failed: {:#}", error);
             ExitCode::from(1)
         }
     }

@@ -4,8 +4,6 @@ use serde_json::json;
 use crate::llm_gateway::LLMClient;
 use crate::visual_driver::{SmartStep, VisualDriver};
 
-use crate::applescript;
-
 #[path = "actions/clipboard.rs"]
 mod clipboard;
 #[path = "actions/content/mod.rs"]
@@ -131,26 +129,8 @@ impl ActionRunner {
         // Pre-action focus: keep action target app frontmost to prevent drift.
         Self::stabilize_focus_for_action(action_type, plan, history, goal).await;
 
-        // Safari privacy report popover close (pre-step safeguard)
         if action_type == "snapshot" {
-            if let Ok(front) = crate::tool_chaining::CrossAppBridge::get_frontmost_app() {
-                if front.eq_ignore_ascii_case("Safari") {
-                    let close_script = r#"
-                        tell application "System Events"
-                            tell process "Safari"
-                                if exists window 1 then
-                                    if exists pop over 1 of window 1 then
-                                        try
-                                            click button 1 of pop over 1 of window 1
-                                        end try
-                                    end if
-                                end if
-                            end tell
-                        end tell
-                    "#;
-                    let _ = applescript::run(close_script);
-                }
-            }
+            let _ = crate::platform::current_platform().prepare_snapshot_surface();
         }
 
         Self::dispatch_action(

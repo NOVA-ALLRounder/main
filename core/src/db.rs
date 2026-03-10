@@ -41,14 +41,16 @@ mod runs;
 #[cfg(test)]
 pub use runs::clear_nl_runs_for_tests;
 pub use runs::{
-    claim_task_run, create_task_run, get_latest_inflight_task_run, get_nl_run_metrics,
-    get_release_nl_run_metrics, get_task_run, insert_nl_run, insert_nl_run_with_source_key,
-    list_nl_runs, list_task_run_artifacts, list_task_runs, list_task_stage_assertions,
-    list_task_stage_runs, mark_orphaned_inflight_task_runs_failed,
-    mark_stale_running_task_runs_finished, record_task_stage_assertion, record_task_stage_run,
-    sync_release_nl_runs_from_launch_ops, update_task_run_outcome, upsert_task_run_artifact, NLRun,
-    NLRunMetrics, TaskRunArtifactRecord, TaskRunRecord, TaskStageAssertionRecord,
-    TaskStageRunRecord,
+    claim_singleton_task_run, claim_task_run, create_task_run, get_latest_inflight_task_run,
+    get_nl_run_metrics, get_release_nl_run_metrics, get_task_run, get_task_run_readonly,
+    insert_nl_run, insert_nl_run_with_source_key, list_nl_runs, list_task_run_artifacts,
+    list_task_run_artifacts_with_options, list_task_runs, list_task_stage_assertions,
+    list_task_stage_assertions_with_options, list_task_stage_runs,
+    mark_orphaned_inflight_task_runs_failed, mark_stale_running_task_runs_finished,
+    record_task_stage_assertion, record_task_stage_run, sync_release_nl_runs_from_launch_ops,
+    update_task_run_outcome, upsert_task_run_artifact, NLRun, NLRunMetrics,
+    TaskRunArtifactListOptions, TaskRunArtifactRecord, TaskRunRecord,
+    TaskStageAssertionListOptions, TaskStageAssertionRecord, TaskStageRunRecord,
 };
 
 #[path = "db/recommendation_review.rs"]
@@ -131,7 +133,9 @@ pub(crate) use routines::{
 #[path = "db/bootstrap.rs"]
 mod bootstrap;
 pub use bootstrap::{current_db_path, init, reset_connection};
-pub(crate) use bootstrap::{ensure_approval_decisions_table, get_db_lock};
+pub(crate) use bootstrap::{
+    ensure_approval_decisions_table, with_read_conn, with_write_conn_if_available,
+};
 
 fn truncate_text(input: &str, max_chars: usize) -> String {
     input.trim().chars().take(max_chars).collect::<String>()

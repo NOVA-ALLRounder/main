@@ -13,15 +13,14 @@ export function FeedbackCard() {
         let mounted = true;
         fetchCurrentGoal()
             .then((g) => {
-                if (mounted && g && !goal) {
-                    setGoal(g);
-                }
+                if (!mounted || !g) return;
+                setGoal((currentGoal) => currentGoal || g);
             })
             .catch(() => {});
         return () => {
             mounted = false;
         };
-    }, [goal]);
+    }, []);
 
     const handleSubmit = async () => {
         if (!goal.trim() || !feedback.trim()) {

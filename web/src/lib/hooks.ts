@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchSystemStatus, fetchLogs, fetchRoutines, fetchRecommendations, fetchRecommendationMetrics, fetchExecApprovals, fetchExecAllowlist, fetchExecResults, fetchRoutineRuns, fetchLatestQualityScore, fetchConsistencyCheck, fetchSemanticVerification, fetchReleaseGate, fetchVerificationRuns, fetchNlRuns, fetchNlRunMetrics, fetchApprovalPolicies, type ReleaseGateOverrides } from "./api";
+import { retryUnlessOffline } from "./queryRetry";
 
 const retryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 15000);
 
@@ -10,7 +11,7 @@ export function useSystemStatus() {
         refetchInterval: 3000, // Poll every 3 seconds (reduced from 2 to prevent flicker)
         refetchIntervalInBackground: false,
         placeholderData: (previousData) => previousData, // Keep previous data visible during refetch
-        retry: 2,
+        retry: retryUnlessOffline(2),
         retryDelay,
     });
 }
@@ -20,7 +21,7 @@ export function useLogs() {
         queryKey: ["logs"],
         queryFn: fetchLogs,
         refetchInterval: 5000, // Poll every 5 seconds
-        retry: 2,
+        retry: retryUnlessOffline(2),
         retryDelay,
     });
 }
@@ -30,7 +31,7 @@ export function useRoutines() {
         queryKey: ["routines"],
         queryFn: fetchRoutines,
         refetchInterval: 10000, // Poll every 10 seconds
-        retry: 2,
+        retry: retryUnlessOffline(2),
         retryDelay,
     });
 }
@@ -40,7 +41,7 @@ export function useRecommendations(category: string = "work") {
         queryKey: ["recommendations", category],
         queryFn: () => fetchRecommendations(category),
         refetchInterval: 10000,
-        retry: 2,
+        retry: retryUnlessOffline(2),
         retryDelay,
     });
 }
@@ -52,7 +53,7 @@ export function useRecommendationMetrics() {
         refetchInterval: 15000,
         refetchIntervalInBackground: false,
         placeholderData: (previousData) => previousData,
-        retry: 2,
+        retry: retryUnlessOffline(2),
         retryDelay,
     });
 }

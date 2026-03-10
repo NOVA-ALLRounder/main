@@ -1,9 +1,14 @@
+use crate::platform::{app_role_aliases, current_platform, AppRole};
+
 use super::super::ActionRunner;
 
 impl ActionRunner {
     pub(in crate::controller::actions) fn goal_mentions_mail(goal: &str) -> bool {
         let lower = goal.to_lowercase();
-        lower.contains("mail") || lower.contains("gmail") || lower.contains("메일")
+        app_role_aliases(current_platform().kind(), AppRole::MailClient)
+            .iter()
+            .any(|alias| lower.contains(&alias.to_lowercase()))
+            || lower.contains("gmail")
     }
 
     pub(in crate::controller::actions) fn goal_mentions_telegram(goal: &str) -> bool {
@@ -112,16 +117,18 @@ impl ActionRunner {
         history: &[String],
     ) -> Option<(String, String)> {
         let prefer_notes = Self::last_text_app_from_history(history)
-            .map(|app| app.eq_ignore_ascii_case("Notes"))
+            .map(|app| Self::app_has_role(&app, AppRole::NotesApp))
             .unwrap_or(true);
+        let notes_app = Self::role_app_name(AppRole::NotesApp);
+        let text_editor = Self::role_app_name(AppRole::TextEditor);
         let source_order = if prefer_notes {
-            ["Notes", "TextEdit"]
+            [notes_app, text_editor]
         } else {
-            ["TextEdit", "Notes"]
+            [text_editor, notes_app]
         };
 
         for source in source_order {
-            let raw = if source == "Notes" {
+            let raw = if Self::app_has_role(source, AppRole::NotesApp) {
                 Self::notes_read_text(Some(goal))
             } else {
                 Self::textedit_read_text(Some(goal))

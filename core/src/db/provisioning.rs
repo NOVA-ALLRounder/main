@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, Result};
 
-use super::get_db_lock;
+use super::{with_read_conn, with_write_conn_if_available};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CollectorHandoffReceiptRecord {
@@ -26,6 +26,36 @@ pub struct WorkflowProvisionOpRecord {
     pub updated_at: String,
 }
 
+fn map_collector_handoff_receipt_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CollectorHandoffReceiptRecord> {
+    Ok(CollectorHandoffReceiptRecord {
+        id: row.get(0)?,
+        received_at: row.get(1)?,
+        package_id: row.get(2)?,
+        collector_row_id: row.get(3).ok(),
+        status: row.get(4)?,
+        recommendation_id: row.get(5).ok(),
+        detail: row.get(6).ok(),
+    })
+}
+
+fn map_workflow_provision_op_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<WorkflowProvisionOpRecord> {
+    Ok(WorkflowProvisionOpRecord {
+        id: row.get(0)?,
+        recommendation_id: row.get(1)?,
+        claim_token: row.get(2)?,
+        status: row.get(3)?,
+        workflow_id: row.get(4)?,
+        workflow_json: row.get(5)?,
+        error: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
 pub fn record_collector_handoff_receipt(
     package_id: &str,
     collector_row_id: Option<i64>,
@@ -46,8 +76,7 @@ pub fn record_collector_handoff_receipt(
         ));
     }
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let received_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO collector_handoff_receipts (
@@ -62,39 +91,32 @@ pub fn record_collector_handoff_receipt(
                 detail
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_collector_handoff_receipts(limit: i64) -> Result<Vec<CollectorHandoffReceiptRecord>> {
     let bounded_limit = limit.clamp(1, 500);
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, received_at, package_id, collector_row_id, status, recommendation_id, detail
              FROM collector_handoff_receipts
              ORDER BY id DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![bounded_limit], |row| {
-            Ok(CollectorHandoffReceiptRecord {
-                id: row.get(0)?,
-                received_at: row.get(1)?,
-                package_id: row.get(2)?,
-                collector_row_id: row.get(3).ok(),
-                status: row.get(4)?,
-                recommendation_id: row.get(5).ok(),
-                detail: row.get(6).ok(),
-            })
-        })?;
+        let rows = stmt.query_map(params![bounded_limit], map_collector_handoff_receipt_row)?;
 
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
         }
-        return Ok(out);
+        Ok(out)
+    }) {
+        Ok(rows) => Ok(rows),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn list_workflow_provision_ops(
@@ -102,8 +124,7 @@ pub fn list_workflow_provision_ops(
     status: Option<&str>,
     recommendation_id: Option<i64>,
 ) -> Result<Vec<WorkflowProvisionOpRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let capped = limit.clamp(1, 500);
         let mut rows_out = Vec::new();
         let status_filter = status.map(str::trim).filter(|s| !s.is_empty());
@@ -117,19 +138,10 @@ pub fn list_workflow_provision_ops(
                      ORDER BY updated_at DESC
                      LIMIT ?3",
                 )?;
-                let rows = stmt.query_map(params![rec_id, status_value, capped], |row| {
-                    Ok(WorkflowProvisionOpRecord {
-                        id: row.get(0)?,
-                        recommendation_id: row.get(1)?,
-                        claim_token: row.get(2)?,
-                        status: row.get(3)?,
-                        workflow_id: row.get(4)?,
-                        workflow_json: row.get(5)?,
-                        error: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                    })
-                })?;
+                let rows = stmt.query_map(
+                    params![rec_id, status_value, capped],
+                    map_workflow_provision_op_row,
+                )?;
                 for row in rows {
                     rows_out.push(row?);
                 }
@@ -142,19 +154,8 @@ pub fn list_workflow_provision_ops(
                      ORDER BY updated_at DESC
                      LIMIT ?2",
                 )?;
-                let rows = stmt.query_map(params![rec_id, capped], |row| {
-                    Ok(WorkflowProvisionOpRecord {
-                        id: row.get(0)?,
-                        recommendation_id: row.get(1)?,
-                        claim_token: row.get(2)?,
-                        status: row.get(3)?,
-                        workflow_id: row.get(4)?,
-                        workflow_json: row.get(5)?,
-                        error: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                    })
-                })?;
+                let rows =
+                    stmt.query_map(params![rec_id, capped], map_workflow_provision_op_row)?;
                 for row in rows {
                     rows_out.push(row?);
                 }
@@ -167,19 +168,8 @@ pub fn list_workflow_provision_ops(
                      ORDER BY updated_at DESC
                      LIMIT ?2",
                 )?;
-                let rows = stmt.query_map(params![status_value, capped], |row| {
-                    Ok(WorkflowProvisionOpRecord {
-                        id: row.get(0)?,
-                        recommendation_id: row.get(1)?,
-                        claim_token: row.get(2)?,
-                        status: row.get(3)?,
-                        workflow_id: row.get(4)?,
-                        workflow_json: row.get(5)?,
-                        error: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                    })
-                })?;
+                let rows =
+                    stmt.query_map(params![status_value, capped], map_workflow_provision_op_row)?;
                 for row in rows {
                     rows_out.push(row?);
                 }
@@ -191,27 +181,18 @@ pub fn list_workflow_provision_ops(
                      ORDER BY updated_at DESC
                      LIMIT ?1",
                 )?;
-                let rows = stmt.query_map(params![capped], |row| {
-                    Ok(WorkflowProvisionOpRecord {
-                        id: row.get(0)?,
-                        recommendation_id: row.get(1)?,
-                        claim_token: row.get(2)?,
-                        status: row.get(3)?,
-                        workflow_id: row.get(4)?,
-                        workflow_json: row.get(5)?,
-                        error: row.get(6)?,
-                        created_at: row.get(7)?,
-                        updated_at: row.get(8)?,
-                    })
-                })?;
+                let rows = stmt.query_map(params![capped], map_workflow_provision_op_row)?;
                 for row in rows {
                     rows_out.push(row?);
                 }
             }
         }
-        return Ok(rows_out);
+        Ok(rows_out)
+    }) {
+        Ok(rows) => Ok(rows),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn latest_workflow_provision_op(
@@ -222,21 +203,20 @@ pub fn latest_workflow_provision_op(
 }
 
 pub fn release_recommendation_provisioning_claim(id: i64, claim_token: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE recommendations
              SET workflow_id = NULL
              WHERE id = ?1 AND workflow_id = ?2",
             params![id, claim_token],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn mark_recommendation_approved(id: i64, workflow_id: &str, workflow_json: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let approved_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE recommendations
@@ -244,7 +224,8 @@ pub fn mark_recommendation_approved(id: i64, workflow_id: &str, workflow_json: &
              WHERE id = ?4",
             params![workflow_id, workflow_json, approved_at, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -324,8 +305,7 @@ pub fn create_workflow_provision_op(
     recommendation_id: i64,
     claim_token: Option<&str>,
 ) -> Result<i64> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(id) = with_write_conn_if_available(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO workflow_provision_ops (
@@ -333,7 +313,9 @@ pub fn create_workflow_provision_op(
             ) VALUES (?1, ?2, 'requested', NULL, NULL, NULL, ?3, ?3)",
             params![recommendation_id, claim_token, now],
         )?;
-        return Ok(conn.last_insert_rowid());
+        Ok(conn.last_insert_rowid())
+    })? {
+        return Ok(id);
     }
     Err(rusqlite::Error::SqliteFailure(
         rusqlite::ffi::Error::new(1),
@@ -346,8 +328,7 @@ pub fn mark_workflow_provision_created(
     workflow_id: &str,
     workflow_json: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE workflow_provision_ops
@@ -362,36 +343,37 @@ pub fn mark_workflow_provision_created(
              WHERE id = ?4",
             params![workflow_id, workflow_json, now, op_id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn mark_workflow_provision_in_progress(op_id: i64, detail: Option<&str>) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         update_workflow_provision_op_status_with_conn(conn, op_id, "provisioning", detail)?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn mark_workflow_provision_failed(op_id: i64, error: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         update_workflow_provision_op_status_with_conn(conn, op_id, "failed", Some(error))?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn mark_workflow_provision_reconcile_needed(op_id: i64, error: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         update_workflow_provision_op_status_with_conn(
             conn,
             op_id,
             "reconcile_needed",
             Some(error),
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -401,8 +383,7 @@ pub fn commit_workflow_provision_success(
     workflow_id: &str,
     workflow_json: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(()) = with_write_conn_if_available(|conn| {
         return commit_workflow_provision_success_with_conn(
             conn,
             op_id,
@@ -410,6 +391,8 @@ pub fn commit_workflow_provision_success(
             workflow_id,
             workflow_json,
         );
+    })? {
+        return Ok(());
     }
     Err(rusqlite::Error::SqliteFailure(
         rusqlite::ffi::Error::new(1),
@@ -430,9 +413,8 @@ pub fn reconcile_workflow_provision_ops(limit: i64) -> Result<Vec<String>> {
             .and_then(|v| v.trim().parse::<i64>().ok())
             .map(|v| v.clamp(30, 172_800))
             .unwrap_or(900);
-    let mut lock = get_db_lock();
-    let mut outcomes = Vec::new();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(outcomes) = with_write_conn_if_available(|conn| {
+        let mut outcomes = Vec::new();
         let mut stale_stmt = conn.prepare(
             "SELECT id, recommendation_id, claim_token, status, updated_at
              FROM workflow_provision_ops
@@ -614,6 +596,9 @@ pub fn reconcile_workflow_provision_ops(limit: i64) -> Result<Vec<String>> {
                 }
             }
         }
+        Ok(outcomes)
+    })? {
+        return Ok(outcomes);
     }
-    Ok(outcomes)
+    Ok(Vec::new())
 }

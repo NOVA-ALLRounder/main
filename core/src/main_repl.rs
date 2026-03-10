@@ -9,16 +9,14 @@ use crate::main_commands::{
 use chrono::Utc;
 use local_os_agent::schema::{AgentAction, EventEnvelope};
 use local_os_agent::{
-    applescript, bash_executor, db, env_flag, llm_gateway, monitor, orchestrator, policy, security,
+    applescript, bash_executor, db, env_flag, llm_gateway, macos, monitor, orchestrator, policy,
+    security,
 };
 use serde_json::json;
 use std::sync::Arc;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
 use tracing::{error, info, warn};
 use uuid::Uuid;
-
-#[cfg(target_os = "macos")]
-use local_os_agent::macos;
 
 fn print_help() {
     println!("Commands:");
@@ -108,12 +106,9 @@ pub(crate) async fn run_repl_loop(
                 } else {
                     None
                 };
-                println!("[MacOS] Snapshotting...");
-                #[cfg(target_os = "macos")]
-                {
-                    let tree = macos::accessibility::snapshot(scope);
-                    println!("📄 Snapshot:\n{}", serde_json::to_string_pretty(&tree)?);
-                }
+                println!("[Platform] Snapshotting...");
+                let tree = local_os_agent::platform::current_platform().ui_snapshot(scope)?;
+                println!("📄 Snapshot:\n{}", serde_json::to_string_pretty(&tree)?);
             }
             "type" => {
                 if parts.len() < 2 {

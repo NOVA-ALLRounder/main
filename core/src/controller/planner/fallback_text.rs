@@ -1,56 +1,28 @@
 use super::Planner;
+use crate::platform::AppRole;
 
 impl Planner {
     pub(super) fn ordered_apps_in_goal(goal: &str) -> Vec<&'static str> {
         let goal_lower = Self::normalize_text_for_matching(goal);
-        let app_aliases = [
-            ("calendar", "Calendar"),
-            ("캘린더", "Calendar"),
-            ("calendario", "Calendar"),
-            ("カレンダー", "Calendar"),
-            ("日历", "Calendar"),
-            ("google chrome", "Google Chrome"),
-            ("chrome", "Google Chrome"),
-            ("크롬", "Google Chrome"),
-            ("cromo", "Google Chrome"),
-            ("クローム", "Google Chrome"),
-            ("谷歌浏览器", "Google Chrome"),
-            ("safari", "Safari"),
-            ("サファリ", "Safari"),
-            ("파인더", "Finder"),
-            ("finder", "Finder"),
-            ("explorador", "Finder"),
-            ("textedit", "TextEdit"),
-            ("텍스트에디트", "TextEdit"),
-            ("notes", "Notes"),
-            ("note", "Notes"),
-            ("노트", "Notes"),
-            ("메모장", "Notes"),
-            ("메모", "Notes"),
-            ("notas", "Notes"),
-            ("nota", "Notes"),
-            ("notes app", "Notes"),
-            ("メモ", "Notes"),
-            ("ノート", "Notes"),
-            ("笔记", "Notes"),
-            ("記事", "Notes"),
-            ("calculator", "Calculator"),
-            ("계산기", "Calculator"),
-            ("calculadora", "Calculator"),
-            ("計算機", "Calculator"),
-            ("计算器", "Calculator"),
-            ("mail", "Mail"),
-            ("이메일", "Mail"),
-            ("메일", "Mail"),
-            ("correo", "Mail"),
-            ("email", "Mail"),
-            ("メール", "Mail"),
-            ("邮箱", "Mail"),
-        ];
-        let mut found: Vec<(usize, &'static str)> = app_aliases
-            .iter()
-            .filter_map(|(alias, app)| goal_lower.find(alias).map(|idx| (idx, *app)))
-            .collect();
+        let mut found: Vec<(usize, &'static str)> = Vec::new();
+        for role in [
+            AppRole::FileManager,
+            AppRole::TextEditor,
+            AppRole::NotesApp,
+            AppRole::MailClient,
+            AppRole::Browser,
+            AppRole::Calendar,
+            AppRole::Calculator,
+        ] {
+            let app_name = Self::app_name_for_role(role);
+            for alias in
+                crate::platform::app_role_aliases(crate::platform::current_platform().kind(), role)
+            {
+                if let Some(idx) = goal_lower.find(&alias.to_lowercase()) {
+                    found.push((idx, app_name));
+                }
+            }
+        }
         found.sort_by_key(|(idx, _)| *idx);
         let mut ordered: Vec<&'static str> = Vec::new();
         for (_, app) in found {
@@ -309,47 +281,17 @@ impl Planner {
 
     pub(super) fn extract_known_app_from_text(text: &str) -> Option<&'static str> {
         let lower = Self::normalize_text_for_matching(text);
-        let aliases = [
-            ("calendar", "Calendar"),
-            ("캘린더", "Calendar"),
-            ("calendario", "Calendar"),
-            ("カレンダー", "Calendar"),
-            ("日历", "Calendar"),
-            ("google chrome", "Google Chrome"),
-            ("chrome", "Google Chrome"),
-            ("크롬", "Google Chrome"),
-            ("cromo", "Google Chrome"),
-            ("クローム", "Google Chrome"),
-            ("谷歌浏览器", "Google Chrome"),
-            ("notes", "Notes"),
-            ("메모", "Notes"),
-            ("노트", "Notes"),
-            ("notas", "Notes"),
-            ("nota", "Notes"),
-            ("メモ", "Notes"),
-            ("ノート", "Notes"),
-            ("笔记", "Notes"),
-            ("textedit", "TextEdit"),
-            ("mail", "Mail"),
-            ("메일", "Mail"),
-            ("correo", "Mail"),
-            ("email", "Mail"),
-            ("メール", "Mail"),
-            ("邮箱", "Mail"),
-            ("finder", "Finder"),
-            ("safari", "Safari"),
-            ("calculator", "Calculator"),
-            ("계산기", "Calculator"),
-            ("calculadora", "Calculator"),
-            ("計算機", "Calculator"),
-            ("计算器", "Calculator"),
-            ("notion", "Notion"),
-            ("노션", "Notion"),
-        ];
-
-        for (needle, app) in aliases {
-            if lower.contains(needle) {
-                return Some(app);
+        for role in [
+            AppRole::FileManager,
+            AppRole::TextEditor,
+            AppRole::NotesApp,
+            AppRole::MailClient,
+            AppRole::Browser,
+            AppRole::Calendar,
+            AppRole::Calculator,
+        ] {
+            if Self::goal_mentions_app_role(&lower, role) {
+                return Some(Self::app_name_for_role(role));
             }
         }
         None
@@ -360,8 +302,7 @@ impl Planner {
         history: &[String],
     ) -> Option<&'static str> {
         for app in Self::ordered_apps_in_goal(goal) {
-            let marker = format!("Opened app: {}", app);
-            if !Self::history_contains_case_insensitive(history, &marker) {
+            if !Self::history_contains_opened_app(history, app) {
                 return Some(app);
             }
         }

@@ -1,4 +1,5 @@
 use super::Planner;
+use crate::platform::AppRole;
 use crate::session_store::Session;
 use chrono::Utc;
 use unicode_normalization::UnicodeNormalization;
@@ -7,14 +8,22 @@ fn base_session(goal: &str) -> Session {
     Session::new(goal, Some("planner_test"))
 }
 
+fn app_name(role: AppRole) -> &'static str {
+    Planner::app_name_for_role(role)
+}
+
+fn opened_app(role: AppRole) -> String {
+    format!("Opened app: {}", app_name(role))
+}
+
 #[test]
 fn summarize_execution_success_for_non_mail_goal() {
     let goal = "Notes를 열고 간단한 메모를 작성하고 done 하세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Notes", "success", None);
+    session.add_step("open_app", &opened_app(AppRole::NotesApp), "success", None);
     session.add_step("type", "Typed '회의 준비'", "success", None);
     let history = vec![
-        "Opened app: Notes".to_string(),
+        opened_app(AppRole::NotesApp),
         "Typed '회의 준비'".to_string(),
     ];
 
@@ -34,9 +43,14 @@ fn summarize_execution_success_for_non_mail_goal() {
 fn summarize_execution_fails_if_any_step_failed() {
     let goal = "TextEdit를 열고 문서를 작성하세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: TextEdit", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::TextEditor),
+        "success",
+        None,
+    );
     session.add_step("type", "Type failed: blocked by dialog", "failed", None);
-    let history = vec!["Opened app: TextEdit".to_string()];
+    let history = vec![opened_app(AppRole::TextEditor)];
 
     let summary = Planner::summarize_execution(
         goal,
@@ -54,7 +68,7 @@ fn summarize_execution_fails_if_any_step_failed() {
 fn summarize_execution_treats_shortcut_permission_failure_as_non_blocking() {
     let goal = "노트에서 최근 TODO 정리해줘";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Notes", "success", None);
+    session.add_step("open_app", &opened_app(AppRole::NotesApp), "success", None);
     session.add_step(
             "shortcut",
             "Shortcut 'n' + [\"command\"] | driver execution failed: Shortcut Failed: AppleScript Error: not allowed to send keystrokes (1002)",
@@ -63,7 +77,7 @@ fn summarize_execution_treats_shortcut_permission_failure_as_non_blocking() {
         );
     session.add_step("type", "Typed '오늘 할 일 5개 정리'", "success", None);
     let history = vec![
-        "Opened app: Notes".to_string(),
+        opened_app(AppRole::NotesApp),
         "Typed '오늘 할 일 5개 정리'".to_string(),
     ];
 
@@ -95,7 +109,12 @@ fn summarize_execution_treats_recovered_comparison_type_failure_as_non_blocking(
         "success",
         None,
     );
-    session.add_step("open_app", "Opened app: TextEdit", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::TextEditor),
+        "success",
+        None,
+    );
     session.add_step(
             "type",
             "Typed 'comparison body' | driver execution failed: Type Failed: AppleScript Error: not allowed to send keystrokes (1002) | Native fallback timed out",
@@ -111,7 +130,7 @@ fn summarize_execution_treats_recovered_comparison_type_failure_as_non_blocking(
     let history = vec![
         "Opened URL 'https://www.google.com/search?q=openclaw+alternatives'".to_string(),
         "READ_RESULT: 후보 제품 추출 완료".to_string(),
-        "Opened app: TextEdit".to_string(),
+        opened_app(AppRole::TextEditor),
         "EXECUTION_ERROR: Critical type action failed: ... keystroke ... (1002) ...".to_string(),
         "Reported progress: PRODUCT_COMPARISON_REPORT_EMITTED".to_string(),
     ];
@@ -132,10 +151,15 @@ fn summarize_execution_treats_recovered_comparison_type_failure_as_non_blocking(
 fn summarize_execution_requires_mail_send_confirmation() {
     let goal = "Mail을 열고 이메일을 보내세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Mail", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::MailClient),
+        "success",
+        None,
+    );
     session.add_step("type", "Typed 'subject'", "success", None);
     let history = vec![
-        "Opened app: Mail".to_string(),
+        opened_app(AppRole::MailClient),
         "Typed 'subject'".to_string(),
     ];
 
@@ -155,7 +179,12 @@ fn summarize_execution_requires_mail_send_confirmation() {
 fn summarize_execution_passes_when_mail_send_confirmed() {
     let goal = "Mail로 보고서를 보내세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Mail", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::MailClient),
+        "success",
+        None,
+    );
     session.add_step(
         "mail_send",
         "Mail send completed",
@@ -167,7 +196,7 @@ fn summarize_execution_passes_when_mail_send_confirmed() {
         })),
     );
     let history = vec![
-        "Opened app: Mail".to_string(),
+        opened_app(AppRole::MailClient),
         "Mail send completed".to_string(),
     ];
 
@@ -187,7 +216,12 @@ fn summarize_execution_passes_when_mail_send_confirmed() {
 fn summarize_execution_accepts_pending_then_no_draft_mail_send() {
     let goal = "Mail로 보고서를 보내세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Mail", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::MailClient),
+        "success",
+        None,
+    );
     session.add_step(
         "mail_send",
         "Mail send blocked: sent_pending|1|1",
@@ -201,7 +235,7 @@ fn summarize_execution_accepts_pending_then_no_draft_mail_send() {
         Some(serde_json::json!({"send_status": "no_draft"})),
     );
     let history = vec![
-        "Opened app: Mail".to_string(),
+        opened_app(AppRole::MailClient),
         "Mail send blocked: sent_pending|1|1".to_string(),
         "Mail send blocked: no_draft|0|0".to_string(),
     ];
@@ -223,7 +257,12 @@ fn summarize_execution_accepts_pending_then_no_draft_mail_send() {
 fn summarize_execution_rejects_sent_confirmed_without_body_or_recipient_proof() {
     let goal = "Mail로 보고서를 보내세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: Mail", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::MailClient),
+        "success",
+        None,
+    );
     session.add_step(
         "mail_send",
         "Mail send completed",
@@ -231,7 +270,7 @@ fn summarize_execution_rejects_sent_confirmed_without_body_or_recipient_proof() 
         Some(serde_json::json!({"send_status": "sent_confirmed"})),
     );
     let history = vec![
-        "Opened app: Mail".to_string(),
+        opened_app(AppRole::MailClient),
         "Mail send completed".to_string(),
     ];
 
@@ -251,10 +290,15 @@ fn summarize_execution_rejects_sent_confirmed_without_body_or_recipient_proof() 
 fn summarize_execution_requires_textedit_save_when_goal_mentions_save() {
     let goal = "TextEdit에서 문서를 작성하고 저장하세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: TextEdit", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::TextEditor),
+        "success",
+        None,
+    );
     session.add_step("type", "Typed 'status: in-progress'", "success", None);
     let history = vec![
-        "Opened app: TextEdit".to_string(),
+        opened_app(AppRole::TextEditor),
         "Typed 'status: in-progress'".to_string(),
     ];
 
@@ -276,7 +320,12 @@ fn summarize_execution_requires_textedit_save_when_goal_mentions_save() {
 fn summarize_execution_passes_when_textedit_save_confirmed() {
     let goal = "TextEdit에서 문서를 작성하고 저장하세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: TextEdit", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::TextEditor),
+        "success",
+        None,
+    );
     session.add_step(
         "type",
         "Typed 'status: in-progress' (textedit body)",
@@ -290,7 +339,7 @@ fn summarize_execution_passes_when_textedit_save_confirmed() {
         Some(serde_json::json!({"proof": "textedit_save"})),
     );
     let history = vec![
-        "Opened app: TextEdit".to_string(),
+        opened_app(AppRole::TextEditor),
         "Typed 'status: in-progress' (textedit body)".to_string(),
         "Shortcut 's' + [\"command\"]".to_string(),
     ];
@@ -345,7 +394,12 @@ fn goal_requires_textedit_save_does_not_match_cmd_shift_d() {
 fn summarize_execution_accepts_textedit_save_proof_without_shortcut_text() {
     let goal = "TextEdit에서 문서를 작성하고 저장하세요.";
     let mut session = base_session(goal);
-    session.add_step("open_app", "Opened app: TextEdit", "success", None);
+    session.add_step(
+        "open_app",
+        &opened_app(AppRole::TextEditor),
+        "success",
+        None,
+    );
     session.add_step(
         "type",
         "Typed 'status: in-progress' (textedit body)",
@@ -359,7 +413,7 @@ fn summarize_execution_accepts_textedit_save_proof_without_shortcut_text() {
         Some(serde_json::json!({"proof": "textedit_save"})),
     );
     let history = vec![
-        "Opened app: TextEdit".to_string(),
+        opened_app(AppRole::TextEditor),
         "Typed 'status: in-progress' (textedit body)".to_string(),
         "Saved file in TextEdit".to_string(),
     ];
@@ -399,7 +453,7 @@ fn fallback_plan_sends_telegram_after_read_result() {
 fn ordered_apps_in_goal_maps_korean_aliases() {
     let goal = "메모장 열어서 박대엽이라고 써줘";
     let apps = Planner::ordered_apps_in_goal(goal);
-    assert_eq!(apps, vec!["Notes"]);
+    assert_eq!(apps, vec![app_name(AppRole::NotesApp)]);
 }
 
 #[test]
@@ -490,15 +544,15 @@ fn fallback_plan_todo_summary_notes_flow_order() {
 
     let step1 = Planner::fallback_plan_from_goal(goal, &[]).unwrap();
     assert_eq!(step1["action"].as_str(), Some("open_app"));
-    assert_eq!(step1["name"].as_str(), Some("Notes"));
+    assert_eq!(step1["name"].as_str(), Some(app_name(AppRole::NotesApp)));
 
-    let history_after_open = vec!["Opened app: Notes".to_string()];
+    let history_after_open = vec![opened_app(AppRole::NotesApp)];
     let step2 = Planner::fallback_plan_from_goal(goal, &history_after_open).unwrap();
     assert_eq!(step2["action"].as_str(), Some("shortcut"));
     assert_eq!(step2["key"].as_str(), Some("n"));
 
     let history_after_shortcut = vec![
-        "Opened app: Notes".to_string(),
+        opened_app(AppRole::NotesApp),
         "Shortcut 'n' + [\"command\"] (Created new item)".to_string(),
     ];
     let step3 = Planner::fallback_plan_from_goal(goal, &history_after_shortcut).unwrap();
@@ -506,7 +560,7 @@ fn fallback_plan_todo_summary_notes_flow_order() {
 
     let todo_header = format!("오늘 할 일 체크리스트 ({})", Utc::now().format("%Y-%m-%d"));
     let history_after_type = vec![
-        "Opened app: Notes".to_string(),
+        opened_app(AppRole::NotesApp),
         "Shortcut 'n' + [\"command\"] (Created new item)".to_string(),
         format!("Typed '{}'", todo_header),
     ];
@@ -619,7 +673,7 @@ fn fallback_plan_product_comparison_flow_order() {
     assert_eq!(step3["name"].as_str(), Some(target_app));
     history_after_read.push(format!("Opened app: {}", target_app));
 
-    if target_app.eq_ignore_ascii_case("Notes") {
+    if Planner::app_is_role(target_app, AppRole::NotesApp) {
         let step4 = Planner::fallback_plan_from_goal(goal, &history_after_read).unwrap();
         assert_eq!(step4["action"].as_str(), Some("shortcut"));
         history_after_read.push("Shortcut 'n' + [\"command\"] (Created new item)".to_string());
@@ -644,7 +698,7 @@ fn fallback_plan_product_comparison_reports_when_type_permission_blocked() {
     let history = vec![
             "Opened URL 'https://www.google.com/search?q=openclaw+alternatives'".to_string(),
             "READ_RESULT: 후보 제품 추출 완료".to_string(),
-            "Opened app: TextEdit".to_string(),
+            opened_app(AppRole::TextEditor),
             "EXECUTION_ERROR: Critical type action failed: Type Failed: AppleScript Error: keystroke not allowed (1002) | Native fallback timed out".to_string(),
         ];
     let step = Planner::fallback_plan_from_goal(goal, &history).unwrap();
@@ -682,10 +736,10 @@ fn fallback_plan_n8n_workflow_create_then_execute_then_done() {
 #[test]
 fn fallback_plan_types_unquoted_korean_payload_in_notes() {
     let goal = "메모장 열어서 박대엽이라고 써줘";
-    let history = vec!["Opened app: Notes".to_string()];
+    let history = vec![opened_app(AppRole::NotesApp)];
     let plan = Planner::fallback_plan_from_goal(goal, &history).unwrap();
     assert_eq!(plan["action"].as_str(), Some("type"));
-    assert_eq!(plan["app"].as_str(), Some("Notes"));
+    assert_eq!(plan["app"].as_str(), Some(app_name(AppRole::NotesApp)));
     assert_eq!(plan["text"].as_str(), Some("박대엽"));
 }
 

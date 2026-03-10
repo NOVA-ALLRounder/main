@@ -1,10 +1,10 @@
-use rusqlite::{params, Result};
+use anyhow::{bail, Result as AnyhowResult};
+use rusqlite::{params, Connection, Result};
 
-use super::super::super::get_db_lock;
+use super::super::super::{with_read_conn, with_write_conn_if_available};
 use super::TaskRunRecord;
-pub fn create_task_run(run_id: &str, intent: &str, prompt: &str, status: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+pub fn create_task_run(run_id: &str, intent: &str, prompt: &str, status: &str) -> AnyhowResult<()> {
+    let wrote = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT OR REPLACE INTO task_runs (
@@ -14,6 +14,10 @@ pub fn create_task_run(run_id: &str, intent: &str, prompt: &str, status: &str) -
              ) VALUES (?1, NULL, ?2, NULL, ?3, ?4, 0, 0, 0, ?5, NULL, NULL)",
             params![run_id, created_at, intent, prompt, status],
         )?;
+        Ok(())
+    })?;
+    if wrote.is_none() {
+        bail!("db_unavailable");
     }
     Ok(())
 }
@@ -27,11 +31,10 @@ fn parse_task_run_stale_minutes() -> i64 {
 }
 
 pub fn mark_stale_running_task_runs_finished() -> Result<usize> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let stale_window = format!("-{} minutes", parse_task_run_stale_minutes());
         let finished_at = chrono::Utc::now().to_rfc3339();
-        let rows = conn.execute(
+        conn.execute(
             "UPDATE task_runs
              SET status = 'business_failed',
                  finished_at = COALESCE(finished_at, ?1),
@@ -41,17 +44,17 @@ pub fn mark_stale_running_task_runs_finished() -> Result<usize> {
                AND finished_at IS NULL
                AND julianday(created_at) < julianday('now', ?2)",
             params![finished_at, stale_window],
-        )?;
+        )
+    })? {
         return Ok(rows);
     }
     Ok(0)
 }
 
 pub fn mark_orphaned_inflight_task_runs_failed() -> Result<usize> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let finished_at = chrono::Utc::now().to_rfc3339();
-        let rows = conn.execute(
+        conn.execute(
             "UPDATE task_runs
              SET status = 'business_failed',
                  finished_at = COALESCE(finished_at, ?1),
@@ -60,7 +63,8 @@ pub fn mark_orphaned_inflight_task_runs_failed() -> Result<usize> {
              WHERE finished_at IS NULL
                AND lower(status) IN ('queued', 'running', 'accepted', 'started', 'retrying', 'business_incomplete')",
             params![finished_at],
-        )?;
+        )
+    })? {
         return Ok(rows);
     }
     Ok(0)
@@ -89,8 +93,7 @@ pub fn claim_task_run(
     prompt: &str,
     status: &str,
 ) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(claimed) = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         let stale_window = format!("-{} minutes", parse_task_run_stale_minutes());
         let tx = conn.transaction()?;
@@ -119,8 +122,50 @@ pub fn claim_task_run(
             params![run_id, plan_id, created_at, intent, prompt, status],
         )?;
         tx.commit()?;
+        Ok(true)
+    })? {
+        return Ok(claimed);
     }
     Ok(true)
+}
+
+pub fn claim_singleton_task_run(
+    run_id: &str,
+    intent: &str,
+    prompt: &str,
+    status: &str,
+) -> AnyhowResult<bool> {
+    let claimed = with_write_conn_if_available(|conn| {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let tx = conn.transaction()?;
+        let inflight_count: i64 = tx.query_row(
+            "SELECT COUNT(1)
+             FROM task_runs
+             WHERE finished_at IS NULL
+               AND lower(status) IN ('queued', 'running', 'accepted', 'started', 'retrying', 'business_incomplete')",
+            [],
+            |row| row.get(0),
+        )?;
+        if inflight_count > 0 {
+            tx.rollback()?;
+            return Ok(false);
+        }
+
+        tx.execute(
+            "INSERT INTO task_runs (
+                run_id, plan_id, created_at, finished_at, intent, prompt,
+                planner_complete, execution_complete, business_complete,
+                status, summary, details
+             ) VALUES (?1, NULL, ?2, NULL, ?3, ?4, 0, 0, 0, ?5, NULL, NULL)",
+            params![run_id, created_at, intent, prompt, status],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    })?;
+    let Some(claimed) = claimed else {
+        bail!("db_unavailable");
+    };
+    Ok(claimed)
 }
 
 pub fn update_task_run_outcome(
@@ -132,8 +177,7 @@ pub fn update_task_run_outcome(
     summary: Option<&str>,
     details: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let finished_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE task_runs
@@ -156,46 +200,72 @@ pub fn update_task_run_outcome(
                 run_id
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
-pub fn get_task_run(run_id: &str) -> Result<Option<TaskRunRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
-        let mut stmt = conn.prepare(
-            "SELECT run_id, created_at, finished_at, intent, prompt,
-                    planner_complete, execution_complete, business_complete,
-                    status, summary, details
-             FROM task_runs
-             WHERE run_id = ?1
-             LIMIT 1",
-        )?;
+fn query_task_run(conn: &Connection, run_id: &str) -> Result<Option<TaskRunRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT run_id, created_at, finished_at, intent, prompt,
+                planner_complete, execution_complete, business_complete,
+                status, summary, details
+         FROM task_runs
+         WHERE run_id = ?1
+         LIMIT 1",
+    )?;
 
-        let mut rows = stmt.query(params![run_id])?;
-        if let Some(row) = rows.next()? {
-            return Ok(Some(TaskRunRecord {
-                run_id: row.get(0)?,
-                created_at: row.get(1)?,
-                finished_at: row.get(2).ok(),
-                intent: row.get(3)?,
-                prompt: row.get(4)?,
-                planner_complete: row.get::<_, i64>(5)? != 0,
-                execution_complete: row.get::<_, i64>(6)? != 0,
-                business_complete: row.get::<_, i64>(7)? != 0,
-                status: row.get(8)?,
-                summary: row.get(9).ok(),
-                details: row.get(10).ok(),
-            }));
-        }
+    let mut rows = stmt.query(params![run_id])?;
+    if let Some(row) = rows.next()? {
+        return Ok(Some(TaskRunRecord {
+            run_id: row.get(0)?,
+            created_at: row.get(1)?,
+            finished_at: row.get(2).ok(),
+            intent: row.get(3)?,
+            prompt: row.get(4)?,
+            planner_complete: row.get::<_, i64>(5)? != 0,
+            execution_complete: row.get::<_, i64>(6)? != 0,
+            business_complete: row.get::<_, i64>(7)? != 0,
+            status: row.get(8)?,
+            summary: row.get(9).ok(),
+            details: row.get(10).ok(),
+        }));
     }
+
     Ok(None)
+}
+
+pub fn get_task_run(run_id: &str) -> Result<Option<TaskRunRecord>> {
+    match with_read_conn(|conn| query_task_run(conn, run_id)) {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+pub fn get_task_run_readonly(run_id: &str) -> Result<Option<TaskRunRecord>> {
+    with_read_conn(|conn| query_task_run(conn, run_id))
+}
+
+fn map_task_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRunRecord> {
+    Ok(TaskRunRecord {
+        run_id: row.get(0)?,
+        created_at: row.get(1)?,
+        finished_at: row.get(2).ok(),
+        intent: row.get(3)?,
+        prompt: row.get(4)?,
+        planner_complete: row.get::<_, i64>(5)? != 0,
+        execution_complete: row.get::<_, i64>(6)? != 0,
+        business_complete: row.get::<_, i64>(7)? != 0,
+        status: row.get(8)?,
+        summary: row.get(9).ok(),
+        details: row.get(10).ok(),
+    })
 }
 
 pub fn list_task_runs(limit: i64, status: Option<&str>) -> Result<Vec<TaskRunRecord>> {
     let bounded_limit = limit.clamp(1, 500);
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let normalized_status = status
             .map(|value| value.trim())
             .filter(|value| !value.is_empty());
@@ -212,21 +282,7 @@ pub fn list_task_runs(limit: i64, status: Option<&str>) -> Result<Vec<TaskRunRec
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![status_filter, bounded_limit], |row| {
-                Ok(TaskRunRecord {
-                    run_id: row.get(0)?,
-                    created_at: row.get(1)?,
-                    finished_at: row.get(2).ok(),
-                    intent: row.get(3)?,
-                    prompt: row.get(4)?,
-                    planner_complete: row.get::<_, i64>(5)? != 0,
-                    execution_complete: row.get::<_, i64>(6)? != 0,
-                    business_complete: row.get::<_, i64>(7)? != 0,
-                    status: row.get(8)?,
-                    summary: row.get(9).ok(),
-                    details: row.get(10).ok(),
-                })
-            })?;
+            let rows = stmt.query_map(params![status_filter, bounded_limit], map_task_run_row)?;
 
             for row in rows {
                 out.push(row?);
@@ -243,33 +299,17 @@ pub fn list_task_runs(limit: i64, status: Option<&str>) -> Result<Vec<TaskRunRec
              LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map(params![bounded_limit], |row| {
-            Ok(TaskRunRecord {
-                run_id: row.get(0)?,
-                created_at: row.get(1)?,
-                finished_at: row.get(2).ok(),
-                intent: row.get(3)?,
-                prompt: row.get(4)?,
-                planner_complete: row.get::<_, i64>(5)? != 0,
-                execution_complete: row.get::<_, i64>(6)? != 0,
-                business_complete: row.get::<_, i64>(7)? != 0,
-                status: row.get(8)?,
-                summary: row.get(9).ok(),
-                details: row.get(10).ok(),
-            })
-        })?;
+        let rows = stmt.query_map(params![bounded_limit], map_task_run_row)?;
 
         for row in rows {
             out.push(row?);
         }
-        return Ok(out);
-    }
-    Ok(Vec::new())
+        Ok(out)
+    })
 }
 
 pub fn get_latest_inflight_task_run() -> Result<Option<TaskRunRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT run_id, created_at, finished_at, intent, prompt,
                     planner_complete, execution_complete, business_complete,
@@ -283,20 +323,8 @@ pub fn get_latest_inflight_task_run() -> Result<Option<TaskRunRecord>> {
 
         let mut rows = stmt.query([])?;
         if let Some(row) = rows.next()? {
-            return Ok(Some(TaskRunRecord {
-                run_id: row.get(0)?,
-                created_at: row.get(1)?,
-                finished_at: row.get(2).ok(),
-                intent: row.get(3)?,
-                prompt: row.get(4)?,
-                planner_complete: row.get::<_, i64>(5)? != 0,
-                execution_complete: row.get::<_, i64>(6)? != 0,
-                business_complete: row.get::<_, i64>(7)? != 0,
-                status: row.get(8)?,
-                summary: row.get(9).ok(),
-                details: row.get(10).ok(),
-            }));
+            return Ok(Some(map_task_run_row(row)?));
         }
-    }
-    Ok(None)
+        Ok(None)
+    })
 }

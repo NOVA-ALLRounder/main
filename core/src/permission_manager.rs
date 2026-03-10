@@ -17,7 +17,7 @@ pub enum Capability {
 impl std::fmt::Display for Capability {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Capability::Accessibility => write!(f, "Accessibility"),
+            Capability::Accessibility => write!(f, "UI Automation"),
             Capability::ScreenRecording => write!(f, "Screen Recording"),
         }
     }
@@ -35,7 +35,7 @@ pub struct PermissionStatus {
 pub struct PermissionManager;
 
 impl PermissionManager {
-    /// Check if Accessibility permission is granted
+    /// Check if UI automation permission is granted
     pub fn check_accessibility() -> bool {
         #[link(name = "ApplicationServices", kind = "framework")]
         extern "C" {
@@ -44,7 +44,7 @@ impl PermissionManager {
         unsafe { AXIsProcessTrusted() }
     }
 
-    /// Request Accessibility permission with system prompt
+    /// Request UI automation permission with system prompt
     pub fn request_accessibility() -> bool {
         #[link(name = "ApplicationServices", kind = "framework")]
         extern "C" {

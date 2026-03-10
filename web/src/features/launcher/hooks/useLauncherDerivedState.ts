@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 import type {
     AgentPreflightCheck,
     ExecutionProfile,
@@ -109,11 +111,15 @@ export function useLauncherDerivedState({
     results,
     selectedIndex,
 }: UseLauncherDerivedStateParams) {
-    const suggestionRecs = deriveSuggestionRecommendations({
-        recs,
-        watchRecommendationIds,
-        watchRecommendationCache,
-    });
+    const suggestionRecs = useMemo(
+        () =>
+            deriveSuggestionRecommendations({
+                recs,
+                watchRecommendationIds,
+                watchRecommendationCache,
+            }),
+        [recs, watchRecommendationIds, watchRecommendationCache]
+    );
 
     const coreBinaryKind: CoreBinaryKind = classifyCoreBinary(runtimeInfo?.binary_path);
     const isDevBundleMismatch =
@@ -121,6 +127,29 @@ export function useLauncherDerivedState({
         Boolean(import.meta.env.DEV) &&
         coreBinaryKind === "bundle";
 
+    const artifactState = useMemo(
+        () =>
+            deriveArtifactState({
+                stageRuns,
+                stageAssertions,
+                taskRunArtifacts,
+                artifactTypeFilter,
+                artifactFailedOnly,
+                artifactSearchQuery,
+                artifactSortMode,
+                pinnedArtifactKeys,
+            }),
+        [
+            stageRuns,
+            stageAssertions,
+            taskRunArtifacts,
+            artifactTypeFilter,
+            artifactFailedOnly,
+            artifactSearchQuery,
+            artifactSortMode,
+            pinnedArtifactKeys,
+        ]
+    );
     const {
         failedAssertions,
         stageTraceItems,
@@ -129,46 +158,75 @@ export function useLauncherDerivedState({
         artifactTypeOptions,
         artifactGroups,
         firstFailedArtifactPath,
-    } = deriveArtifactState({
-        stageRuns,
-        stageAssertions,
-        taskRunArtifacts,
-        artifactTypeFilter,
-        artifactFailedOnly,
-        artifactSearchQuery,
-        artifactSortMode,
-        pinnedArtifactKeys,
-    });
+    } = artifactState;
 
-    const focusState = deriveFocusPreflightState(preflightChecks);
-    const profileRecommendation = deriveProfileRecommendation({
-        preflightOk,
-        ...focusState,
-    });
-    const recoveryActions = deriveRecoveryActions({
-        preflightOk,
-        failedAssertions,
-        firstFailedArtifactPath,
-        lastStatus,
-        lastPlanId,
-        pendingApproval,
-        ...focusState,
-    });
-    const runScore = deriveRunScore({ runSnapshot, failedAssertions });
+    const focusState = useMemo(
+        () => deriveFocusPreflightState(preflightChecks),
+        [preflightChecks]
+    );
+    const profileRecommendation = useMemo(
+        () =>
+            deriveProfileRecommendation({
+                preflightOk,
+                ...focusState,
+            }),
+        [preflightOk, focusState]
+    );
+    const recoveryActions = useMemo(
+        () =>
+            deriveRecoveryActions({
+                preflightOk,
+                failedAssertions,
+                firstFailedArtifactPath,
+                lastStatus,
+                lastPlanId,
+                pendingApproval,
+                ...focusState,
+            }),
+        [
+            preflightOk,
+            failedAssertions,
+            firstFailedArtifactPath,
+            lastStatus,
+            lastPlanId,
+            pendingApproval,
+            focusState,
+        ]
+    );
+    const runScore = useMemo(
+        () => deriveRunScore({ runSnapshot, failedAssertions }),
+        [runSnapshot, failedAssertions]
+    );
     const recoveryActionForFailureKey = deriveRecoveryActionForFailureKey;
-    const nextActionHint = deriveNextActionHint({
-        preflightOk,
-        safeExecutionMode,
-        executionProfile,
-        profileRecommendation,
-        pendingApproval,
-        lastStatus,
-        lastPlanId,
-        runSnapshot,
-        runPhase,
-        failedAssertions,
-        ...focusState,
-    });
+    const nextActionHint = useMemo(
+        () =>
+            deriveNextActionHint({
+                preflightOk,
+                safeExecutionMode,
+                executionProfile,
+                profileRecommendation,
+                pendingApproval,
+                lastStatus,
+                lastPlanId,
+                runSnapshot,
+                runPhase,
+                failedAssertions,
+                ...focusState,
+            }),
+        [
+            preflightOk,
+            safeExecutionMode,
+            executionProfile,
+            profileRecommendation,
+            pendingApproval,
+            lastStatus,
+            lastPlanId,
+            runSnapshot,
+            runPhase,
+            failedAssertions,
+            focusState,
+        ]
+    );
     const {
         currentHud,
         dodItems,
@@ -178,41 +236,77 @@ export function useLauncherDerivedState({
         safeCountdownSeconds,
         executionLockHint,
         showPreflightPanel,
-    } = deriveShellStatus({
-        runSnapshot,
-        runPhase,
-        results,
-        suggestionCount: suggestionRecs.length,
-        pendingApproval,
-        lastStatus,
-        lastPlanId,
-        showDetailPanel,
-        composerMode,
-        loading,
-        approvalBusy,
-        safeExecutionMode,
-        pendingDispatch,
-        dispatchBlockedReason,
-        dispatchBlockedUntilMs,
-        dispatchNowMs,
-        preflightLoading,
-        preflightOk,
-        preflightError,
-        showAdvancedControls,
-    });
-    const navigableItems = [
-        ...results.map((result, idx) => ({ type: "result" as const, data: result, id: `res-${idx}` })),
-        ...suggestionRecs.map((rec) => ({
-            type: "recommendation" as const,
-            data: rec,
-            id: `rec-${rec.id}`,
-        })),
-    ];
-    const suggestionRows = deriveSuggestionRows({
-        suggestionRecs,
-        selectedIndex,
-        provisioningUiByRecId,
-    });
+    } = useMemo(
+        () =>
+            deriveShellStatus({
+                runSnapshot,
+                runPhase,
+                results,
+                suggestionCount: suggestionRecs.length,
+                pendingApproval,
+                lastStatus,
+                lastPlanId,
+                showDetailPanel,
+                composerMode,
+                loading,
+                approvalBusy,
+                safeExecutionMode,
+                pendingDispatch,
+                dispatchBlockedReason,
+                dispatchBlockedUntilMs,
+                dispatchNowMs,
+                preflightLoading,
+                preflightOk,
+                preflightError,
+                showAdvancedControls,
+            }),
+        [
+            runSnapshot,
+            runPhase,
+            results,
+            suggestionRecs.length,
+            pendingApproval,
+            lastStatus,
+            lastPlanId,
+            showDetailPanel,
+            composerMode,
+            loading,
+            approvalBusy,
+            safeExecutionMode,
+            pendingDispatch,
+            dispatchBlockedReason,
+            dispatchBlockedUntilMs,
+            dispatchNowMs,
+            preflightLoading,
+            preflightOk,
+            preflightError,
+            showAdvancedControls,
+        ]
+    );
+    const navigableItems = useMemo(
+        () => [
+            ...results.map((result, idx) => ({
+                type: "result" as const,
+                data: result,
+                id: `res-${idx}`,
+            })),
+            ...suggestionRecs.map((rec) => ({
+                type: "recommendation" as const,
+                data: rec,
+                id: `rec-${rec.id}`,
+            })),
+        ],
+        [results, suggestionRecs]
+    );
+    const suggestionRows = useMemo(
+        () =>
+            deriveSuggestionRows({
+                suggestionRecs,
+                selectedIndex,
+                provisioningUiByRecId,
+            }),
+        [suggestionRecs, selectedIndex, provisioningUiByRecId]
+    );
 
     return {
         suggestionRecs,

@@ -5,6 +5,10 @@ use super::*;
 async fn get_launch_ops_handler_reports_recent_metrics() {
     crate::db::init().ok();
     reset_memory_tables();
+    let _env = TestEnvGuard::capture(&[
+        "ALLVIA_AI_DIGEST_AUTO_ROUTE_CHANNELS",
+        "STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL",
+    ]);
 
     let state = AppState {
         llm_client: None,
@@ -25,9 +29,11 @@ async fn get_launch_ops_handler_reports_recent_metrics() {
         mentioned: None,
     };
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test listener");
+    let Some(listener) =
+        bind_test_listener_or_skip("get_launch_ops_handler_reports_recent_metrics").await
+    else {
+        return;
+    };
     let addr = listener.local_addr().expect("listener addr");
     let app = axum::Router::new().route(
         "/",
@@ -58,21 +64,24 @@ async fn get_launch_ops_handler_reports_recent_metrics() {
     assert_eq!(payload.chat_metrics.total_requests, 3);
     assert_eq!(payload.chat_metrics.request_memory_hits, 1);
     assert_eq!(payload.chat_metrics.ai_digest_auto_routes, 1);
-    assert_eq!(payload.recommendation_metrics.pending >= 0, true);
-    assert_eq!(
-        payload.recommendation_review_metrics.total_events >= 0,
-        true
-    );
+    assert!(payload.recommendation_metrics.pending >= 0);
+    assert!(payload.recommendation_review_metrics.total_events >= 0);
     assert_eq!(payload.recent_events[0].route_kind, "ai_digest_auto");
-
-    std::env::remove_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL");
 }
 
 #[tokio::test]
 #[serial]
 async fn http_e2e_handlers_run_and_load_latest_report() {
+    if bind_test_listener_or_skip("http_e2e_handlers_run_and_load_latest_report")
+        .await
+        .is_none()
+    {
+        return;
+    }
+
     let workdir = tempfile::tempdir().expect("temp workdir");
     let workdir_str = workdir.path().to_string_lossy().to_string();
+    let _env = TestEnvGuard::capture(&["ALLVIA_API_ALLOW_WORKDIR_OVERRIDE"]);
     std::env::set_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE", "1");
 
     let Json(run_report) = run_http_e2e_handler(Json(HttpE2ERequest {
@@ -91,8 +100,6 @@ async fn http_e2e_handlers_run_and_load_latest_report() {
     let latest = latest.expect("http e2e report");
     assert_eq!(latest.passed, run_report.passed);
     assert_eq!(latest.total, run_report.total);
-
-    std::env::remove_var("ALLVIA_API_ALLOW_WORKDIR_OVERRIDE");
 }
 
 #[tokio::test]

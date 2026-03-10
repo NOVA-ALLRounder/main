@@ -2,7 +2,7 @@ use crate::applescript;
 use anyhow::Result;
 
 pub fn permission_help() -> &'static str {
-    "Enable Screen Recording + Accessibility for Terminal/Codex (System Settings > Privacy & Security). If prompts disappear, try `tccutil reset Accessibility` and `tccutil reset ScreenCapture` then relaunch the app."
+    "Enable Screen Recording + UI automation for Terminal/Codex (System Settings > Privacy & Security). If prompts disappear, try `tccutil reset Accessibility` and `tccutil reset ScreenCapture` then relaunch the app."
 }
 
 pub fn preflight_permissions() -> Result<()> {
@@ -16,7 +16,7 @@ pub fn preflight_permissions() -> Result<()> {
             }
             if perms.accessibility == Some(false) {
                 return Err(anyhow::anyhow!(
-                    "Accessibility permission missing (Peekaboo). {}",
+                    "UI automation permission missing (Peekaboo). {}",
                     permission_help()
                 ));
             }
@@ -25,7 +25,7 @@ pub fn preflight_permissions() -> Result<()> {
 
     if let Err(e) = applescript::check_accessibility() {
         return Err(anyhow::anyhow!(
-            "Accessibility permission check failed: {}. {}",
+            "UI automation permission check failed: {}. {}",
             e,
             permission_help()
         ));

@@ -1,24 +1,20 @@
 use super::*;
 
-use crate::peekaboo_cli;
-use crate::tool_chaining::CrossAppBridge;
+use crate::platform::current_platform;
 use anyhow::Context;
-use std::process::Command;
 
 impl BrowserAutomation {
     pub fn click_by_ref(&self, ref_id: &str, double_click: bool) -> Result<()> {
         if self.last_snapshot_source == SnapshotSource::Peekaboo {
-            let front_app = CrossAppBridge::get_frontmost_app().ok();
+            let front_app = current_platform().frontmost_app_name().ok().flatten();
             let snapshot_id = self.last_snapshot_id.as_deref();
-            peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
+            let handled = current_platform()
+                .browser_click_ref(ref_id, snapshot_id, front_app.as_deref(), double_click)
                 .context("Peekaboo click failed")?;
-            if double_click {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
-                    .context("Peekaboo double click failed")?;
+            if handled {
+                println!("🖱️ [Browser] Clicked ref '{}' via Peekaboo", ref_id);
+                return Ok(());
             }
-            println!("🖱️ [Browser] Clicked ref '{}' via Peekaboo", ref_id);
-            return Ok(());
         }
 
         let elem = self.element_refs.get(ref_id).ok_or_else(|| {
@@ -31,23 +27,9 @@ impl BrowserAutomation {
             .map(|b| b.center())
             .ok_or_else(|| anyhow::anyhow!("Element '{}' has no bounds", ref_id))?;
 
-        let click_count = if double_click { 2 } else { 1 };
-        let script = format!(
-            r#"tell application "System Events" to click at {{{}, {}}} "#,
-            x, y
-        );
-
-        for _ in 0..click_count {
-            Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-                .context("Failed to execute click")?;
-
-            if double_click {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
+        current_platform()
+            .browser_click_at(x, y, double_click)
+            .context("Failed to execute click")?;
 
         println!("🖱️ [Browser] Clicked '{}' at ({}, {})", elem.name, x, y);
         Ok(())
@@ -55,11 +37,14 @@ impl BrowserAutomation {
 
     pub fn hover_by_ref(&self, ref_id: &str) -> Result<()> {
         if self.last_snapshot_source == SnapshotSource::Peekaboo {
-            let front_app = CrossAppBridge::get_frontmost_app().ok();
+            let front_app = current_platform().frontmost_app_name().ok().flatten();
             let snapshot_id = self.last_snapshot_id.as_deref();
-            peekaboo_cli::click(ref_id, snapshot_id, front_app.as_deref())
+            let handled = current_platform()
+                .browser_hover_ref(ref_id, snapshot_id, front_app.as_deref())
                 .context("Peekaboo hover fallback (click) failed")?;
-            return Ok(());
+            if handled {
+                return Ok(());
+            }
         }
 
         let elem = self
@@ -73,45 +58,15 @@ impl BrowserAutomation {
             .map(|b| b.center())
             .ok_or_else(|| anyhow::anyhow!("Element '{}' has no bounds", ref_id))?;
 
-        let script = format!(
-            r#"
-            do shell script "cliclick m:{},{}"
-            "#,
-            x, y
-        );
-        let _ = Command::new("osascript").arg("-e").arg(&script).output();
+        let _ = current_platform().browser_hover_at(x, y);
 
         println!("👆 [Browser] Hover over '{}' at ({}, {})", elem.name, x, y);
         Ok(())
     }
 
     pub fn type_text(&self, text: &str, delay_ms: u64) -> Result<()> {
-        let escaped = text.replace("\"", "\\\"").replace("\\", "\\\\");
-
-        let script = if delay_ms > 0 {
-            format!(
-                r#"
-                tell application "System Events"
-                    repeat with c in characters of "{}"
-                        keystroke c
-                        delay {}
-                    end repeat
-                end tell
-                "#,
-                escaped,
-                delay_ms as f64 / 1000.0
-            )
-        } else {
-            format!(
-                r#"tell application "System Events" to keystroke "{}""#,
-                escaped
-            )
-        };
-
-        Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
+        current_platform()
+            .browser_type_text(text, delay_ms)
             .context("Failed to type text")?;
 
         println!(
@@ -163,21 +118,8 @@ impl BrowserAutomation {
     }
 
     pub fn navigate(&self, url: &str, browser: Option<&str>) -> Result<()> {
-        let browser_name = browser.unwrap_or("Safari");
-        let script = format!(
-            r#"
-            tell application "{}"
-                activate
-                open location "{}"
-            end tell
-            "#,
-            browser_name, url
-        );
-
-        Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
+        current_platform()
+            .browser_navigate(url, browser)
             .context("Failed to navigate")?;
 
         println!("🌐 [Browser] Navigate to: {}", url);

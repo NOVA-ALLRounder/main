@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use super::{CrossAppBridge, ExecutionContext, ToolResult};
+use crate::platform::current_platform;
 
 /// Execute a complex multi-app scenario
 pub async fn execute_scenario(description: &str) -> Result<ExecutionContext> {
@@ -9,7 +10,7 @@ pub async fn execute_scenario(description: &str) -> Result<ExecutionContext> {
     println!("🎯 [Scenario] Starting: {}", description);
 
     ctx.set("scenario", description);
-    ctx.current_app = CrossAppBridge::get_frontmost_app().ok();
+    ctx.current_app = current_platform().frontmost_app_name().ok().flatten();
 
     Ok(ctx)
 }
@@ -19,16 +20,10 @@ pub fn read_from_app(app_name: &str, ctx: &mut ExecutionContext) -> Result<ToolR
     CrossAppBridge::switch_to_app(app_name)?;
     std::thread::sleep(std::time::Duration::from_millis(300));
 
-    let script = r#"tell application "System Events"
-        keystroke "a" using command down
-        delay 0.1
-        keystroke "c" using command down
-    end tell"#;
-
-    std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .status()?;
+    let modifiers = vec!["command".to_string()];
+    current_platform().keyboard_shortcut("a", &modifiers)?;
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    current_platform().keyboard_shortcut("c", &modifiers)?;
 
     std::thread::sleep(std::time::Duration::from_millis(200));
 

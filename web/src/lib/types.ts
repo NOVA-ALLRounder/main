@@ -724,6 +724,8 @@ export const TaskStageRunSchema = z.object({
     retry_count: z.number().optional(),
     max_retries: z.number().optional(),
     next_retry_at: z.string().nullable().optional(),
+    assertion_total: z.number().optional(),
+    assertion_failed: z.number().optional(),
 });
 
 export const TaskStageAssertionSchema = z.object({

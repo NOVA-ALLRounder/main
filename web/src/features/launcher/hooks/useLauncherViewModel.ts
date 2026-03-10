@@ -14,7 +14,7 @@ import { useLauncherRuntimeView } from "@/features/launcher/hooks/useLauncherRun
 
 export function useLauncherViewModel(): LauncherViewModel {
     const runtime = useLauncherRuntimeView();
-    const actions = useLauncherActions(runtime);
+    const actions = useLauncherActions(runtime.actionState, runtime.actionRefs);
     const panelArgs = { runtime, actions };
 
     return {

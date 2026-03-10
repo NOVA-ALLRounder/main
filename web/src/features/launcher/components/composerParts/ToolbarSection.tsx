@@ -13,41 +13,46 @@ export function ComposerToolbarSection({
           onClick={handlers.onCycleMode}
           disabled={ui.isExecutionLocked}
           className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="모드 순환"
           title="모드 순환"
         >
-          <Plus className="w-4 h-4" />
+          <Plus aria-hidden="true" className="w-4 h-4" />
         </button>
         <button
           onClick={handlers.onApplyWebSearchTemplate}
           disabled={ui.isExecutionLocked}
           className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="웹 검색 템플릿"
           title="웹 검색 템플릿"
         >
-          <Globe className="w-4 h-4" />
+          <Globe aria-hidden="true" className="w-4 h-4" />
         </button>
         <button
           onClick={handlers.onApplySummaryTemplate}
           disabled={ui.isExecutionLocked}
           className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="요약 템플릿"
           title="요약 템플릿"
         >
-          <Wand2 className="w-4 h-4" />
+          <Wand2 aria-hidden="true" className="w-4 h-4" />
         </button>
         <button
           onClick={() => handlers.onModeSelect("program")}
           disabled={ui.isExecutionLocked}
           className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="프로그램 버튼"
           title="프로그램 버튼"
         >
-          <AppWindow className="w-4 h-4" />
+          <AppWindow aria-hidden="true" className="w-4 h-4" />
         </button>
         <button
           onClick={() => handlers.onModeSelect("chat")}
           disabled={ui.isExecutionLocked}
           className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          aria-label="대화 모드"
           title="대화 모드"
         >
-          <MessageCircle className="w-4 h-4" />
+          <MessageCircle aria-hidden="true" className="w-4 h-4" />
         </button>
         <button
           onClick={() => handlers.onTelegramListenerCommand("telegram listener start")}
@@ -110,15 +115,17 @@ export function ComposerToolbarSection({
         )}
         <button
           className="p-2 rounded-full hover:bg-white/10 text-gray-300 transition-colors"
+          aria-label="record"
           title="record"
         >
-          <Circle className="w-6 h-6" />
+          <Circle aria-hidden="true" className="w-6 h-6" />
         </button>
         <button
           className="p-2 rounded-full hover:bg-white/10 text-gray-300 transition-colors"
+          aria-label="voice"
           title="voice"
         >
-          <Mic className="w-6 h-6" />
+          <Mic aria-hidden="true" className="w-6 h-6" />
         </button>
       </div>
     </div>

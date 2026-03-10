@@ -1,12 +1,11 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 
-use crate::permission_manager::PermissionManager;
+use crate::platform::{current_platform, AppRole, PlatformFixAction, SystemSettingsTarget};
 
 use super::support::{
-    mail_cleanup_outgoing_windows, mail_fill_default_recipient, open_system_settings_url,
-    persist_recovery_event, resolve_mail_recipient_for_recovery, reveal_path_in_finder,
-    run_osascript_inline, textedit_save_front_document,
+    cleanup_outgoing_mail_drafts, mail_fill_default_recipient, persist_recovery_event,
+    resolve_mail_recipient_for_recovery, reveal_path_in_file_manager, save_front_text_document,
 };
 use super::types::{AgentPreflightFixRequest, AgentPreflightFixResponse};
 
@@ -44,57 +43,45 @@ pub(crate) async fn agent_preflight_fix_handler(
         .unwrap_or_else(|| format!("recovery.preflight.{}", action.replace(' ', "_")));
 
     let fix_result: Result<String, String> = match action.as_str() {
-        "activate_finder" => run_osascript_inline("tell application \"Finder\" to activate")
-            .map(|_| "Finder를 전면으로 전환했습니다. 다시 점검을 실행하세요.".to_string()),
-        "activate_mail" => run_osascript_inline("tell application \"Mail\" to activate")
-            .map(|_| "Mail을 전면으로 전환했습니다.".to_string()),
-        "activate_notes" => run_osascript_inline("tell application \"Notes\" to activate")
-            .map(|_| "Notes를 전면으로 전환했습니다.".to_string()),
-        "activate_textedit" => run_osascript_inline("tell application \"TextEdit\" to activate")
-            .map(|_| "TextEdit를 전면으로 전환했습니다.".to_string()),
-        "prepare_isolated_mode" => run_osascript_inline(
-            "tell application \"Finder\" to activate\n\
-             delay 0.1\n\
-             tell application \"System Events\" to keystroke \"h\" using {command down, option down}\n\
-             delay 0.1\n\
-             tell application \"Finder\" to activate",
-        )
-        .map(|_| {
-            "격리 실행 모드를 준비했습니다(다른 앱 숨김 + Finder 전면). 실행 중 키보드/마우스 입력을 피하세요."
-                .to_string()
-        }),
-        "open_accessibility_settings" => open_system_settings_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        )
-        .map(|_| "접근성 권한 설정 화면을 열었습니다.".to_string()),
-        "open_screen_capture_settings" => open_system_settings_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-        )
-        .map(|_| "화면 기록 권한 설정 화면을 열었습니다.".to_string()),
-        "request_screen_capture_access" => {
-            let ok = PermissionManager::request_screen_recording();
-            if ok {
-                Ok("화면 기록 권한을 요청했습니다(프롬프트가 떴으면 허용 후 재시작).".to_string())
-            } else {
-                Ok("화면 기록 권한이 아직 없습니다. 설정 화면에서 코어 바이너리를 추가(+)한 뒤 재시작하세요.".to_string())
-            }
-        }
-        "request_accessibility_access" => {
-            let ok = PermissionManager::request_accessibility();
-            if ok {
-                Ok("접근성 권한을 요청했습니다(프롬프트가 떴으면 허용 후 재시작).".to_string())
-            } else {
-                Ok("접근성 권한이 아직 없습니다. 설정 화면에서 코어 바이너리를 추가(+)한 뒤 재시작하세요.".to_string())
-            }
-        }
+        "activate_finder" | "activate_file_manager" => current_platform()
+            .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::FileManager))
+            .map_err(|e| e.to_string()),
+        "activate_mail" | "activate_mail_client" => current_platform()
+            .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::MailClient))
+            .map_err(|e| e.to_string()),
+        "activate_notes" | "activate_notes_app" => current_platform()
+            .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::NotesApp))
+            .map_err(|e| e.to_string()),
+        "activate_textedit" | "activate_text_editor" => current_platform()
+            .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::TextEditor))
+            .map_err(|e| e.to_string()),
+        "prepare_isolated_mode" => current_platform()
+            .run_fix_action(&PlatformFixAction::PrepareIsolatedMode)
+            .map_err(|e| e.to_string()),
+        "open_ui_automation_settings" | "open_accessibility_settings" => current_platform()
+            .open_system_settings(SystemSettingsTarget::UiAutomation)
+            .map_err(|e| e.to_string()),
+        "open_screen_capture_settings" => current_platform()
+            .open_system_settings(SystemSettingsTarget::ScreenCapture)
+            .map_err(|e| e.to_string()),
+        "request_screen_capture_access" => current_platform()
+            .run_fix_action(&PlatformFixAction::RequestScreenCaptureAccess)
+            .map_err(|e| e.to_string()),
+        "request_ui_automation_access" | "request_accessibility_access" => current_platform()
+            .run_fix_action(&PlatformFixAction::RequestUiAutomationAccess)
+            .map_err(|e| e.to_string()),
         "reveal_core_binary" => std::env::current_exe()
             .map_err(|e| e.to_string())
-            .and_then(|p| reveal_path_in_finder(&p).map(|_| p))
-            .map(|p| format!("코어 바이너리를 Finder에서 표시했습니다: {}", p.to_string_lossy())),
-        "open_input_monitoring_settings" => open_system_settings_url(
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        )
-        .map(|_| "입력 모니터링 권한 설정 화면을 열었습니다.".to_string()),
+            .and_then(|p| reveal_path_in_file_manager(&p).map(|_| p))
+            .map(|p| {
+                format!(
+                    "코어 바이너리를 파일 관리자에서 표시했습니다: {}",
+                    p.to_string_lossy()
+                )
+            }),
+        "open_input_monitoring_settings" => current_platform()
+            .open_system_settings(SystemSettingsTarget::InputMonitoring)
+            .map_err(|e| e.to_string()),
         "mail_fill_default_recipient" => resolve_mail_recipient_for_recovery(run_id.as_deref())
             .ok_or_else(|| {
                 "수신자 후보를 찾지 못했습니다(run prompt/STEER_DEFAULT_MAIL_TO 확인 필요)"
@@ -103,33 +90,39 @@ pub(crate) async fn agent_preflight_fix_handler(
             .and_then(|recipient| {
                 mail_fill_default_recipient(&recipient).map(|result| {
                     if result.starts_with("NO_OUTGOING") {
-                        "Mail의 outgoing message가 없어 수신자를 채우지 못했습니다.".to_string()
+                        "메일 클라이언트의 발신 초안이 없어 수신자를 채우지 못했습니다.".to_string()
                     } else {
-                        format!("Mail 수신자를 기본값({})으로 보강했습니다 ({})", recipient, result)
+                        format!(
+                            "메일 클라이언트 수신자를 기본값({})으로 보강했습니다 ({})",
+                            recipient, result
+                        )
                     }
                 })
             }),
-        "mail_cleanup_outgoing_windows" => mail_cleanup_outgoing_windows().map(|result| {
-            if result.starts_with("NO_OUTGOING") {
-                "Mail outgoing 초안이 없어 정리할 항목이 없습니다.".to_string()
-            } else {
-                format!("Mail outgoing 초안 창을 정리했습니다 ({})", result)
-            }
-        }),
-        "textedit_save_front_document" => textedit_save_front_document().map(|result| {
-            if result.starts_with("NO_DOCUMENT") {
-                "TextEdit 문서가 없어 저장하지 못했습니다.".to_string()
-            } else {
-                format!("TextEdit front document 저장을 실행했습니다 ({})", result)
-            }
-        }),
+        "cleanup_outgoing_mail_drafts" | "mail_cleanup_outgoing_windows" => {
+            cleanup_outgoing_mail_drafts().map(|result| {
+                if result.starts_with("NO_OUTGOING") {
+                    "메일 클라이언트 발신 초안이 없어 정리할 항목이 없습니다.".to_string()
+                } else {
+                    format!("메일 클라이언트 발신 초안 창을 정리했습니다 ({})", result)
+                }
+            })
+        }
+        "save_front_text_document" | "textedit_save_front_document" => save_front_text_document()
+            .map(|result| {
+                if result.starts_with("NO_DOCUMENT") {
+                    "텍스트 편집기 문서가 없어 저장하지 못했습니다.".to_string()
+                } else {
+                    format!(
+                        "텍스트 편집기 front document 저장을 실행했습니다 ({})",
+                        result
+                    )
+                }
+            }),
         _ => Err(format!("unsupported_action: {}", action)),
     };
 
-    let active_app = run_osascript_inline(
-        "tell application \"System Events\" to return name of first application process whose frontmost is true",
-    )
-    .ok();
+    let active_app = current_platform().frontmost_app_name().ok().flatten();
 
     let persist_for_fix = |status: &str, details: &str| -> bool {
         let Some(id) = run_id.as_deref() else {

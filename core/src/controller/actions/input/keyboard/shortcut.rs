@@ -2,6 +2,7 @@ use log::info;
 use serde_json::json;
 
 use crate::controller::heuristics;
+use crate::platform::{current_platform, AppRole};
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 
 use crate::controller::actions::ActionRunner;
@@ -51,8 +52,11 @@ impl ActionRunner {
                 && modifiers.iter().any(|m| m.eq_ignore_ascii_case("shift"));
             let is_cmd_s =
                 key == "s" && modifiers.iter().any(|m| m.eq_ignore_ascii_case("command"));
-            let front_app =
-                crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            let front_app = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let cmd_n_target_app =
                 Self::resolve_shortcut_target_app("shortcut", plan, history, goal, &front_app);
             let cmd_n_single_fire_key = format!(
@@ -66,7 +70,7 @@ impl ActionRunner {
                 && !cmd_n_target_app.is_empty()
                 && Self::session_has_single_fire_new_item(session, &cmd_n_single_fire_key);
             let cmd_n_mail_draft_tracked = is_cmd_n
-                && cmd_n_target_app.eq_ignore_ascii_case("Mail")
+                && Self::app_has_role(&cmd_n_target_app, AppRole::MailClient)
                 && Self::has_tracked_mail_draft(history);
             let cmd_n_redundant_skip =
                 cmd_n_history_skip || cmd_n_session_skip || cmd_n_mail_draft_tracked;
@@ -149,8 +153,8 @@ impl ActionRunner {
                     "shortcut": "cmd+n",
                     "reason": skip_reason
                 }));
-            } else if is_cmd_n && cmd_n_target_app.eq_ignore_ascii_case("Mail") {
-                let _ = heuristics::ensure_app_focus("Mail", 5).await;
+            } else if is_cmd_n && Self::app_has_role(&cmd_n_target_app, AppRole::MailClient) {
+                Self::ensure_role_focus(AppRole::MailClient, 5).await;
                 match Self::mail_ensure_draft(Some(goal), history) {
                     Ok(draft_id) => {
                         Self::remember_mail_draft_id(history, &draft_id);
@@ -159,7 +163,7 @@ impl ActionRunner {
                         action_status_override = Some("success");
                         action_data = Some(json!({
                             "proof": "mail_draft_ready",
-                            "front_app": "Mail"
+                            "front_app": Self::role_app_name(AppRole::MailClient)
                         }));
                     }
                     Err(e) => {
@@ -167,7 +171,7 @@ impl ActionRunner {
                         action_status_override = Some("failed");
                     }
                 }
-            } else if is_cmd_shift_d && front_app.eq_ignore_ascii_case("Mail") {
+            } else if is_cmd_shift_d && Self::app_has_role(&front_app, AppRole::MailClient) {
                 let draft_id = Self::mail_current_draft_id(history);
                 info!("      📧 [MailSend] shortcut-path draft_id={:?}", draft_id);
                 match Self::mail_send_latest_message(Some(goal), draft_id.as_deref()) {
@@ -268,11 +272,16 @@ impl ActionRunner {
                 if is_cmd_n {
                     description =
                         format!("Shortcut '{}' + {:?} (Created new item)", key, modifiers);
-                } else if is_cmd_s && front_app.eq_ignore_ascii_case("TextEdit") {
-                    description = format!("Shortcut '{}' + {:?} (TextEdit saved)", key, modifiers);
+                } else if is_cmd_s && Self::app_has_role(&front_app, AppRole::TextEditor) {
+                    description = format!(
+                        "Shortcut '{}' + {:?} ({} saved)",
+                        key,
+                        modifiers,
+                        Self::role_app_name(AppRole::TextEditor)
+                    );
                     action_data = Some(json!({
                         "proof": "textedit_save",
-                        "front_app": "TextEdit"
+                        "front_app": Self::role_app_name(AppRole::TextEditor)
                     }));
                     Self::log_evidence("textedit", "save", &[("status", "confirmed".to_string())]);
                 } else {

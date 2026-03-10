@@ -86,7 +86,6 @@ export function buildComposerPanelProps({
             onToggleCompactLayoutMode: () =>
                 runtime.setCompactLayoutMode((prev) => !prev),
             onInputChange: runtime.setInput,
-            onInputPaste: actions.handleInputPaste,
             onInputKeyDown: actions.handleKeyDown,
             onCompositionStart: () => {
                 runtime.composingSinceRef.current = Date.now();

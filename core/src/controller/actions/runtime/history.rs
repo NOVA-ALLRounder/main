@@ -1,8 +1,15 @@
 use log::info;
 
 use super::super::ActionRunner;
+use crate::platform::parse_opened_or_switched_app_history_entry;
 
 impl ActionRunner {
+    pub(in crate::controller::actions) fn opened_app_from_history_entry(
+        entry: &str,
+    ) -> Option<&str> {
+        parse_opened_or_switched_app_history_entry(entry)
+    }
+
     pub(in crate::controller::actions) fn bool_env_with_default(key: &str, default: bool) -> bool {
         match std::env::var(key) {
             Ok(v) => matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES"),
@@ -63,11 +70,8 @@ impl ActionRunner {
         history: &[String],
     ) -> Option<String> {
         for entry in history.iter().rev() {
-            if let Some(rest) = entry.strip_prefix("Opened app: ") {
-                let app = rest.trim();
-                if !app.is_empty() {
-                    return Some(app.to_string());
-                }
+            if let Some(app) = Self::opened_app_from_history_entry(entry) {
+                return Some(app.to_string());
             }
         }
         None
@@ -82,8 +86,8 @@ impl ActionRunner {
             return false;
         }
         for entry in history.iter().rev().take(12) {
-            if let Some(rest) = entry.strip_prefix("Opened app: ") {
-                let opened = rest.trim().to_lowercase();
+            if let Some(opened) = Self::opened_app_from_history_entry(entry) {
+                let opened = opened.to_lowercase();
                 return opened == target;
             }
         }
@@ -101,8 +105,7 @@ impl ActionRunner {
 
         for entry in history.iter().rev().take(24) {
             let lower = entry.to_lowercase();
-            if let Some(rest) = lower.strip_prefix("opened app: ") {
-                let opened = rest.trim();
+            if let Some(opened) = Self::opened_app_from_history_entry(&lower) {
                 if opened.eq_ignore_ascii_case(&target) {
                     in_target_context = true;
                     continue;
@@ -160,7 +163,7 @@ impl ActionRunner {
                 return parsed.clamp(1, 30);
             }
         }
-        if app_name.trim().eq_ignore_ascii_case("Mail") {
+        if Self::app_has_role(app_name.trim(), crate::platform::AppRole::MailClient) {
             return 1;
         }
         Self::cmd_n_window_flood_limit()
@@ -189,11 +192,11 @@ impl ActionRunner {
         let mut current_app = String::new();
 
         for (idx, entry) in history.iter().enumerate() {
-            let lower = entry.to_lowercase();
-            if let Some(rest) = lower.strip_prefix("opened app: ") {
-                current_app = rest.trim().to_string();
+            if let Some(app) = Self::opened_app_from_history_entry(entry) {
+                current_app = app.to_lowercase();
                 continue;
             }
+            let lower = entry.to_lowercase();
             if idx < start_idx {
                 continue;
             }

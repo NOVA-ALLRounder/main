@@ -1,51 +1,11 @@
-use std::process::Command;
-
 use crate::db;
+use crate::platform::{current_platform, PlatformFixAction};
 
-pub(super) fn run_osascript_inline(script: &str) -> Result<String, String> {
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
-pub(super) fn open_system_settings_url(url: &str) -> Result<(), String> {
-    Command::new("open")
-        .arg(url)
-        .status()
+pub(super) fn reveal_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
+    current_platform()
+        .reveal_path(path)
+        .map(|_| ())
         .map_err(|e| e.to_string())
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err(format!("open command failed for {}", url))
-            }
-        })
-}
-
-pub(super) fn reveal_path_in_finder(path: &std::path::Path) -> Result<(), String> {
-    Command::new("open")
-        .arg("-R")
-        .arg(path)
-        .status()
-        .map_err(|e| e.to_string())
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err("open -R failed".to_string())
-            }
-        })
-}
-
-fn escape_applescript_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn parse_primary_mail_recipient(raw: &str) -> Option<String> {
@@ -105,62 +65,24 @@ pub(super) fn resolve_mail_recipient_for_recovery(run_id: Option<&str>) -> Optio
 }
 
 pub(super) fn mail_fill_default_recipient(recipient: &str) -> Result<String, String> {
-    let recipient_escaped = escape_applescript_string(recipient);
-    let script = format!(
-        "tell application \"Mail\"\n\
-            activate\n\
-            if (count of outgoing messages) = 0 then return \"NO_OUTGOING\"\n\
-            set _msg to (last outgoing message)\n\
-            set _hasRecipient to false\n\
-            try\n\
-                if (count of to recipients of _msg) > 0 then\n\
-                    set _first to address of first to recipient of _msg as text\n\
-                    if _first is not \"\" then set _hasRecipient to true\n\
-                end if\n\
-            end try\n\
-            if _hasRecipient is false then\n\
-                make new to recipient at end of to recipients of _msg with properties {{address:\"{}\"}}\n\
-            end if\n\
-            set visible of _msg to true\n\
-            set _draftId to \"\"\n\
-            try\n\
-                set _draftId to id of _msg as text\n\
-            end try\n\
-            return \"OK|\" & _draftId\n\
-        end tell",
-        recipient_escaped
-    );
-    run_osascript_inline(&script)
+    let action = PlatformFixAction::FillDefaultMailRecipient {
+        recipient: recipient.to_string(),
+    };
+    current_platform()
+        .run_fix_action(&action)
+        .map_err(|e| e.to_string())
 }
 
-pub(super) fn mail_cleanup_outgoing_windows() -> Result<String, String> {
-    let script = "tell application \"Mail\"\n\
-        activate\n\
-        set _count to (count of outgoing messages)\n\
-        if _count = 0 then return \"NO_OUTGOING|0\"\n\
-        repeat with _msg in outgoing messages\n\
-            try\n\
-                set visible of _msg to false\n\
-            end try\n\
-        end repeat\n\
-        return \"OK|\" & (_count as text)\n\
-    end tell";
-    run_osascript_inline(script)
+pub(super) fn cleanup_outgoing_mail_drafts() -> Result<String, String> {
+    current_platform()
+        .run_fix_action(&PlatformFixAction::CleanupOutgoingMailDrafts)
+        .map_err(|e| e.to_string())
 }
 
-pub(super) fn textedit_save_front_document() -> Result<String, String> {
-    let script = "tell application \"TextEdit\"\n\
-        activate\n\
-        if (count of documents) = 0 then return \"NO_DOCUMENT\"\n\
-        set _doc to front document\n\
-        save _doc\n\
-        set _docId to \"\"\n\
-        try\n\
-            set _docId to id of _doc as text\n\
-        end try\n\
-        return \"OK|\" & _docId\n\
-    end tell";
-    run_osascript_inline(script)
+pub(super) fn save_front_text_document() -> Result<String, String> {
+    current_platform()
+        .run_fix_action(&PlatformFixAction::SaveFrontTextDocument)
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn preflight_focus_mode() -> String {
@@ -171,22 +93,14 @@ pub(super) fn preflight_focus_mode() -> String {
         .unwrap_or_else(|| "passive".to_string())
 }
 
-pub(super) fn preflight_accessibility_snapshot_probe() -> Result<String, String> {
-    let script = r#"
-tell application "System Events"
-    set frontProc to first application process whose frontmost is true
-    set appName to name of frontProc
-    set winName to ""
-    try
-        if (count of windows of frontProc) > 0 then
-            set winName to name of window 1 of frontProc
-        end if
-    end try
-    if winName is missing value then set winName to ""
-    return appName & " :: " & winName
-end tell
-"#;
-    run_osascript_inline(script)
+pub(super) fn preflight_ui_automation_snapshot_probe() -> Result<String, String> {
+    current_platform()
+        .ui_automation_probe()
+        .map(|probe| {
+            let window = probe.window_title.unwrap_or_default();
+            format!("{} :: {}", probe.app_name, window)
+        })
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn persist_recovery_event(

@@ -2,7 +2,7 @@ use rusqlite::{params, Result};
 
 use crate::quality_scorer::QualityScore;
 
-use super::get_db_lock;
+use super::{with_read_conn, with_write_conn_if_available};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QualityScoreRecord {
@@ -49,8 +49,7 @@ pub struct RoutineRun {
 }
 
 pub fn insert_quality_score(score: &QualityScore) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO quality_scores (created_at, overall, breakdown, issues, strengths, recommendation, summary)
@@ -65,13 +64,13 @@ pub fn insert_quality_score(score: &QualityScore) -> Result<()> {
                 score.summary
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_latest_quality_score() -> Result<Option<QualityScoreRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT created_at, overall, breakdown, issues, strengths, recommendation, summary
              FROM quality_scores
@@ -97,13 +96,11 @@ pub fn get_latest_quality_score() -> Result<Option<QualityScoreRecord>> {
             Ok(record) => Ok(Some(record)),
             Err(_) => Ok(None),
         };
-    }
-    Ok(None)
+    })
 }
 
 pub fn get_judgment_state() -> Result<Option<JudgmentState>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT last_hash, consecutive_no_progress, updated_at
              FROM judgment_states
@@ -120,13 +117,11 @@ pub fn get_judgment_state() -> Result<Option<JudgmentState>> {
             Ok(state) => Ok(Some(state)),
             Err(_) => Ok(None),
         };
-    }
-    Ok(None)
+    })
 }
 
 pub fn upsert_judgment_state(last_hash: Option<&str>, consecutive_no_progress: i64) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let updated_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO judgment_states (id, last_hash, consecutive_no_progress, updated_at)
@@ -137,13 +132,13 @@ pub fn upsert_judgment_state(last_hash: Option<&str>, consecutive_no_progress: i
                 updated_at = excluded.updated_at",
             params![last_hash, consecutive_no_progress, updated_at],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_release_baseline_json() -> Result<Option<ReleaseBaselineRecord>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT created_at, baseline_json
              FROM release_baseline
@@ -159,13 +154,11 @@ pub fn get_release_baseline_json() -> Result<Option<ReleaseBaselineRecord>> {
             Ok(record) => Ok(Some(record)),
             Err(_) => Ok(None),
         };
-    }
-    Ok(None)
+    })
 }
 
 pub fn upsert_release_baseline_json(created_at: &str, baseline_json: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO release_baseline (id, created_at, baseline_json)
              VALUES (1, ?1, ?2)
@@ -174,7 +167,8 @@ pub fn upsert_release_baseline_json(created_at: &str, baseline_json: &str) -> Re
                 baseline_json = excluded.baseline_json",
             params![created_at, baseline_json],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -184,21 +178,20 @@ pub fn insert_verification_run(
     summary: &str,
     details: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO verification_runs (created_at, kind, ok, summary, details)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![created_at, kind, ok, summary, details],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_verification_runs(limit: i64) -> Result<Vec<VerificationRun>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, created_at, kind, ok, summary, details
              FROM verification_runs
@@ -219,39 +212,38 @@ pub fn list_verification_runs(limit: i64) -> Result<Vec<VerificationRun>> {
         for r in rows {
             runs.push(r?);
         }
-        return Ok(runs);
-    }
-    Ok(Vec::new())
+        Ok(runs)
+    })
 }
 
 pub fn create_routine_run(routine_id: i64) -> Result<i64> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(id) = with_write_conn_if_available(|conn| {
         let started_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO routine_runs (routine_id, started_at, status) VALUES (?1, ?2, 'running')",
             params![routine_id, started_at],
         )?;
-        return Ok(conn.last_insert_rowid());
+        Ok(conn.last_insert_rowid())
+    })? {
+        return Ok(id);
     }
     Ok(0)
 }
 
 pub fn finish_routine_run(run_id: i64, status: &str, error: Option<&str>) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let finished_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE routine_runs SET status = ?1, error = ?2, finished_at = ?3 WHERE id = ?4",
             params![status, error, finished_at, run_id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_routine_runs(limit: i64) -> Result<Vec<RoutineRun>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, routine_id, started_at, finished_at, status, error
              FROM routine_runs ORDER BY started_at DESC LIMIT ?1",
@@ -271,7 +263,6 @@ pub fn list_routine_runs(limit: i64) -> Result<Vec<RoutineRun>> {
         for r in rows {
             runs.push(r?);
         }
-        return Ok(runs);
-    }
-    Ok(Vec::new())
+        Ok(runs)
+    })
 }

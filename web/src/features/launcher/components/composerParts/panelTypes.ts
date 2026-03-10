@@ -1,5 +1,4 @@
 import type {
-  ClipboardEventHandler,
   KeyboardEventHandler,
   RefObject,
 } from "react";
@@ -81,7 +80,6 @@ export type LauncherComposerPanelProps = {
     onToggleSafeExecutionMode: () => void;
     onToggleCompactLayoutMode: () => void;
     onInputChange: (value: string) => void;
-    onInputPaste: ClipboardEventHandler<HTMLInputElement>;
     onInputKeyDown: KeyboardEventHandler<HTMLInputElement>;
     onCompositionStart: () => void;
     onCompositionEnd: () => void;

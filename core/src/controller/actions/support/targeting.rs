@@ -1,6 +1,8 @@
 use anyhow::Result;
+use std::path::PathBuf;
 
 use crate::controller::heuristics;
+use crate::platform::{app_matches_role, current_platform, AppRole};
 
 use crate::controller::actions::ActionRunner;
 
@@ -13,20 +15,12 @@ impl ActionRunner {
     }
 
     pub(in crate::controller::actions) fn finder_open_downloads() -> Result<()> {
-        let lines = [
-            "tell application \"Finder\"",
-            "activate",
-            "set targetFolder to (path to downloads folder)",
-            "if (count of Finder windows) = 0 then",
-            "set newWin to make new Finder window",
-            "set target of newWin to targetFolder",
-            "else",
-            "set target of front Finder window to targetFolder",
-            "end if",
-            "end tell",
-            "return \"ok\"",
-        ];
-        crate::applescript::run_with_args(&lines, &Vec::<String>::new())?;
+        let target = dirs::download_dir().unwrap_or_else(|| {
+            let mut fallback = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            fallback.push("Downloads");
+            fallback
+        });
+        current_platform().reveal_path(&target)?;
         Ok(())
     }
 
@@ -129,7 +123,7 @@ impl ActionRunner {
         history: &[String],
     ) -> Option<String> {
         let mut target = Self::last_opened_app_from_history(history)?;
-        if target.eq_ignore_ascii_case("Calculator") {
+        if app_matches_role(current_platform().kind(), AppRole::Calculator, &target) {
             if action_type == "type" {
                 let text = plan["text"].as_str().unwrap_or("");
                 if !Self::looks_like_calc_expression(text) {

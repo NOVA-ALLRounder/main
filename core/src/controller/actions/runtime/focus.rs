@@ -1,11 +1,44 @@
 use serde_json::json;
+use tokio::time::{sleep, Duration};
 
-use crate::applescript;
 use crate::controller::heuristics;
+use crate::platform::{app_role_aliases, app_role_primary_name, current_platform, AppRole};
 
 use super::super::ActionRunner;
 
 impl ActionRunner {
+    fn file_manager_focus_target() -> &'static str {
+        app_role_primary_name(current_platform().kind(), AppRole::FileManager)
+    }
+
+    fn frontmost_app_name() -> String {
+        current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    fn browser_focus_candidates() -> Vec<&'static str> {
+        let kind = current_platform().kind();
+        let mut out: Vec<&'static str> = Vec::new();
+        for alias in app_role_aliases(kind, AppRole::Browser) {
+            if alias.eq_ignore_ascii_case("browser")
+                || alias.ends_with(".exe")
+                || out.iter().any(|seen| seen.eq_ignore_ascii_case(alias))
+            {
+                continue;
+            }
+            out.push(*alias);
+        }
+        if out.is_empty() {
+            out.push(app_role_primary_name(kind, AppRole::Browser));
+        }
+        out
+    }
+
     pub(in crate::controller::actions) fn focus_recovery_max_retries() -> usize {
         std::env::var("STEER_FOCUS_RECOVERY_MAX_RETRIES")
             .ok()
@@ -30,18 +63,12 @@ impl ActionRunner {
     ) -> (bool, String, usize, Vec<String>) {
         let mut recovery_trace: Vec<String> = Vec::new();
         let mut attempts = 0usize;
-        let mut front = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let mut front = Self::frontmost_app_name();
 
         while !front.eq_ignore_ascii_case(target_app) && attempts < retries {
             attempts += 1;
             let _ = heuristics::ensure_app_focus(target_app, 3).await;
-            front = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            front = Self::frontmost_app_name();
             recovery_trace.push(format!("retry#{} front={}", attempts, front));
         }
 
@@ -50,30 +77,21 @@ impl ActionRunner {
             if heuristics::try_close_front_dialog() {
                 recovery_trace.push("dialog_closed".to_string());
             }
-            let _ = heuristics::ensure_app_focus("Finder", 2).await;
+            let _ = heuristics::ensure_app_focus(Self::file_manager_focus_target(), 2).await;
             attempts += 1;
-            let finder_front = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let finder_front = Self::frontmost_app_name();
             recovery_trace.push(format!("handoff_finder front={}", finder_front));
 
             let _ = heuristics::ensure_app_focus(target_app, 4).await;
             attempts += 1;
-            front = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            front = Self::frontmost_app_name();
             recovery_trace.push(format!("handoff_target front={}", front));
 
             if !front.eq_ignore_ascii_case(target_app) {
-                let _ = applescript::activate_app(target_app);
+                let _ = current_platform().activate_app_by_name(target_app);
                 attempts += 1;
-                std::thread::sleep(std::time::Duration::from_millis(260));
-                front = crate::tool_chaining::CrossAppBridge::get_frontmost_app()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
+                sleep(Duration::from_millis(260)).await;
+                front = Self::frontmost_app_name();
                 recovery_trace.push(format!("activate_app front={}", front));
             }
         }
@@ -122,7 +140,7 @@ impl ActionRunner {
         if let Some(target_app) =
             Self::preferred_target_app_from_history(action_type, plan, history)
         {
-            let front = crate::tool_chaining::CrossAppBridge::get_frontmost_app().ok();
+            let front = current_platform().frontmost_app_name().ok().flatten();
             let strict_focus_actions = matches!(
                 action_type,
                 "type"
@@ -152,8 +170,9 @@ impl ActionRunner {
             if let Some(target_app) = heuristics::goal_primary_app(goal) {
                 let _ = heuristics::ensure_app_focus(target_app, 3).await;
             } else if heuristics::prefer_lucky_only(goal) {
-                let _ = heuristics::ensure_app_focus("Safari", 2).await;
-                let _ = heuristics::ensure_app_focus("Google Chrome", 2).await;
+                for app in Self::browser_focus_candidates() {
+                    let _ = heuristics::ensure_app_focus(app, 2).await;
+                }
             }
         }
     }

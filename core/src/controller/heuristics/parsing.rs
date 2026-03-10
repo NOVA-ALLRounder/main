@@ -1,3 +1,21 @@
+use crate::platform::{
+    app_matches_role, app_role_aliases, current_platform,
+    parse_opened_or_switched_app_history_entry, AppRole,
+};
+
+fn goal_mentions_app_role(goal_lower: &str, role: AppRole) -> bool {
+    let kind = current_platform().kind();
+    app_role_aliases(kind, role)
+        .iter()
+        .any(|alias| goal_lower.contains(&alias.to_lowercase()))
+}
+
+fn history_contains_opened_role_app(entry: &str, role: AppRole) -> bool {
+    parse_opened_or_switched_app_history_entry(entry)
+        .map(|opened| app_matches_role(current_platform().kind(), role, opened))
+        .unwrap_or(false)
+}
+
 pub fn extract_best_number(text: &str) -> Option<String> {
     let mut nums: Vec<String> = Vec::new();
     let mut buf = String::new();
@@ -39,7 +57,7 @@ pub fn extract_best_number(text: &str) -> Option<String> {
 pub fn calculator_has_input(history: &[String]) -> bool {
     let mut seen_open = false;
     for entry in history.iter().rev() {
-        if entry.contains("Opened app: Calculator") {
+        if history_contains_opened_role_app(entry, AppRole::Calculator) {
             seen_open = true;
             break;
         }
@@ -48,7 +66,7 @@ pub fn calculator_has_input(history: &[String]) -> bool {
         return false;
     }
     for entry in history.iter().rev() {
-        if entry.contains("Opened app: Calculator") {
+        if history_contains_opened_role_app(entry, AppRole::Calculator) {
             break;
         }
         if entry.starts_with("Typed '") {
@@ -71,16 +89,14 @@ pub fn goal_mentions_calculation(goal: &str) -> bool {
 
 pub fn goal_is_ui_task(goal: &str) -> bool {
     let lower = goal.to_lowercase();
-    let apps = [
-        "safari",
-        "notes",
-        "finder",
-        "preview",
-        "textedit",
-        "mail",
-        "calculator",
-    ];
-    apps.iter().any(|app| lower.contains(app))
+    goal_mentions_app_role(&lower, AppRole::Browser)
+        || goal_mentions_app_role(&lower, AppRole::NotesApp)
+        || goal_mentions_app_role(&lower, AppRole::FileManager)
+        || goal_mentions_app_role(&lower, AppRole::Preview)
+        || goal_mentions_app_role(&lower, AppRole::TextEditor)
+        || goal_mentions_app_role(&lower, AppRole::MailClient)
+        || goal_mentions_app_role(&lower, AppRole::Calculator)
+        || goal_mentions_app_role(&lower, AppRole::Calendar)
 }
 
 pub fn goal_mentions_desktop(goal: &str) -> bool {
@@ -98,7 +114,7 @@ pub fn goal_mentions_image(goal: &str) -> bool {
 
 pub fn goal_mentions_notes(goal: &str) -> bool {
     let lower = goal.to_lowercase();
-    lower.contains("notes") || lower.contains("메모")
+    goal_mentions_app_role(&lower, AppRole::NotesApp)
 }
 
 pub fn infer_stock_symbol(goal: &str, query: &str) -> Option<&'static str> {

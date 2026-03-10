@@ -2,6 +2,7 @@ use log::info;
 use serde_json::json;
 
 use crate::controller::heuristics;
+use crate::platform::{current_platform, AppRole};
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 
 use crate::controller::actions::ActionRunner;
@@ -48,12 +49,15 @@ impl ActionRunner {
         }
 
         if key_norm == "escape" || key_norm == "esc" {
-            let script = "tell application \"System Events\" to key code 53";
-            let _ = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(script)
-                .status();
-            description = "Pressed 'escape'".to_string();
+            match Self::platform_keyboard_shortcut("escape", &[]) {
+                Ok(()) => {
+                    description = "Pressed 'escape'".to_string();
+                }
+                Err(e) => {
+                    description = format!("Press escape failed: {}", e);
+                    action_status_override = Some("failed");
+                }
+            }
         } else if !shortcut_modifiers.is_empty() && shortcut_key.is_some() {
             let key = shortcut_key.unwrap_or_default();
             let has_command = shortcut_modifiers
@@ -64,8 +68,11 @@ impl ActionRunner {
                 .any(|m| m.eq_ignore_ascii_case("shift"));
             let is_cmd_n = key == "n" && has_command;
             let is_cmd_shift_d = key == "d" && has_command && has_shift;
-            let front_app =
-                crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            let front_app = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let cmd_n_target_app =
                 Self::resolve_shortcut_target_app("key", plan, history, goal, &front_app);
             let cmd_n_single_fire_key = format!(
@@ -79,7 +86,7 @@ impl ActionRunner {
                 && !cmd_n_target_app.is_empty()
                 && Self::session_has_single_fire_new_item(session, &cmd_n_single_fire_key);
             let cmd_n_mail_draft_tracked = is_cmd_n
-                && cmd_n_target_app.eq_ignore_ascii_case("Mail")
+                && Self::app_has_role(&cmd_n_target_app, AppRole::MailClient)
                 && Self::has_tracked_mail_draft(history);
             let cmd_n_redundant_skip =
                 cmd_n_history_skip || cmd_n_session_skip || cmd_n_mail_draft_tracked;
@@ -163,8 +170,8 @@ impl ActionRunner {
                     "shortcut": "cmd+n",
                     "reason": skip_reason
                 }));
-            } else if is_cmd_n && cmd_n_target_app.eq_ignore_ascii_case("Mail") {
-                let _ = heuristics::ensure_app_focus("Mail", 5).await;
+            } else if is_cmd_n && Self::app_has_role(&cmd_n_target_app, AppRole::MailClient) {
+                Self::ensure_role_focus(AppRole::MailClient, 5).await;
                 match Self::mail_ensure_draft(Some(goal), history) {
                     Ok(draft_id) => {
                         Self::remember_mail_draft_id(history, &draft_id);
@@ -175,7 +182,7 @@ impl ActionRunner {
                         action_status_override = Some("success");
                         action_data = Some(json!({
                             "proof": "mail_draft_ready",
-                            "front_app": "Mail"
+                            "front_app": Self::role_app_name(AppRole::MailClient)
                         }));
                     }
                     Err(e) => {
@@ -183,7 +190,7 @@ impl ActionRunner {
                         action_status_override = Some("failed");
                     }
                 }
-            } else if is_cmd_shift_d && front_app.eq_ignore_ascii_case("Mail") {
+            } else if is_cmd_shift_d && Self::app_has_role(&front_app, AppRole::MailClient) {
                 let draft_id = Self::mail_current_draft_id(history);
                 info!("      📧 [MailSend] key-path draft_id={:?}", draft_id);
                 match Self::mail_send_latest_message(Some(goal), draft_id.as_deref()) {

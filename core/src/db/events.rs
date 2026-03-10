@@ -1,9 +1,8 @@
-use anyhow::anyhow;
 use rusqlite::{params, Result};
 
 use crate::{schema::EventEnvelope, session::SessionRecord};
 
-use super::get_db_lock;
+use super::{with_read_conn, with_write_conn_if_available};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChatMessage {
@@ -12,9 +11,46 @@ pub struct ChatMessage {
     pub created_at: String,
 }
 
+fn map_event_envelope_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EventEnvelope> {
+    let payload_str: String = row.get(9)?;
+    let privacy_str: String = row.get(10)?;
+    let raw_str: String = row.get(15)?;
+
+    let payload = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+    let privacy = serde_json::from_str(&privacy_str).ok();
+    let raw = serde_json::from_str(&raw_str).ok();
+    let res_type: String = row.get(7)?;
+    let res_id: String = row.get(8)?;
+    let resource = if res_type.is_empty() && res_id.is_empty() {
+        None
+    } else {
+        Some(crate::schema::ResourceContext {
+            resource_type: res_type,
+            id: res_id,
+        })
+    };
+
+    Ok(EventEnvelope {
+        schema_version: row.get(0)?,
+        event_id: row.get(1)?,
+        ts: row.get(2)?,
+        source: row.get(3)?,
+        app: row.get(4)?,
+        event_type: row.get(5)?,
+        priority: row.get(6)?,
+        resource,
+        payload,
+        privacy,
+        pid: row.get(11)?,
+        window_id: row.get(12)?,
+        window_title: row.get(13).ok(),
+        browser_url: row.get(14).ok(),
+        raw,
+    })
+}
+
 pub fn init_v2() -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS events_v2 (
                 schema_version TEXT,
@@ -45,13 +81,13 @@ pub fn init_v2() -> Result<()> {
             "CREATE INDEX IF NOT EXISTS idx_events_v2_type ON events_v2(event_type)",
             [],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn insert_event_v2(envelope: &EventEnvelope) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let payload_json = serde_json::to_string(&envelope.payload).unwrap_or_default();
         let privacy_json = serde_json::to_string(&envelope.privacy).unwrap_or_default();
         let raw_json = serde_json::to_string(&envelope.raw).unwrap_or_default();
@@ -97,13 +133,13 @@ pub fn insert_event_v2(envelope: &EventEnvelope) -> Result<()> {
                 raw_json
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn init_sessions_table() -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS sessions_v2 (
                 session_id TEXT PRIMARY KEY,
@@ -114,69 +150,35 @@ pub fn init_sessions_table() -> Result<()> {
             )",
             [],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn fetch_all_events_v2(limit: i64) -> Result<Vec<EventEnvelope>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT schema_version, event_id, ts, source, app, event_type, priority,
              resource_type, resource_id, payload_json, privacy_json, pid, window_id, window_title, browser_url, raw_json
              FROM events_v2 ORDER BY ts ASC LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map([limit], |row| {
-            let payload_str: String = row.get(9)?;
-            let privacy_str: String = row.get(10)?;
-            let raw_str: String = row.get(15)?;
-
-            let payload = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
-            let privacy = serde_json::from_str(&privacy_str).ok();
-            let raw = serde_json::from_str(&raw_str).ok();
-            let res_type: String = row.get(7)?;
-            let res_id: String = row.get(8)?;
-            let resource = if res_type.is_empty() && res_id.is_empty() {
-                None
-            } else {
-                Some(crate::schema::ResourceContext {
-                    resource_type: res_type,
-                    id: res_id,
-                })
-            };
-
-            Ok(EventEnvelope {
-                schema_version: row.get(0)?,
-                event_id: row.get(1)?,
-                ts: row.get(2)?,
-                source: row.get(3)?,
-                app: row.get(4)?,
-                event_type: row.get(5)?,
-                priority: row.get(6)?,
-                resource,
-                payload,
-                privacy,
-                pid: row.get(11)?,
-                window_id: row.get(12)?,
-                window_title: row.get(13).ok(),
-                browser_url: row.get(14).ok(),
-                raw,
-            })
-        })?;
+        let rows = stmt.query_map([limit], map_event_envelope_row)?;
 
         let mut events = Vec::new();
         for r in rows {
             events.push(r?);
         }
-        return Ok(events);
+        Ok(events)
+    }) {
+        Ok(events) => Ok(events),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn insert_session(session: &SessionRecord) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let summary_json = serde_json::to_string(&session.summary).unwrap_or_default();
         conn.execute(
             "INSERT INTO sessions_v2 (session_id, start_ts, end_ts, duration_sec, summary_json)
@@ -189,13 +191,13 @@ pub fn insert_session(session: &SessionRecord) -> Result<()> {
                 summary_json
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn insert_event(event_json: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(event_json) {
             let timestamp_str = value["timestamp"].as_str().unwrap_or("");
             let timestamp = if timestamp_str.is_empty() {
@@ -211,13 +213,13 @@ pub fn insert_event(event_json: &str) -> Result<()> {
                 params![timestamp, source, type_, event_json],
             )?;
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_recent_events(cutoff_hours: i64) -> anyhow::Result<Vec<String>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_read_conn(|conn| {
         let cutoff = (chrono::Utc::now() - chrono::Duration::hours(cutoff_hours)).to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT schema_version, event_id, ts, source, app, event_type, priority,
@@ -226,43 +228,7 @@ pub fn get_recent_events(cutoff_hours: i64) -> anyhow::Result<Vec<String>> {
         )?;
 
         let rows = stmt.query_map([cutoff.clone()], |row| {
-            let payload_str: String = row.get(9)?;
-            let privacy_str: String = row.get(10)?;
-            let raw_str: String = row.get(15)?;
-
-            let payload = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
-            let privacy = serde_json::from_str(&privacy_str).ok();
-            let raw = serde_json::from_str(&raw_str).ok();
-
-            let res_type: String = row.get(7)?;
-            let res_id: String = row.get(8)?;
-            let resource = if res_type.is_empty() && res_id.is_empty() {
-                None
-            } else {
-                Some(crate::schema::ResourceContext {
-                    resource_type: res_type,
-                    id: res_id,
-                })
-            };
-
-            let envelope = EventEnvelope {
-                schema_version: row.get(0)?,
-                event_id: row.get(1)?,
-                ts: row.get(2)?,
-                source: row.get(3)?,
-                app: row.get(4)?,
-                event_type: row.get(5)?,
-                priority: row.get(6)?,
-                resource,
-                payload,
-                privacy,
-                pid: row.get(11)?,
-                window_id: row.get(12)?,
-                window_title: row.get(13).ok(),
-                browser_url: row.get(14).ok(),
-                raw,
-            };
-
+            let envelope = map_event_envelope_row(row)?;
             Ok(serde_json::to_string(&envelope).unwrap_or_default())
         })?;
 
@@ -282,26 +248,25 @@ pub fn get_recent_events(cutoff_hours: i64) -> anyhow::Result<Vec<String>> {
             events.push(json);
         }
 
-        return Ok(events);
-    }
-    Err(anyhow!("DB not initialized"))
+        Ok(events)
+    })
+    .map_err(anyhow::Error::from)
 }
 
 pub fn insert_chat_message(role: &str, content: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO chat_history (role, content, created_at) VALUES (?1, ?2, ?3)",
             params![role, content, created_at],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_recent_chat_history(limit: i64) -> Result<Vec<ChatMessage>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT role, content, created_at FROM chat_history ORDER BY created_at DESC LIMIT ?1",
         )?;
@@ -319,7 +284,10 @@ pub fn get_recent_chat_history(limit: i64) -> Result<Vec<ChatMessage>> {
             history.push(row?);
         }
         history.reverse();
-        return Ok(history);
+        Ok(history)
+    }) {
+        Ok(history) => Ok(history),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }

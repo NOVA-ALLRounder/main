@@ -1,4 +1,8 @@
 use super::*;
+use crate::platform::{
+    app_matches_role, app_role_primary_name, current_platform,
+    parse_opened_or_switched_app_history_entry, AppRole,
+};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use image::codecs::jpeg::JpegEncoder;
@@ -91,6 +95,14 @@ fn extract_single_quoted_fragments(goal: &str) -> Vec<String> {
     out
 }
 
+fn history_contains_opened_role_app(history: &[String], role: AppRole) -> bool {
+    history.iter().any(|entry| {
+        parse_opened_or_switched_app_history_entry(entry)
+            .map(|opened| app_matches_role(current_platform().kind(), role, opened))
+            .unwrap_or(false)
+    })
+}
+
 pub(super) async fn fallback_plan_next_step(
     client: &OpenAILLMClient,
     goal: &str,
@@ -106,11 +118,15 @@ pub(super) async fn fallback_plan_next_step(
     }
 
     if goal_lower.contains("mail")
-        && OpenAILLMClient::history_contains_case_insensitive(action_history, "Opened app: Mail")
+        && history_contains_opened_role_app(action_history, AppRole::MailClient)
         && !OpenAILLMClient::history_contains_case_insensitive(action_history, "Typed")
     {
         if let Some(fragment) = extract_single_quoted_fragments(goal).first() {
-            return Ok(json!({ "action": "type", "text": fragment, "app": "Mail" }));
+            return Ok(json!({
+                "action": "type",
+                "text": fragment,
+                "app": app_role_primary_name(current_platform().kind(), AppRole::MailClient)
+            }));
         }
     }
 

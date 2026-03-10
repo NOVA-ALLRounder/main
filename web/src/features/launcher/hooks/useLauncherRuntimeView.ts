@@ -10,8 +10,19 @@ export function useLauncherRuntimeView() {
     const execution = useLauncherExecutionState();
     const { data: recs, refetch } = useRecommendations();
     const provisioning = useRecommendationProvisioningState();
+    const {
+        composingSinceRef,
+        lastDispatchRef,
+        dispatchPromptRef,
+        prevComposerModeRef,
+        sendThrottleRef,
+        inputRef,
+        scrollRef,
+        ...stateWithoutRefs
+    } = state;
     const diagnostics = useLauncherDiagnosticsState({
         showDiagnostics: state.showDiagnostics,
+        activeRunId: execution.runSnapshot?.runId ?? null,
     });
 
     const derived = useLauncherDerivedState({
@@ -52,14 +63,31 @@ export function useLauncherRuntimeView() {
         selectedIndex: state.selectedIndex,
     });
 
-    return {
-        ...state,
+    const actionRefs = {
+        composingSinceRef,
+        lastDispatchRef,
+        dispatchPromptRef,
+        prevComposerModeRef,
+        sendThrottleRef,
+        inputRef,
+        scrollRef,
+    };
+
+    const actionState = {
+        ...stateWithoutRefs,
         ...execution,
         recs,
         refetch,
         ...provisioning,
         ...diagnostics,
         ...derived,
+    };
+
+    return {
+        ...actionState,
+        ...actionRefs,
+        actionState,
+        actionRefs,
     };
 }
 

@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::controller::heuristics;
+use crate::platform::{current_platform, AppRole};
 use crate::visual_driver::{SmartStep, UiAction, VisualDriver};
 
 use super::super::ActionRunner;
@@ -22,17 +23,23 @@ impl ActionRunner {
         {
             let _ = heuristics::ensure_app_focus(app_name, 1).await;
         }
-        let mut front_app =
-            crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
-        if !front_app.eq_ignore_ascii_case("Mail")
+        let mut front_app = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !Self::app_has_role(&front_app, AppRole::MailClient)
             && Self::has_tracked_mail_draft(history)
             && Self::goal_mentions_mail(goal)
         {
-            let _ = heuristics::ensure_app_focus("Mail", 3).await;
-            front_app =
-                crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            Self::ensure_role_focus(AppRole::MailClient, 3).await;
+            front_app = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
         }
-        if front_app.eq_ignore_ascii_case("Mail") {
+        if Self::app_has_role(&front_app, AppRole::MailClient) {
             let draft_id = Self::mail_ensure_draft(Some(goal), history)
                 .ok()
                 .filter(|v| !v.trim().is_empty());
@@ -181,7 +188,7 @@ impl ActionRunner {
                     }
                 }
             }
-        } else if front_app.eq_ignore_ascii_case("TextEdit") {
+        } else if Self::app_has_role(&front_app, AppRole::TextEditor) {
             let mut text = crate::tool_chaining::CrossAppBridge::get_clipboard()
                 .unwrap_or_else(|_| "".to_string());
             let fallback = Self::mail_fallback_body_from_goal(goal);

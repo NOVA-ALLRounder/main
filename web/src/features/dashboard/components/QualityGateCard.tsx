@@ -7,7 +7,7 @@ import {
     useReleaseGate,
     useSemanticVerification,
 } from "@/lib/hooks";
-import { format } from "date-fns";
+import { formatDashboardShortTime } from "@/features/dashboard/formatters";
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
@@ -36,9 +36,7 @@ export function QualityGateCard() {
 
     const qualityValue = qualityScore?.score?.overall?.toFixed(1) ?? "—";
     const qualityLabel = qualityScore?.score?.recommendation ?? "pending";
-    const qualityTime = qualityScore?.created_at
-        ? format(new Date(qualityScore.created_at), "HH:mm")
-        : "—";
+    const qualityTime = formatDashboardShortTime(qualityScore?.created_at);
 
     const gateOk = releaseGate?.ok ?? false;
     const gateWarnings = releaseGate?.warnings?.length ?? 0;
@@ -50,9 +48,7 @@ export function QualityGateCard() {
                 : "PASS"
             : `FAIL · ${gateRegressions}`
         : "—";
-    const gateTime = releaseGate?.current?.created_at
-        ? format(new Date(releaseGate.current.created_at), "HH:mm")
-        : "—";
+    const gateTime = formatDashboardShortTime(releaseGate?.current?.created_at);
 
     const consistencyCount = consistency?.issues?.length ?? 0;
     const semanticCount = semantic?.issues?.length ?? 0;

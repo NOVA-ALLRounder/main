@@ -163,13 +163,17 @@ export function useLauncherRecoveryFlow({
                     updateExecutionState(toSnapshotFromTaskRun(run));
 
                     if (i % 2 === 0) {
-                        await loadRunDiagnostics(runId);
+                        void loadRunDiagnostics(runId).catch((diagnosticsError) => {
+                            console.warn("run diagnostics refresh failed", diagnosticsError);
+                        });
                     }
 
                     const statusLower = run.status.toLowerCase();
                     if (TERMINAL_RUN_STATUSES.has(statusLower)) {
-                        await loadRunDiagnostics(runId);
-                        await loadDodHistory();
+                        await Promise.all([
+                            loadRunDiagnostics(runId),
+                            loadDodHistory(),
+                        ]);
                         const terminalSummary = summarizeGoalRunStatus({
                             mode,
                             status: run.status,
@@ -234,8 +238,10 @@ export function useLauncherRecoveryFlow({
                 verifyIssues: verifyRes.issues ?? [],
                 completionScore: execRes.completion_score ?? null,
             });
-            await loadRunDiagnostics(execRes.run_id);
-            await loadDodHistory();
+            await Promise.all([
+                loadRunDiagnostics(execRes.run_id),
+                loadDodHistory(),
+            ]);
             if (execRes.status === "approval_required" && execRes.approval?.action) {
                 setPendingApproval({
                     planId,

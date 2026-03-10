@@ -7,7 +7,7 @@ import {
     runExecResultsGuard,
 } from "@/lib/api";
 import { useExecAllowlist, useExecApprovals, useExecResults } from "@/lib/hooks";
-import { format } from "date-fns";
+import { formatDashboardLongTime } from "@/features/dashboard/formatters";
 import { useState } from "react";
 
 export function ExecControlsCard() {
@@ -195,11 +195,11 @@ export function ExecControlsCard() {
                             execResults.slice(0, 8).map((item) => (
                                 <div key={item.id} className="bg-white/5 px-2 py-1 rounded">
                                     <div className="flex items-center justify-between gap-2">
-                                        <div className="truncate">
+                                        <div className="min-w-0 truncate">
                                             {item.command} · {item.status}
                                         </div>
                                         <span className="text-[10px] text-muted-foreground">
-                                            {item.updated_at ? format(new Date(item.updated_at), "HH:mm:ss") : "—"}
+                                            {formatDashboardLongTime(item.updated_at)}
                                         </span>
                                     </div>
                                     {(item.output || item.error) && (

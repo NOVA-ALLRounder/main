@@ -1,3 +1,4 @@
+use crate::platform::{current_platform, AppRole};
 use anyhow::Result;
 use log::info;
 use serde_json::json;
@@ -16,10 +17,13 @@ impl ActionRunner {
         let action_status_override: Option<&'static str>;
         let mut action_data = action_data_out.take();
 
-        let front_app =
-            crate::tool_chaining::CrossAppBridge::get_frontmost_app().unwrap_or_default();
-        if !front_app.eq_ignore_ascii_case("Mail") {
-            let _ = crate::controller::heuristics::ensure_app_focus("Mail", 3).await;
+        let front_app = current_platform()
+            .frontmost_app_name()
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !Self::app_has_role(&front_app, AppRole::MailClient) {
+            Self::ensure_role_focus(AppRole::MailClient, 3).await;
         }
         let draft_id = Self::mail_current_draft_id(history);
         info!("      📧 [MailSend] action-path draft_id={:?}", draft_id);

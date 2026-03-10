@@ -1,8 +1,9 @@
 use super::*;
 
-use crate::peekaboo_cli;
-use crate::tool_chaining::CrossAppBridge;
-use std::process::Command;
+use crate::platform::{
+    app_role_aliases, current_platform, AppRole, BrowserSnapshotSource, PlatformFixAction,
+    UiSnapshotElement,
+};
 
 impl BrowserAutomation {
     fn env_bool_with_default(key: &str, default: bool) -> bool {
@@ -46,27 +47,39 @@ impl BrowserAutomation {
     }
 
     fn snapshot_recovery_apps() -> Vec<String> {
-        let raw = std::env::var("STEER_BROWSER_SNAPSHOT_RECOVERY_APPS")
-            .unwrap_or_else(|_| "Safari,Google Chrome,Arc".to_string());
-        raw.split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+        if let Ok(raw) = std::env::var("STEER_BROWSER_SNAPSHOT_RECOVERY_APPS") {
+            return raw
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+        }
+
+        app_role_aliases(current_platform().kind(), AppRole::Browser)
+            .iter()
+            .copied()
+            .filter(|name| !name.eq_ignore_ascii_case("browser"))
+            .map(str::to_string)
             .collect()
     }
 
-    fn activate_app(app_name: &str) {
-        let escaped = app_name.replace('\\', "\\\\").replace('"', "\\\"");
-        let script = format!("tell application \"{}\" to activate", escaped);
-        let _ = Command::new("osascript").arg("-e").arg(script).output();
+    fn frontmost_snapshot_app() -> Option<String> {
+        current_platform().frontmost_app_name().ok().flatten()
     }
 
     fn recover_snapshot_focus(attempt: usize) {
+        if current_platform()
+            .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::Browser))
+            .is_ok()
+        {
+            return;
+        }
         let apps = Self::snapshot_recovery_apps();
         if apps.is_empty() {
             return;
         }
-        let front = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+        let front = Self::frontmost_snapshot_app().unwrap_or_default();
         let front_already_browser = apps.iter().any(|a| a.eq_ignore_ascii_case(front.trim()));
         if front_already_browser {
             return;
@@ -76,32 +89,29 @@ impl BrowserAutomation {
         } else {
             (attempt - 1) % apps.len()
         };
-        if let Some(target) = apps.get(idx) {
-            Self::activate_app(target);
+        if apps.get(idx).is_some() {
+            let _ = current_platform()
+                .run_fix_action(&PlatformFixAction::ActivateApp(AppRole::Browser));
         }
     }
 
-    fn parse_snapshot_stdout(&mut self, stdout: &str) -> Vec<ElementRef> {
+    fn parse_snapshot_elements(&mut self, elements: &[UiSnapshotElement]) -> Vec<ElementRef> {
         let mut refs = Vec::new();
         self.element_refs.clear();
         self.ref_counter = 0;
         self.last_snapshot_refs.clear();
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() < 6 {
-                continue;
-            }
+        for element in elements {
             self.ref_counter += 1;
             let ref_id = format!("E{}", self.ref_counter);
             let elem_ref = ElementRef {
                 id: ref_id.clone(),
-                role: parts[0].to_string(),
-                name: parts[1].to_string(),
-                bounds: Some(Bounds {
-                    x: parts[2].parse().unwrap_or(0),
-                    y: parts[3].parse().unwrap_or(0),
-                    width: parts[4].parse().unwrap_or(0),
-                    height: parts[5].parse().unwrap_or(0),
+                role: element.role.clone(),
+                name: element.name.clone(),
+                bounds: element.bounds.as_ref().map(|bounds| Bounds {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: bounds.width,
+                    height: bounds.height,
                 }),
             };
             self.element_refs.insert(ref_id, elem_ref.clone());
@@ -118,31 +128,6 @@ impl BrowserAutomation {
         self.last_snapshot_source = SnapshotSource::AppleScript;
         self.last_snapshot_id = None;
 
-        let script = r#"
-            tell application "System Events"
-                set frontApp to first application process whose frontmost is true
-                set appName to name of frontApp
-
-                set output to ""
-                try
-                    set allElements to entire contents of window 1 of frontApp
-                    repeat with elem in allElements
-                        try
-                            set elemRole to role of elem
-                            set elemName to name of elem
-                            set elemPos to position of elem
-                            set elemSize to size of elem
-                            if elemName is not "" then
-                                set output to output & elemRole & "|" & elemName & "|" & (item 1 of elemPos) & "|" & (item 2 of elemPos) & "|" & (item 1 of elemSize) & "|" & (item 2 of elemSize) & "
-"
-                            end if
-                        end try
-                    end repeat
-                end try
-                return output
-            end tell
-        "#;
-
         let retry_count = Self::snapshot_retry_count();
         let retry_sleep = std::time::Duration::from_millis(Self::snapshot_retry_ms());
         let recovery_enabled = Self::snapshot_focus_recovery_enabled();
@@ -154,72 +139,32 @@ impl BrowserAutomation {
                 std::thread::sleep(retry_sleep);
             }
 
-            match Command::new("osascript").arg("-e").arg(script).output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        refs = self.parse_snapshot_stdout(&stdout);
-                        if !refs.is_empty() {
-                            break;
-                        }
-                        last_script_issue = Some("osascript_ok_but_no_elements".to_string());
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        let detail = if !stderr.is_empty() { stderr } else { stdout };
-                        last_script_issue = Some(format!(
-                            "osascript_failed(status={} detail={})",
-                            output.status, detail
-                        ));
+            match current_platform().browser_snapshot_capture() {
+                Ok(capture) => {
+                    self.last_snapshot_source = match capture.source {
+                        BrowserSnapshotSource::Accessibility => SnapshotSource::AppleScript,
+                        BrowserSnapshotSource::Peekaboo => SnapshotSource::Peekaboo,
+                    };
+                    self.last_snapshot_id = capture.snapshot_id.clone();
+                    refs = self.parse_snapshot_elements(&capture.elements);
+                    if !refs.is_empty() {
+                        break;
                     }
+                    last_script_issue = Some("platform_snapshot_ok_but_no_elements".to_string());
                 }
                 Err(err) => {
-                    last_script_issue = Some(format!("osascript_exec_error: {}", err));
+                    last_script_issue = Some(format!("platform_snapshot_error: {}", err));
                 }
-            }
-        }
-
-        if refs.is_empty() && peekaboo_cli::is_available() {
-            let front_app = CrossAppBridge::get_frontmost_app().ok();
-            if let Ok(snapshot) = peekaboo_cli::take_snapshot(front_app.as_deref()) {
-                self.element_refs.clear();
-                self.ref_counter = 0;
-                self.last_snapshot_refs.clear();
-                self.last_snapshot_source = SnapshotSource::Peekaboo;
-                self.last_snapshot_id = snapshot.snapshot_id.clone();
-
-                for elem in snapshot.elements {
-                    let bounds = elem.bounds.map(|(x, y, w, h)| Bounds {
-                        x,
-                        y,
-                        width: w,
-                        height: h,
-                    });
-                    let elem_ref = ElementRef {
-                        id: elem.id.clone(),
-                        role: elem.role.clone(),
-                        name: elem.name.clone(),
-                        bounds,
-                    };
-                    self.element_refs.insert(elem.id.clone(), elem_ref.clone());
-                    self.last_snapshot_refs.push(elem_ref.clone());
-                    refs.push(elem_ref);
-                }
-                println!(
-                    "📸 [Browser] Snapshot captured via Peekaboo: {} elements",
-                    refs.len()
-                );
-                return Ok(refs);
             }
         }
 
         self.last_snapshot_refs = refs.clone();
         println!("📸 [Browser] Snapshot captured: {} elements", refs.len());
         if refs.is_empty() && !crate::env_flag("STEER_ALLOW_EMPTY_SNAPSHOT_REFS") {
-            let front_app = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            let front_app = Self::frontmost_snapshot_app().unwrap_or_default();
             let issue = last_script_issue.unwrap_or_else(|| "unknown".to_string());
             return Err(anyhow::anyhow!(
-                "snapshot returned zero elements (frontmost='{}', issue='{}'). ensure target window is visible/focused and accessibility permissions are granted",
+                "snapshot returned zero elements (frontmost='{}', issue='{}'). ensure target window is visible/focused and UI automation permissions are granted",
                 front_app,
                 issue
             ));

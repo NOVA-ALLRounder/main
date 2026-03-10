@@ -1,8 +1,8 @@
 use rusqlite::{params, Result};
 
 use super::{
-    get_db_lock, get_recommendation, normalize_admin_limit, row_bool, truncate_text,
-    update_recommendation_status,
+    get_recommendation, normalize_admin_limit, row_bool, truncate_text,
+    update_recommendation_status, with_read_conn, with_write_conn_if_available,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -39,16 +39,15 @@ pub struct RecommendationReviewMetrics {
 
 #[cfg(test)]
 pub fn clear_recommendation_review_events_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM recommendation_review_events", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn get_recommendation_review_metrics(limit: i64) -> Result<RecommendationReviewMetrics> {
     let limit = normalize_admin_limit(limit);
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let metrics = conn.query_row(
             "SELECT
                 COUNT(*) as total_events,
@@ -111,23 +110,26 @@ pub fn get_recommendation_review_metrics(limit: i64) -> Result<RecommendationRev
                 })
             },
         )?;
-        return Ok(metrics);
+        Ok(metrics)
+    }) {
+        Ok(metrics) => Ok(metrics),
+        Err(rusqlite::Error::InvalidQuery) => Ok(RecommendationReviewMetrics {
+            window_size: limit,
+            total_events: 0,
+            approve_actions: 0,
+            reject_actions: 0,
+            later_actions: 0,
+            restore_actions: 0,
+            feedback_positive: 0,
+            feedback_refine: 0,
+            feedback_negative: 0,
+            failed_actions: 0,
+            action_failure_rate: 0.0,
+            non_positive_feedback_rate: 0.0,
+            last_event_at: None,
+        }),
+        Err(error) => Err(error),
     }
-    Ok(RecommendationReviewMetrics {
-        window_size: limit,
-        total_events: 0,
-        approve_actions: 0,
-        reject_actions: 0,
-        later_actions: 0,
-        restore_actions: 0,
-        feedback_positive: 0,
-        feedback_refine: 0,
-        feedback_negative: 0,
-        failed_actions: 0,
-        action_failure_rate: 0.0,
-        non_positive_feedback_rate: 0.0,
-        last_event_at: None,
-    })
 }
 
 pub fn snooze_recommendation(id: i64, hours: i64) -> Result<()> {
@@ -142,8 +144,7 @@ pub fn snooze_recommendation(id: i64, hours: i64) -> Result<()> {
             id, rec.status
         )));
     }
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE recommendations
              SET status = 'pending',
@@ -151,7 +152,8 @@ pub fn snooze_recommendation(id: i64, hours: i64) -> Result<()> {
              WHERE id = ?2",
             params![snoozed_until, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -165,8 +167,7 @@ pub fn restore_recommendation(id: i64) -> Result<()> {
             id, rec.status
         )));
     }
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE recommendations
              SET status = 'pending',
@@ -174,7 +175,8 @@ pub fn restore_recommendation(id: i64) -> Result<()> {
              WHERE id = ?1",
             params![id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -271,8 +273,7 @@ pub fn record_recommendation_review_event(
         .map(|value| truncate_text(value.trim(), 500))
         .filter(|value| !value.is_empty());
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO recommendation_review_events (
                 created_at, recommendation_id, recommendation_title, status_after, category, action, actor, note, ok, message
@@ -290,7 +291,8 @@ pub fn record_recommendation_review_event(
                 message,
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -298,9 +300,8 @@ pub fn list_recommendation_review_events(
     limit: i64,
 ) -> Result<Vec<RecommendationReviewEventRecord>> {
     let limit = normalize_admin_limit(limit);
-    let mut out = Vec::new();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
+        let mut out = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT id, created_at, recommendation_id, recommendation_title, status_after, category, action, actor, note, ok, message
              FROM recommendation_review_events
@@ -311,6 +312,10 @@ pub fn list_recommendation_review_events(
         for row in rows.flatten() {
             out.push(row);
         }
+        Ok(out)
+    }) {
+        Ok(events) => Ok(events),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(out)
 }

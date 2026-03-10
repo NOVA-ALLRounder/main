@@ -1,6 +1,9 @@
 use rusqlite::{params, Result};
 
-use super::{ensure_approval_decisions_table, get_db_lock, validate_exec_allowlist_pattern};
+use super::{
+    ensure_approval_decisions_table, validate_exec_allowlist_pattern, with_read_conn,
+    with_write_conn_if_available,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExecApproval {
@@ -67,12 +70,39 @@ pub struct ExecResult {
     pub updated_at: Option<String>,
 }
 
+fn map_exec_approval_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExecApproval> {
+    Ok(ExecApproval {
+        id: row.get(0)?,
+        command: row.get(1)?,
+        cwd: row.get(2).ok(),
+        created_at: row.get(3)?,
+        expires_at: row.get(4)?,
+        status: row.get(5)?,
+        decision: row.get(6).ok(),
+        resolved_at: row.get(7).ok(),
+        resolved_by: row.get(8).ok(),
+    })
+}
+
+fn map_exec_result_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ExecResult> {
+    Ok(ExecResult {
+        id: row.get(0)?,
+        command: row.get(1)?,
+        cwd: row.get(2).ok(),
+        status: row.get(3)?,
+        output: row.get(4).ok(),
+        error: row.get(5).ok(),
+        created_at: row.get(6)?,
+        updated_at: row.get(7).ok(),
+    })
+}
+
 #[cfg(test)]
 pub fn clear_exec_approvals_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM exec_approvals", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn create_exec_approval(
@@ -80,8 +110,7 @@ pub fn create_exec_approval(
     cwd: Option<&str>,
     expires_in_secs: i64,
 ) -> Result<ExecApproval> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(approval) = with_write_conn_if_available(|conn| {
         let now = chrono::Utc::now();
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = now.to_rfc3339();
@@ -93,7 +122,7 @@ pub fn create_exec_approval(
             params![id, command, cwd, created_at, expires_at],
         )?;
 
-        return Ok(ExecApproval {
+        Ok(ExecApproval {
             id,
             command: command.to_string(),
             cwd: cwd.map(|c| c.to_string()),
@@ -103,7 +132,9 @@ pub fn create_exec_approval(
             decision: None,
             resolved_at: None,
             resolved_by: None,
-        });
+        })
+    })? {
+        return Ok(approval);
     }
     Ok(ExecApproval {
         id: "".to_string(),
@@ -124,8 +155,7 @@ pub fn resolve_exec_approval(
     resolved_by: Option<&str>,
     decision: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let resolved_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE exec_approvals
@@ -133,26 +163,28 @@ pub fn resolve_exec_approval(
              WHERE id = ?5",
             params![status, resolved_at, resolved_by, decision, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_exec_approval_status(id: &str) -> Result<String> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let status: String = conn.query_row(
             "SELECT status FROM exec_approvals WHERE id = ?1",
             params![id],
             |row| row.get(0),
         )?;
-        return Ok(status);
+        Ok(status)
+    }) {
+        Ok(status) => Ok(status),
+        Err(rusqlite::Error::InvalidQuery) => Err(rusqlite::Error::QueryReturnedNoRows),
+        Err(error) => Err(error),
     }
-    Err(rusqlite::Error::QueryReturnedNoRows)
 }
 
 pub fn list_exec_approvals(status_filter: Option<&str>, limit: i64) -> Result<Vec<ExecApproval>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let sql = match status_filter {
             Some(_) => "SELECT id, command, cwd, created_at, expires_at, status, decision, resolved_at, resolved_by FROM exec_approvals WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
             None => "SELECT id, command, cwd, created_at, expires_at, status, decision, resolved_at, resolved_by FROM exec_approvals ORDER BY created_at DESC LIMIT ?1",
@@ -161,52 +193,30 @@ pub fn list_exec_approvals(status_filter: Option<&str>, limit: i64) -> Result<Ve
         let mut approvals = Vec::new();
         if let Some(s) = status_filter {
             let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![s, limit], |row| {
-                Ok(ExecApproval {
-                    id: row.get(0)?,
-                    command: row.get(1)?,
-                    cwd: row.get(2).ok(),
-                    created_at: row.get(3)?,
-                    expires_at: row.get(4)?,
-                    status: row.get(5)?,
-                    decision: row.get(6).ok(),
-                    resolved_at: row.get(7).ok(),
-                    resolved_by: row.get(8).ok(),
-                })
-            })?;
+            let rows = stmt.query_map(params![s, limit], map_exec_approval_row)?;
             for r in rows {
                 approvals.push(r?);
             }
         } else {
             let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![limit], |row| {
-                Ok(ExecApproval {
-                    id: row.get(0)?,
-                    command: row.get(1)?,
-                    cwd: row.get(2).ok(),
-                    created_at: row.get(3)?,
-                    expires_at: row.get(4)?,
-                    status: row.get(5)?,
-                    decision: row.get(6).ok(),
-                    resolved_at: row.get(7).ok(),
-                    resolved_by: row.get(8).ok(),
-                })
-            })?;
+            let rows = stmt.query_map(params![limit], map_exec_approval_row)?;
             for r in rows {
                 approvals.push(r?);
             }
         }
 
-        return Ok(approvals);
+        Ok(approvals)
+    }) {
+        Ok(approvals) => Ok(approvals),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn get_exec_approval_metrics(limit: i64) -> Result<ExecApprovalMetrics> {
     let capped = limit.clamp(10, 500);
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT
                 COUNT(*) as total,
@@ -253,29 +263,30 @@ pub fn get_exec_approval_metrics(limit: i64) -> Result<ExecApprovalMetrics> {
                 last_resolved_at: row.get(10).ok(),
             })
         })?;
-        return Ok(metrics);
+        Ok(metrics)
+    }) {
+        Ok(metrics) => Ok(metrics),
+        Err(rusqlite::Error::InvalidQuery) => Ok(ExecApprovalMetrics {
+            window_size: capped,
+            total: 0,
+            pending: 0,
+            approved: 0,
+            rejected: 0,
+            expired_pending: 0,
+            allow_once: 0,
+            allow_always: 0,
+            deny: 0,
+            approval_rate: 0.0,
+            oldest_pending_created_at: None,
+            last_created_at: None,
+            last_resolved_at: None,
+        }),
+        Err(error) => Err(error),
     }
-
-    Ok(ExecApprovalMetrics {
-        window_size: capped,
-        total: 0,
-        pending: 0,
-        approved: 0,
-        rejected: 0,
-        expired_pending: 0,
-        allow_once: 0,
-        allow_always: 0,
-        deny: 0,
-        approval_rate: 0.0,
-        oldest_pending_created_at: None,
-        last_created_at: None,
-        last_resolved_at: None,
-    })
 }
 
 pub fn find_valid_exec_approval(command: &str, cwd: Option<&str>) -> Result<Option<ExecApproval>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT id, command, cwd, created_at, expires_at, status, decision, resolved_at, resolved_by
@@ -287,31 +298,21 @@ pub fn find_valid_exec_approval(command: &str, cwd: Option<&str>) -> Result<Opti
              ORDER BY resolved_at DESC
              LIMIT 1",
         )?;
-        let row = stmt.query_row(params![command, now, cwd], |row| {
-            Ok(ExecApproval {
-                id: row.get(0)?,
-                command: row.get(1)?,
-                cwd: row.get(2).ok(),
-                created_at: row.get(3)?,
-                expires_at: row.get(4)?,
-                status: row.get(5)?,
-                decision: row.get(6).ok(),
-                resolved_at: row.get(7).ok(),
-                resolved_by: row.get(8).ok(),
-            })
-        });
-        return match row {
+        let row = stmt.query_row(params![command, now, cwd], map_exec_approval_row);
+        match row {
             Ok(found) => Ok(Some(found)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(error) => Err(error),
-        };
+        }
+    }) {
+        Ok(approval) => Ok(approval),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn get_exec_approval(id: &str) -> Result<Option<ExecApproval>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, command, cwd, created_at, expires_at, status, decision, resolved_at, resolved_by
              FROM exec_approvals
@@ -319,25 +320,18 @@ pub fn get_exec_approval(id: &str) -> Result<Option<ExecApproval>> {
         )?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
-            return Ok(Some(ExecApproval {
-                id: row.get(0)?,
-                command: row.get(1)?,
-                cwd: row.get(2).ok(),
-                created_at: row.get(3)?,
-                expires_at: row.get(4)?,
-                status: row.get(5)?,
-                decision: row.get(6).ok(),
-                resolved_at: row.get(7).ok(),
-                resolved_by: row.get(8).ok(),
-            }));
+            return Ok(Some(map_exec_approval_row(row)?));
         }
+        Ok(None)
+    }) {
+        Ok(approval) => Ok(approval),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn upsert_approval_policy(policy_key: &str, decision: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let updated_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO nl_approval_policies (policy_key, decision, updated_at)
@@ -345,37 +339,40 @@ pub fn upsert_approval_policy(policy_key: &str, decision: &str) -> Result<()> {
              ON CONFLICT(policy_key) DO UPDATE SET decision = excluded.decision, updated_at = excluded.updated_at",
             params![policy_key, decision, updated_at],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn delete_approval_policy(policy_key: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "DELETE FROM nl_approval_policies WHERE policy_key = ?1",
             params![policy_key],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_approval_policy_decision(policy_key: &str) -> Result<Option<String>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt =
             conn.prepare("SELECT decision FROM nl_approval_policies WHERE policy_key = ?1")?;
         let mut rows = stmt.query(params![policy_key])?;
         if let Some(row) = rows.next()? {
             return Ok(Some(row.get(0)?));
         }
+        Ok(None)
+    }) {
+        Ok(decision) => Ok(decision),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn list_approval_policies(limit: i64) -> Result<Vec<ApprovalPolicy>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT policy_key, decision, updated_at
              FROM nl_approval_policies
@@ -393,9 +390,12 @@ pub fn list_approval_policies(limit: i64) -> Result<Vec<ApprovalPolicy>> {
         for row in rows {
             policies.push(row?);
         }
-        return Ok(policies);
+        Ok(policies)
+    }) {
+        Ok(policies) => Ok(policies),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn upsert_approval_decision(
@@ -405,8 +405,7 @@ pub fn upsert_approval_decision(
     status: &str,
     ttl_seconds: i64,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         ensure_approval_decisions_table(conn);
         let now = chrono::Utc::now();
         let max_ttl_seconds = std::env::var("STEER_APPROVAL_DECISION_MAX_TTL_SECONDS")
@@ -439,13 +438,13 @@ pub fn upsert_approval_decision(
             "DELETE FROM nl_approval_decisions WHERE expires_at <= ?1",
             params![now_iso],
         );
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_active_approval_decision(decision_key: &str) -> Result<Option<ActiveApprovalDecision>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(decision) = with_write_conn_if_available(|conn| {
         ensure_approval_decisions_table(conn);
         let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
@@ -462,27 +461,30 @@ pub fn get_active_approval_decision(decision_key: &str) -> Result<Option<ActiveA
                 expires_at: row.get(1)?,
             }));
         }
+        Ok(None)
+    })? {
+        return Ok(decision);
     }
     Ok(None)
 }
 
 pub fn add_exec_allowlist(pattern: &str, cwd: Option<&str>) -> Result<i64> {
     validate_exec_allowlist_pattern(pattern)?;
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(id) = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO exec_allowlist (pattern, cwd, created_at) VALUES (?1, ?2, ?3)",
             params![pattern, cwd, created_at],
         )?;
-        return Ok(conn.last_insert_rowid());
+        Ok(conn.last_insert_rowid())
+    })? {
+        return Ok(id);
     }
     Ok(0)
 }
 
 pub fn list_exec_allowlist(limit: i64) -> Result<Vec<ExecAllowlistEntry>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, pattern, cwd, created_at, last_used_at, uses_count
              FROM exec_allowlist ORDER BY created_at DESC LIMIT ?1",
@@ -501,31 +503,34 @@ pub fn list_exec_allowlist(limit: i64) -> Result<Vec<ExecAllowlistEntry>> {
         for row in rows {
             entries.push(row?);
         }
-        return Ok(entries);
+        Ok(entries)
+    }) {
+        Ok(entries) => Ok(entries),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn remove_exec_allowlist(id: i64) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute("DELETE FROM exec_allowlist WHERE id = ?1", params![id])?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn create_exec_result(command: &str, cwd: Option<&str>) -> Result<ExecResult> {
-    let mut lock = get_db_lock();
     let id = uuid::Uuid::new_v4().to_string();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(result) = with_write_conn_if_available(|conn| {
+        let result_id = id.clone();
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO exec_results (id, command, cwd, status, output, error, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'pending', NULL, NULL, ?4, NULL)",
-            params![id, command, cwd, created_at],
+            params![result_id, command, cwd, created_at],
         )?;
-        return Ok(ExecResult {
-            id,
+        Ok(ExecResult {
+            id: result_id,
             command: command.to_string(),
             cwd: cwd.map(|value| value.to_string()),
             status: "pending".to_string(),
@@ -533,7 +538,9 @@ pub fn create_exec_result(command: &str, cwd: Option<&str>) -> Result<ExecResult
             error: None,
             created_at,
             updated_at: None,
-        });
+        })
+    })? {
+        return Ok(result);
     }
     Ok(ExecResult {
         id,
@@ -553,8 +560,7 @@ pub fn update_exec_result(
     output: Option<&str>,
     error: Option<&str>,
 ) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         let updated_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE exec_results
@@ -562,13 +568,13 @@ pub fn update_exec_result(
              WHERE id = ?5",
             params![status, output, error, updated_at, id],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_pending_exec_results(limit: i64) -> Result<Vec<ExecResult>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, command, cwd, status, output, error, created_at, updated_at
              FROM exec_results
@@ -576,30 +582,21 @@ pub fn list_pending_exec_results(limit: i64) -> Result<Vec<ExecResult>> {
              ORDER BY created_at ASC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit], |row| {
-            Ok(ExecResult {
-                id: row.get(0)?,
-                command: row.get(1)?,
-                cwd: row.get(2).ok(),
-                status: row.get(3)?,
-                output: row.get(4).ok(),
-                error: row.get(5).ok(),
-                created_at: row.get(6)?,
-                updated_at: row.get(7).ok(),
-            })
-        })?;
+        let rows = stmt.query_map(params![limit], map_exec_result_row)?;
         let mut results = Vec::new();
         for row in rows {
             results.push(row?);
         }
-        return Ok(results);
+        Ok(results)
+    }) {
+        Ok(results) => Ok(results),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }
 
 pub fn list_exec_results(status_filter: Option<&str>, limit: i64) -> Result<Vec<ExecResult>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let sql = match status_filter {
             Some(_) => "SELECT id, command, cwd, status, output, error, created_at, updated_at FROM exec_results WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2",
             None => "SELECT id, command, cwd, status, output, error, created_at, updated_at FROM exec_results ORDER BY created_at DESC LIMIT ?1",
@@ -608,40 +605,21 @@ pub fn list_exec_results(status_filter: Option<&str>, limit: i64) -> Result<Vec<
         let mut results = Vec::new();
         if let Some(status) = status_filter {
             let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![status, limit], |row| {
-                Ok(ExecResult {
-                    id: row.get(0)?,
-                    command: row.get(1)?,
-                    cwd: row.get(2).ok(),
-                    status: row.get(3)?,
-                    output: row.get(4).ok(),
-                    error: row.get(5).ok(),
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7).ok(),
-                })
-            })?;
+            let rows = stmt.query_map(params![status, limit], map_exec_result_row)?;
             for row in rows {
                 results.push(row?);
             }
         } else {
             let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![limit], |row| {
-                Ok(ExecResult {
-                    id: row.get(0)?,
-                    command: row.get(1)?,
-                    cwd: row.get(2).ok(),
-                    status: row.get(3)?,
-                    output: row.get(4).ok(),
-                    error: row.get(5).ok(),
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7).ok(),
-                })
-            })?;
+            let rows = stmt.query_map(params![limit], map_exec_result_row)?;
             for row in rows {
                 results.push(row?);
             }
         }
-        return Ok(results);
+        Ok(results)
+    }) {
+        Ok(results) => Ok(results),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(Vec::new())
 }

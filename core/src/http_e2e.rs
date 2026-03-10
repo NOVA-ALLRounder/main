@@ -2,7 +2,9 @@ mod steps;
 mod support;
 
 use anyhow::{Context, Result};
+use axum::{routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -16,8 +18,7 @@ use steps::{
 };
 use support::{
     build_archive_paths, canonical_string, seed_live_e2e_recommendation,
-    seed_release_readiness_fixture, spawn_digest_stub, write_http_e2e_report,
-    DbRuntimeIsolationGuard, ServerHandle,
+    seed_release_readiness_fixture, write_http_e2e_report, DbRuntimeIsolationGuard, ServerHandle,
 };
 pub use support::{
     latest_http_e2e_report_path, list_http_e2e_history, load_latest_http_e2e_report,
@@ -59,6 +60,14 @@ pub struct HttpE2EHistoryEntry {
     pub report_markdown_path: String,
 }
 
+async fn http_e2e_digest_stub() -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "ok",
+        "notion_url": "https://www.notion.so/http-e2e-digest",
+        "top_headlines_text": "1. 헤드라인 A\n2. 헤드라인 B"
+    }))
+}
+
 async fn run_http_e2e_inner(workdir: &Path) -> Result<HttpE2EReport> {
     let temp_dir = TempDir::new().context("failed to create http e2e temp dir")?;
     let temp_db_path = temp_dir.path().join("http_e2e.db");
@@ -86,9 +95,6 @@ async fn run_http_e2e_inner(workdir: &Path) -> Result<HttpE2EReport> {
 
     let seeded_recommendation_id = seed_live_e2e_recommendation()?;
 
-    let (digest_stub_url, digest_stub_handle) = spawn_digest_stub().await?;
-    std::env::set_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL", &digest_stub_url);
-
     let state = AppState {
         llm_client: None,
         current_goal: Arc::new(Mutex::new(None)),
@@ -100,7 +106,10 @@ async fn run_http_e2e_inner(workdir: &Path) -> Result<HttpE2EReport> {
         .local_addr()
         .context("failed to read live http e2e listener addr")?;
     let api_base_url = format!("http://{addr}");
-    let app = api_server::build_api_router(state);
+    let digest_stub_url = format!("{api_base_url}/api/http-e2e/digest-stub");
+    std::env::set_var("STEER_AI_DIGEST_PROGRAM_WEBHOOK_URL", &digest_stub_url);
+    let app = api_server::build_api_router(state)
+        .merge(Router::new().route("/api/http-e2e/digest-stub", post(http_e2e_digest_stub)));
     let server_handle = ServerHandle::new(tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     }));
@@ -189,7 +198,6 @@ async fn run_http_e2e_inner(workdir: &Path) -> Result<HttpE2EReport> {
     )?;
 
     server_handle.shutdown().await;
-    digest_stub_handle.shutdown().await;
 
     drop(temp_dir);
     Ok(report)

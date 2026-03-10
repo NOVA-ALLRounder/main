@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crate::platform::{current_platform, PlatformKind};
 
 use crate::controller::actions::ActionRunner;
 
@@ -13,6 +14,15 @@ impl ActionRunner {
         let draft_hint = draft_id.unwrap_or_default().to_string();
         let strict_draft_check =
             Self::bool_env_with_default("STEER_MAIL_STRICT_DRAFT_CHECK", false);
+        if current_platform().kind() == PlatformKind::Windows {
+            return current_platform().send_mail_draft(
+                &fallback,
+                &subject_hint,
+                &marker_hint,
+                &draft_hint,
+                strict_draft_check,
+            );
+        }
         let strict_draft_check_arg = if strict_draft_check { "1" } else { "0" }.to_string();
         let lines = [
             "on sent_message_exists(targetSubject, targetRecipient, targetMarker)",

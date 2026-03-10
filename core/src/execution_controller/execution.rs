@@ -46,7 +46,11 @@ pub async fn execute_plan(
             && should_guard_interrupt_for_step(&step.step_type)
         {
             if let Some(expected_app) = expected_front_app_for_step(&step.data) {
-                let front_app = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+                let front_app = current_platform()
+                    .frontmost_app_name()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let mut front_trimmed = front_app.trim().to_string();
                 let mut recovered = false;
                 if !front_trimmed.is_empty() && !app_matches_expected(&front_trimmed, &expected_app)
@@ -57,7 +61,11 @@ pub async fn execute_plan(
                         "frontmost_mismatch_expected_app",
                     )
                     .await;
-                    let front_after_idle = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+                    let front_after_idle = current_platform()
+                        .frontmost_app_name()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
                     if !front_after_idle.trim().is_empty() {
                         front_trimmed = front_after_idle.trim().to_string();
                     }
@@ -119,11 +127,19 @@ pub async fn execute_plan(
         }
 
         if options.enforce_browser_focus && step_requires_browser_focus(&step.step_type) {
-            let mut front_app = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+            let mut front_app = current_platform()
+                .frontmost_app_name()
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             if !is_browser_app(&front_app) && focus_handoff_enabled() {
                 let _ =
                     wait_until_user_idle_if_active(&mut logs, idx, "browser_focus_required").await;
-                let front_after_idle = CrossAppBridge::get_frontmost_app().unwrap_or_default();
+                let front_after_idle = current_platform()
+                    .frontmost_app_name()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 if !front_after_idle.trim().is_empty() {
                     front_app = front_after_idle;
                 }

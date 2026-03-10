@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toggleRoutine } from "@/lib/api";
 import { useRoutineRuns, useRoutines } from "@/lib/hooks";
-import { format } from "date-fns";
+import { formatDashboardShortTime } from "@/features/dashboard/formatters";
 
 export function RoutinesCard() {
     const { data: routines, refetch: refetchRoutines } = useRoutines();
@@ -65,7 +65,7 @@ function RoutineRunHistory() {
                                 {run.status.toUpperCase()}
                             </span>
                             <span className="text-muted-foreground">
-                                {format(new Date(run.started_at), "HH:mm")}
+                                {formatDashboardShortTime(run.started_at)}
                             </span>
                         </div>
                     </div>

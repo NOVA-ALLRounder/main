@@ -1,4 +1,5 @@
 use super::*;
+use crate::platform::{parse_opened_or_switched_app_history_entry, AppRole};
 
 impl Planner {
     fn step_data_has_proof(step: &crate::session_store::SessionStep, proof: &str) -> bool {
@@ -10,21 +11,12 @@ impl Planner {
             .unwrap_or(false)
     }
 
+    fn parse_app_context_from_description(description: &str) -> Option<String> {
+        parse_opened_or_switched_app_history_entry(description.trim()).map(ToString::to_string)
+    }
+
     fn parse_app_context_from_step(step: &crate::session_store::SessionStep) -> Option<String> {
-        let description = step.description.trim();
-        if let Some(rest) = description.strip_prefix("Opened app: ") {
-            let app = rest.trim();
-            if !app.is_empty() {
-                return Some(app.to_lowercase());
-            }
-        }
-        if let Some(rest) = description.strip_prefix("Switched to app: ") {
-            let app = rest.trim();
-            if !app.is_empty() {
-                return Some(app.to_lowercase());
-            }
-        }
-        None
+        Self::parse_app_context_from_description(step.description.trim())
     }
 
     pub(super) fn collect_business_evidence(
@@ -32,8 +24,10 @@ impl Planner {
         history: &[String],
     ) -> RunGoalBusinessEvidence {
         let mut evidence = RunGoalBusinessEvidence::default();
-        let mut current_app = Self::last_opened_app_from_history(history).map(|a| a.to_lowercase());
-        let mut textedit_context_seen = current_app.as_deref() == Some("textedit");
+        let mut current_app = Self::last_opened_app_from_history(history);
+        let mut textedit_context_seen = current_app
+            .as_deref()
+            .is_some_and(|app| Self::app_is_role(app, AppRole::TextEditor));
         let mut sent_pending_step: Option<usize> = None;
         let mut no_draft_after_pending = false;
 
@@ -57,7 +51,7 @@ impl Planner {
 
             if step.status == "success" {
                 if let Some(app) = Self::parse_app_context_from_step(step) {
-                    if app == "textedit" {
+                    if Self::app_is_role(&app, AppRole::TextEditor) {
                         textedit_context_seen = true;
                     }
                     current_app = Some(app);
@@ -84,13 +78,13 @@ impl Planner {
             }
 
             if matches!(step.action_type.as_str(), "type" | "paste") {
-                match current_app.as_deref() {
-                    Some("notes") => evidence.notes_write_confirmed = true,
-                    Some("textedit") => {
+                if let Some(app) = current_app.as_deref() {
+                    if Self::app_is_role(app, AppRole::NotesApp) {
+                        evidence.notes_write_confirmed = true;
+                    } else if Self::app_is_role(app, AppRole::TextEditor) {
                         evidence.textedit_write_confirmed = true;
                         textedit_context_seen = true;
                     }
-                    _ => {}
                 }
             }
 
@@ -126,20 +120,20 @@ impl Planner {
         if !evidence.notes_write_confirmed {
             evidence.notes_write_confirmed =
                 Self::history_contains_case_insensitive(history, "(notes body)")
-                    || (Self::history_contains_case_insensitive(history, "opened app: notes")
+                    || (Self::history_contains_opened_role_app(history, AppRole::NotesApp)
                         && Self::history_contains_case_insensitive(history, "typed '"));
         }
         if !evidence.textedit_write_confirmed {
             evidence.textedit_write_confirmed =
                 Self::history_contains_case_insensitive(history, "(textedit body)")
-                    || (Self::history_contains_case_insensitive(history, "opened app: textedit")
+                    || (Self::history_contains_opened_role_app(history, AppRole::TextEditor)
                         && Self::history_contains_case_insensitive(history, "typed '"));
         }
         if !evidence.textedit_save_confirmed {
             let strict_textedit_save_proof =
                 Self::env_truthy_default("STEER_STRICT_TEXTEDIT_SAVE_PROOF", true);
             evidence.textedit_save_confirmed = (!strict_textedit_save_proof
-                && Self::history_contains_case_insensitive(history, "opened app: textedit")
+                && Self::history_contains_opened_role_app(history, AppRole::TextEditor)
                 && Self::history_contains_shortcut(history, "s"))
                 || Self::history_contains_case_insensitive(history, "textedit saved")
                 || Self::history_contains_case_insensitive(history, "file saved");

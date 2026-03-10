@@ -97,6 +97,21 @@ pub struct TaskRunsQuery {
     pub status: Option<String>,
 }
 
+#[derive(Deserialize, Default)]
+pub struct TaskRunAssertionsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub stage_name: Option<String>,
+    pub failed_only: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct TaskRunArtifactsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub artifact_type: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct CollectorHandoffReceiptsQuery {
     pub limit: Option<i64>,

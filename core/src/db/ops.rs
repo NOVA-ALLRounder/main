@@ -1,6 +1,9 @@
 use rusqlite::{params, Result};
 
-use super::{get_db_lock, normalize_admin_limit, normalize_memory_scope, row_bool, truncate_text};
+use super::{
+    normalize_admin_limit, normalize_memory_scope, row_bool, truncate_text, with_read_conn,
+    with_write_conn_if_available,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MemoryOpsMetrics {
@@ -78,18 +81,18 @@ pub struct LaunchOpsMetrics {
 
 #[cfg(test)]
 pub fn clear_launch_ops_events_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM launch_ops_events", []);
-    }
+        Ok(())
+    }) {}
 }
 
 #[cfg(test)]
 pub fn clear_memory_admin_events_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM memory_admin_events", []);
-    }
+        Ok(())
+    }) {}
 }
 
 fn map_launch_ops_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchOpsEventRecord> {
@@ -131,8 +134,7 @@ fn map_memory_admin_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memor
 }
 
 pub fn get_memory_ops_metrics() -> Result<MemoryOpsMetrics> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let request_active: i64 = conn.query_row(
             "SELECT COUNT(*) FROM request_memory WHERE suppressed = 0",
             [],
@@ -167,23 +169,26 @@ pub fn get_memory_ops_metrics() -> Result<MemoryOpsMetrics> {
                 |row| row.get(0),
             )
             .ok();
-        return Ok(MemoryOpsMetrics {
+        Ok(MemoryOpsMetrics {
             request_active,
             request_suppressed,
             execution_active,
             execution_suppressed,
             last_request_used_at,
             last_execution_used_at,
-        });
+        })
+    }) {
+        Ok(metrics) => Ok(metrics),
+        Err(rusqlite::Error::InvalidQuery) => Ok(MemoryOpsMetrics {
+            request_active: 0,
+            request_suppressed: 0,
+            execution_active: 0,
+            execution_suppressed: 0,
+            last_request_used_at: None,
+            last_execution_used_at: None,
+        }),
+        Err(error) => Err(error),
     }
-    Ok(MemoryOpsMetrics {
-        request_active: 0,
-        request_suppressed: 0,
-        execution_active: 0,
-        execution_suppressed: 0,
-        last_request_used_at: None,
-        last_execution_used_at: None,
-    })
 }
 
 fn normalize_launch_ops_window_limit(limit: i64) -> i64 {
@@ -229,8 +234,7 @@ pub fn record_launch_ops_event(
         .map(|value| truncate_text(value.trim(), 500))
         .filter(|value| !value.is_empty());
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO launch_ops_events (
                 created_at, channel, memory_scope, message_preview, route_kind, command, outcome,
@@ -258,15 +262,15 @@ pub fn record_launch_ops_event(
                 note,
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_launch_ops_events(limit: i64) -> Result<Vec<LaunchOpsEventRecord>> {
     let limit = normalize_launch_ops_list_limit(limit);
-    let mut out = Vec::new();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
+        let mut out = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT id, created_at, channel, memory_scope, message_preview, route_kind, command,
                     outcome, confidence, freshness_bypassed, intent_memory_hit, request_memory_hit,
@@ -280,8 +284,12 @@ pub fn list_launch_ops_events(limit: i64) -> Result<Vec<LaunchOpsEventRecord>> {
         for row in rows.flatten() {
             out.push(row);
         }
+        Ok(out)
+    }) {
+        Ok(events) => Ok(events),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(out)
 }
 
 pub fn record_memory_admin_event(
@@ -321,8 +329,7 @@ pub fn record_memory_admin_event(
         .map(|value| truncate_text(value.trim(), 500))
         .filter(|value| !value.is_empty());
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO memory_admin_events (
                 created_at, kind, action, memory_scope, target_key, reason, actor, ok, message
@@ -339,15 +346,15 @@ pub fn record_memory_admin_event(
                 message,
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn list_memory_admin_events(limit: i64) -> Result<Vec<MemoryAdminEventRecord>> {
     let limit = normalize_admin_limit(limit);
-    let mut out = Vec::new();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
+        let mut out = Vec::new();
         let mut stmt = conn.prepare(
             "SELECT id, created_at, kind, action, memory_scope, target_key, reason, actor, ok, message
              FROM memory_admin_events
@@ -358,14 +365,17 @@ pub fn list_memory_admin_events(limit: i64) -> Result<Vec<MemoryAdminEventRecord
         for row in rows.flatten() {
             out.push(row);
         }
+        Ok(out)
+    }) {
+        Ok(events) => Ok(events),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(out)
 }
 
 pub fn get_launch_ops_metrics(limit: i64) -> Result<LaunchOpsMetrics> {
     let limit = normalize_launch_ops_window_limit(limit);
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let metrics = conn.query_row(
             "SELECT
                 COUNT(*) as total_requests,
@@ -448,27 +458,29 @@ pub fn get_launch_ops_metrics(limit: i64) -> Result<LaunchOpsMetrics> {
         for row in breakdown_rows.flatten() {
             with_breakdown.route_breakdown.push(row);
         }
-        return Ok(with_breakdown);
+        Ok(with_breakdown)
+    }) {
+        Ok(metrics) => Ok(metrics),
+        Err(rusqlite::Error::InvalidQuery) => Ok(LaunchOpsMetrics {
+            window_size: limit,
+            total_requests: 0,
+            blocked_requests: 0,
+            intent_memory_hits: 0,
+            request_memory_hits: 0,
+            execution_memory_hits: 0,
+            cached_response_hit_rate: 0.0,
+            deterministic_routes: 0,
+            llm_routes: 0,
+            ai_digest_routes: 0,
+            ai_digest_auto_routes: 0,
+            local_routes: 0,
+            freshness_bypasses: 0,
+            low_confidence_routes: 0,
+            unknown_routes: 0,
+            error_routes: 0,
+            last_event_at: None,
+            route_breakdown: Vec::new(),
+        }),
+        Err(error) => Err(error),
     }
-
-    Ok(LaunchOpsMetrics {
-        window_size: limit,
-        total_requests: 0,
-        blocked_requests: 0,
-        intent_memory_hits: 0,
-        request_memory_hits: 0,
-        execution_memory_hits: 0,
-        cached_response_hit_rate: 0.0,
-        deterministic_routes: 0,
-        llm_routes: 0,
-        ai_digest_routes: 0,
-        ai_digest_auto_routes: 0,
-        local_routes: 0,
-        freshness_bypasses: 0,
-        low_confidence_routes: 0,
-        unknown_routes: 0,
-        error_routes: 0,
-        last_event_at: None,
-        route_breakdown: Vec::new(),
-    })
 }

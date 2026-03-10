@@ -388,6 +388,7 @@ export function useLauncherDispatchFlow({
             setLastStatus,
             setLoading,
             setPendingDispatch,
+            setPendingApproval,
             setRecoveryActionBusyKey,
             setResults,
             setRunPhase,

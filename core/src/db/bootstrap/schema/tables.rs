@@ -469,6 +469,21 @@ fn apply_indexes(conn: &Connection) -> anyhow::Result<()> {
         [],
     )?;
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recommendations_status_created
+         ON recommendations(status, created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recommendations_pattern_created
+         ON recommendations(pattern_id, created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_runs_status_created
+         ON task_runs(status, created_at DESC)",
+        [],
+    )?;
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_stage_runs_run_id
          ON task_stage_runs(run_id, stage_order)",
         [],
@@ -476,6 +491,16 @@ fn apply_indexes(conn: &Connection) -> anyhow::Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_stage_assertions_run_id
          ON task_stage_assertions(run_id, stage_name)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_stage_assertions_run_stage_created
+         ON task_stage_assertions(run_id, stage_name, created_at DESC, id DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_stage_assertions_run_passed_created
+         ON task_stage_assertions(run_id, passed, created_at DESC, id DESC)",
         [],
     )?;
     conn.execute(
@@ -487,6 +512,11 @@ fn apply_indexes(conn: &Connection) -> anyhow::Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_run_id
          ON task_run_artifacts(run_id, created_at)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_run_type_created
+         ON task_run_artifacts(run_id, artifact_type, created_at DESC, id DESC)",
         [],
     )?;
     conn.execute(
@@ -507,6 +537,46 @@ fn apply_indexes(conn: &Connection) -> anyhow::Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_workflow_provision_ops_recommendation
          ON workflow_provision_ops(recommendation_id, updated_at)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_provision_ops_recommendation_status
+         ON workflow_provision_ops(recommendation_id, status, updated_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_exec_approvals_status_created
+         ON exec_approvals(status, created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_exec_approvals_lookup
+         ON exec_approvals(status, command, cwd, expires_at, resolved_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_exec_results_status_created
+         ON exec_results(status, created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_nl_approval_policies_updated
+         ON nl_approval_policies(updated_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_nl_runs_created
+         ON nl_runs(created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_verification_runs_created
+         ON verification_runs(created_at DESC)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_routine_runs_started
+         ON routine_runs(started_at DESC)",
         [],
     )?;
     Ok(())

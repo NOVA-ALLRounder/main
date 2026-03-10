@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import { retryUnlessOffline } from '@/lib/queryRetry'
 
 const Launcher = lazy(() => import('@/features/launcher/Launcher'))
 const WidgetLayer = lazy(() => import('@/features/widget/WidgetLayer'))
@@ -14,7 +15,7 @@ const ChatPanel = lazy(() => import('@/features/chat/ChatPanel'))
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: retryUnlessOffline(1),
       refetchOnWindowFocus: false,
     },
   },
@@ -178,12 +179,14 @@ function App() {
                 <Launcher />
               </div>
             ) : (
-              <div className="h-screen w-screen overflow-hidden bg-[#060b14] text-white flex">
+              <div className="box-border flex h-screen min-h-0 w-screen flex-col overflow-hidden bg-[#060b14] text-white lg:flex-row">
                 <Sidebar
                   active={legacyView}
                   onNavigate={(id) => setLegacyView(normalizeLegacyView(id))}
                 />
-                <main className="flex-1 overflow-y-auto p-6">{legacyPanel}</main>
+                <main className="min-h-0 flex-1 overflow-y-auto p-4 pb-8 sm:p-6">
+                  {legacyPanel}
+                </main>
               </div>
             )}
           </>

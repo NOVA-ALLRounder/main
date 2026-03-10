@@ -1,4 +1,5 @@
 use anyhow::Result;
+use crate::platform::{current_platform, PlatformKind};
 
 use super::super::ActionRunner;
 
@@ -11,6 +12,13 @@ impl ActionRunner {
         let recipient_hint = Self::preferred_mail_recipient(goal).unwrap_or_default();
         let marker_hint = Self::preferred_run_scope_marker(goal).unwrap_or_default();
         Self::mail_guard_outgoing_drafts(goal, Some(preferred_id.as_str()))?;
+        if current_platform().kind() == PlatformKind::Windows {
+            let draft_id =
+                current_platform().ensure_mail_draft(&preferred_id, &recipient_hint, &marker_hint)?;
+            let trimmed = draft_id.trim().to_string();
+            Self::remember_mail_draft_id(history, &trimmed);
+            return Ok(trimmed);
+        }
         let lines = [
             "on run argv",
             "set preferredId to \"\"",
@@ -115,6 +123,18 @@ impl ActionRunner {
             return Ok(());
         };
         let draft_hint = draft_id.unwrap_or_default().to_string();
+        if current_platform().kind() == PlatformKind::Windows {
+            let out = current_platform().set_mail_recipient_if_missing(&address, &draft_hint)?;
+            let mut parts = out.trim().split('|');
+            let status = parts.next().unwrap_or("").trim();
+            if status != "ok" {
+                return Err(anyhow::anyhow!(
+                    "mail recipient target unavailable: {}",
+                    out.trim()
+                ));
+            }
+            return Ok(());
+        }
         let lines = [
             "on run argv",
             "set toAddress to item 1 of argv",
@@ -172,6 +192,9 @@ impl ActionRunner {
     }
 
     pub(in crate::controller::actions) fn mail_outgoing_count() -> Result<i64> {
+        if current_platform().kind() == PlatformKind::Windows {
+            return current_platform().outgoing_mail_draft_count();
+        }
         let lines = [
             "tell application \"Mail\"",
             "return (count of outgoing messages)",
@@ -221,6 +244,9 @@ impl ActionRunner {
             return Ok(0);
         }
         let keep_hint = keep_draft_id.unwrap_or_default().trim().to_string();
+        if current_platform().kind() == PlatformKind::Windows {
+            return current_platform().cleanup_outgoing_mail_drafts(&marker_hint, &keep_hint);
+        }
         let lines = [
             "on run argv",
             "set markerHint to item 1 of argv",
@@ -271,6 +297,19 @@ impl ActionRunner {
         draft_id: Option<&str>,
     ) -> Result<String> {
         let draft_hint = draft_id.unwrap_or_default().to_string();
+        if current_platform().kind() == PlatformKind::Windows {
+            let out = current_platform().set_mail_subject(subject, &draft_hint)?;
+            let trimmed = out.trim();
+            let mut parts = trimmed.split('|');
+            let status = parts.next().unwrap_or("").trim();
+            if status != "ok" {
+                return Err(anyhow::anyhow!(
+                    "mail subject target unavailable: {}",
+                    trimmed
+                ));
+            }
+            return Ok(parts.next().unwrap_or("").trim().to_string());
+        }
         let lines = [
             "on run argv",
             "set subjectText to item 1 of argv",
@@ -325,6 +364,9 @@ impl ActionRunner {
         draft_id: Option<&str>,
     ) -> Result<(String, i64)> {
         let draft_hint = draft_id.unwrap_or_default().to_string();
+        if current_platform().kind() == PlatformKind::Windows {
+            return current_platform().append_mail_body(text, &draft_hint);
+        }
         let lines = [
             "on run argv",
             "set bodyText to item 1 of argv",
@@ -392,6 +434,13 @@ impl ActionRunner {
     ) -> Result<(String, i64)> {
         let subject_hint = Self::preferred_mail_subject(goal).unwrap_or_default();
         let recipient_hint = Self::preferred_mail_recipient(goal).unwrap_or_default();
+        if current_platform().kind() == PlatformKind::Windows {
+            return current_platform().create_filled_mail_draft(
+                body_text,
+                &subject_hint,
+                &recipient_hint,
+            );
+        }
         let lines = [
             "on run argv",
             "set bodyText to item 1 of argv",

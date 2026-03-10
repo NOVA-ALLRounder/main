@@ -1,6 +1,11 @@
 use super::Planner;
+use crate::platform::{parse_opened_or_switched_app_history_entry, AppRole};
 
 impl Planner {
+    fn opened_app_from_history_entry(entry: &str) -> Option<&str> {
+        parse_opened_or_switched_app_history_entry(entry)
+    }
+
     pub(super) fn history_has_mail_subject(history: &[String]) -> bool {
         history.iter().any(|h| {
             let lower = h.to_lowercase();
@@ -54,14 +59,48 @@ impl Planner {
 
     pub(super) fn last_opened_app(history: &[String]) -> Option<String> {
         for entry in history.iter().rev() {
-            if let Some(rest) = entry.strip_prefix("Opened app: ") {
-                let app = rest.trim();
-                if !app.is_empty() {
-                    return Some(app.to_string());
-                }
+            if let Some(app) = Self::opened_app_from_history_entry(entry) {
+                return Some(app.to_string());
             }
         }
         None
+    }
+
+    pub(super) fn last_opened_app_from_history(history: &[String]) -> Option<String> {
+        Self::last_opened_app(history)
+    }
+
+    pub(super) fn history_contains_opened_app(history: &[String], app_name: &str) -> bool {
+        history.iter().any(|entry| {
+            Self::opened_app_from_history_entry(entry)
+                .map(|opened| opened.eq_ignore_ascii_case(app_name))
+                .unwrap_or(false)
+        })
+    }
+
+    pub(super) fn history_contains_opened_role_app(history: &[String], role: AppRole) -> bool {
+        history.iter().any(|entry| {
+            Self::opened_app_from_history_entry(entry)
+                .map(|opened| Self::app_is_role(opened, role))
+                .unwrap_or(false)
+        })
+    }
+
+    pub(super) fn last_history_index_opened_role_app(
+        history: &[String],
+        role: AppRole,
+    ) -> Option<usize> {
+        history.iter().rposition(|entry| {
+            Self::opened_app_from_history_entry(entry)
+                .map(|opened| Self::app_is_role(opened, role))
+                .unwrap_or(false)
+        })
+    }
+
+    pub(super) fn history_last_opened_is_app(history: &[String], app_name: &str) -> bool {
+        Self::last_opened_app(history)
+            .map(|opened| opened.eq_ignore_ascii_case(app_name))
+            .unwrap_or(false)
     }
 
     pub(super) fn has_recent_created_item(history: &[String]) -> bool {
@@ -93,16 +132,11 @@ impl Planner {
     }
 
     pub(super) fn history_has_recent_new_item_for_app(history: &[String], app_name: &str) -> bool {
-        let target = app_name.to_lowercase();
-        let mut in_target_context = Self::last_opened_app(history)
-            .map(|app| app.eq_ignore_ascii_case(app_name))
-            .unwrap_or(false);
+        let mut in_target_context = Self::history_last_opened_is_app(history, app_name);
 
         for entry in history.iter().rev().take(24) {
-            let lower = entry.to_lowercase();
-            if let Some(rest) = lower.strip_prefix("opened app: ") {
-                let opened = rest.trim();
-                if opened.eq_ignore_ascii_case(&target) {
+            if let Some(opened) = Self::opened_app_from_history_entry(entry) {
+                if opened.eq_ignore_ascii_case(app_name) {
                     in_target_context = true;
                     continue;
                 }
@@ -111,6 +145,7 @@ impl Planner {
                 }
                 continue;
             }
+            let lower = entry.to_lowercase();
             if !in_target_context {
                 continue;
             }

@@ -1,7 +1,9 @@
 use rusqlite::{params, params_from_iter, Result};
 use serde_json::Value;
 
-use crate::db::{get_db_lock, normalize_admin_limit, truncate_text};
+use crate::db::{
+    normalize_admin_limit, truncate_text, with_read_conn, with_write_conn_if_available,
+};
 use crate::request_memory::build_request_signature;
 
 use super::support::{
@@ -35,10 +37,10 @@ pub struct RequestMemoryRecord {
 
 #[cfg(test)]
 pub fn clear_request_memory_for_tests() {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Ok(Some(())) = with_write_conn_if_available(|conn| {
         let _ = conn.execute("DELETE FROM request_memory", []);
-    }
+        Ok(())
+    }) {}
 }
 
 pub fn upsert_request_memory(
@@ -82,8 +84,7 @@ pub fn upsert_request_memory_scoped(
     let response_text = response_text.map(|value| truncate_text(value, 4000));
     let now = chrono::Utc::now().to_rfc3339();
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute(
             "INSERT INTO request_memory (
                 normalized_request, memory_scope, original_request, request_signature, intent_json, intent_command,
@@ -143,7 +144,8 @@ pub fn upsert_request_memory_scoped(
                 now,
             ],
         )?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -161,8 +163,7 @@ pub fn get_request_memory_scoped(
         return Ok(None);
     };
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT normalized_request, memory_scope, original_request, request_signature, intent_json, intent_command,
                     response_text, response_mode, source, confidence,
@@ -179,8 +180,12 @@ pub fn get_request_memory_scoped(
         if let Some(row) = rows.next()? {
             return Ok(Some(map_request_memory_row(row)?));
         }
+        Ok(None)
+    }) {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn get_request_memory_by_signature(
@@ -199,6 +204,7 @@ pub fn get_request_memory_by_signature_scoped(
     if request_signature.is_none() || allowed_commands.is_empty() {
         return Ok(None);
     }
+    let request_signature = request_signature.unwrap();
     let memory_scope = crate::db::normalize_memory_scope(memory_scope);
 
     let placeholders = (0..allowed_commands.len())
@@ -234,12 +240,11 @@ pub fn get_request_memory_by_signature_scoped(
         placeholders
     );
 
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(&sql)?;
         let params = params_from_iter(
-            std::iter::once(request_signature.unwrap())
-                .chain(std::iter::once(memory_scope))
+            std::iter::once(request_signature.clone())
+                .chain(std::iter::once(memory_scope.clone()))
                 .chain(
                     allowed_commands
                         .iter()
@@ -250,8 +255,12 @@ pub fn get_request_memory_by_signature_scoped(
         if let Some(row) = rows.next()? {
             return Ok(Some(map_request_memory_row(row)?));
         }
+        Ok(None)
+    }) {
+        Ok(record) => Ok(record),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
 }
 
 pub fn list_request_memory_records(
@@ -259,9 +268,8 @@ pub fn list_request_memory_records(
     include_suppressed: bool,
 ) -> Result<Vec<RequestMemoryRecord>> {
     let limit = normalize_admin_limit(limit);
-    let mut out = Vec::new();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
+        let mut out = Vec::new();
         let mut stmt = if include_suppressed {
             conn.prepare(
                 "SELECT normalized_request, memory_scope, original_request, request_signature, intent_json, intent_command,
@@ -290,8 +298,12 @@ pub fn list_request_memory_records(
         for row in rows.flatten() {
             out.push(row);
         }
+        Ok(out)
+    }) {
+        Ok(records) => Ok(records),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
-    Ok(out)
 }
 
 pub fn suppress_request_memory(request_text: &str, reason: Option<&str>) -> Result<bool> {
@@ -312,19 +324,20 @@ pub fn suppress_request_memory_scoped(
     let reason = reason
         .map(|value| truncate_text(value, 500))
         .filter(|value| !value.is_empty());
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "UPDATE request_memory
              SET suppressed = 1,
-                 suppressed_reason = COALESCE(?1, suppressed_reason),
-                 suppressed_at = ?2,
+                suppressed_reason = COALESCE(?1, suppressed_reason),
+                suppressed_at = ?2,
                  updated_at = ?2
              WHERE normalized_request = ?3
                AND memory_scope = ?4",
             params![reason, now, normalized_request, memory_scope],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -343,19 +356,20 @@ pub fn restore_request_memory_scoped(
         return Ok(false);
     };
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "UPDATE request_memory
              SET suppressed = 0,
-                 suppressed_reason = NULL,
-                 suppressed_at = NULL,
+                suppressed_reason = NULL,
+                suppressed_at = NULL,
                  updated_at = ?1
              WHERE normalized_request = ?2
                AND memory_scope = ?3",
             params![now, normalized_request, memory_scope],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -373,15 +387,16 @@ pub fn delete_request_memory_scoped(
     else {
         return Ok(false);
     };
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let rows = conn.execute(
             "DELETE FROM request_memory
              WHERE normalized_request = ?1
                AND memory_scope = ?2",
             params![normalized_request, memory_scope],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }
@@ -414,8 +429,7 @@ pub fn record_request_memory_feedback_scoped(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(rows) = with_write_conn_if_available(|conn| {
         let positive_delta = if sentiment == "positive" { 1 } else { 0 };
         let negative_delta = if sentiment == "negative" { 1 } else { 0 };
         let rows = conn.execute(
@@ -436,7 +450,9 @@ pub fn record_request_memory_feedback_scoped(
                 response_text
             ],
         )?;
-        return Ok(rows > 0);
+        Ok(rows > 0)
+    })? {
+        return Ok(rows);
     }
     Ok(false)
 }

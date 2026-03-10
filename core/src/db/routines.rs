@@ -1,7 +1,7 @@
 use rusqlite::{params, Result};
 use std::str::FromStr;
 
-use super::get_db_lock;
+use super::{with_read_conn, with_write_conn_if_available};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Routine {
@@ -40,9 +40,30 @@ pub struct PolicyConfigReport {
     pub write_lock_default: bool,
 }
 
+fn map_routine_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Routine> {
+    Ok(Routine {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        cron_expression: row.get(2)?,
+        prompt: row.get(3)?,
+        enabled: row.get(4)?,
+        last_run: row.get(5)?,
+        next_run: row.get(6)?,
+        created_at: row.get(7)?,
+    })
+}
+
+fn map_learned_routine_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearnedRoutine> {
+    Ok(LearnedRoutine {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        steps_json: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
+
 pub fn create_routine(name: &str, cron: &str, prompt: &str) -> Result<i64> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(id) = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         let next_run = match cron::Schedule::from_str(cron) {
             Ok(schedule) => schedule
@@ -57,49 +78,39 @@ pub fn create_routine(name: &str, cron: &str, prompt: &str) -> Result<i64> {
             params![name, cron, prompt, created_at, next_run],
         )?;
         Ok(conn.last_insert_rowid())
-    } else {
-        Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some("DB not initialized".to_string()),
-        ))
+    })? {
+        return Ok(id);
     }
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(1),
+        Some("DB not initialized".to_string()),
+    ))
 }
 
 pub fn get_due_routines() -> Result<Vec<Routine>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT id, name, cron_expression, prompt, enabled, last_run, next_run, created_at
              FROM routines
              WHERE enabled = 1 AND next_run <= ?1",
         )?;
-        let rows = stmt.query_map(params![now], |row| {
-            Ok(Routine {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cron_expression: row.get(2)?,
-                prompt: row.get(3)?,
-                enabled: row.get(4)?,
-                last_run: row.get(5)?,
-                next_run: row.get(6)?,
-                created_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![now], map_routine_row)?;
 
         let mut routines = Vec::new();
         for routine in rows {
             routines.push(routine?);
         }
         Ok(routines)
-    } else {
-        Ok(Vec::new())
+    }) {
+        Ok(routines) => Ok(routines),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
 pub fn claim_routine_execution(routine_id: i64, owner: &str) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(claimed) = with_write_conn_if_available(|conn| {
         let now_dt = chrono::Utc::now();
         let now = now_dt.to_rfc3339();
         let stale_before = now_dt - chrono::Duration::minutes(parse_routine_claim_stale_minutes());
@@ -150,14 +161,15 @@ pub fn claim_routine_execution(routine_id: i64, owner: &str) -> Result<bool> {
             params![now, owner, routine_id],
         )?;
         tx.commit()?;
-        return Ok(true);
+        Ok(true)
+    })? {
+        return Ok(claimed);
     }
     Ok(false)
 }
 
 pub fn release_routine_execution(routine_id: i64, owner: Option<&str>) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         if let Some(owner_value) = owner {
             conn.execute(
                 "UPDATE routines
@@ -173,105 +185,85 @@ pub fn release_routine_execution(routine_id: i64, owner: Option<&str>) -> Result
                 params![routine_id],
             )?;
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn update_routine_execution(id: i64, next: Option<String>) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(()) = with_write_conn_if_available(|conn| {
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE routines SET last_run = ?1, next_run = ?2 WHERE id = ?3",
             params![now, next, id],
         )?;
         Ok(())
-    } else {
-        Ok(())
+    })? {
+        return Ok(());
     }
+    Ok(())
 }
 
 pub fn get_active_routines() -> Result<Vec<Routine>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, name, cron_expression, prompt, enabled, last_run, next_run, created_at
              FROM routines
              WHERE enabled = 1",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Routine {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cron_expression: row.get(2)?,
-                prompt: row.get(3)?,
-                enabled: row.get(4)?,
-                last_run: row.get(5)?,
-                next_run: row.get(6)?,
-                created_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_routine_row)?;
 
         let mut routines = Vec::new();
         for routine in rows {
             routines.push(routine?);
         }
         Ok(routines)
-    } else {
-        Ok(Vec::new())
+    }) {
+        Ok(routines) => Ok(routines),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
 pub fn get_all_routines() -> Result<Vec<Routine>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, name, cron_expression, prompt, enabled, last_run, next_run, created_at
              FROM routines
              ORDER BY created_at DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Routine {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                cron_expression: row.get(2)?,
-                prompt: row.get(3)?,
-                enabled: row.get(4)?,
-                last_run: row.get(5)?,
-                next_run: row.get(6)?,
-                created_at: row.get(7)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_routine_row)?;
 
         let mut routines = Vec::new();
         for routine in rows {
             routines.push(routine?);
         }
         Ok(routines)
-    } else {
-        Ok(Vec::new())
+    }) {
+        Ok(routines) => Ok(routines),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
 pub fn toggle_routine(id: i64, enabled: bool) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(()) = with_write_conn_if_available(|conn| {
         conn.execute(
             "UPDATE routines SET enabled = ?1 WHERE id = ?2",
             params![enabled, id],
         )?;
         Ok(())
-    } else {
-        Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some("DB not initialized".to_string()),
-        ))
+    })? {
+        return Ok(());
     }
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(1),
+        Some("DB not initialized".to_string()),
+    ))
 }
 
 pub fn is_exec_allowlisted(command: &str, cwd: Option<&str>) -> Result<bool> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(allowed) = with_write_conn_if_available(|conn| {
         let mut stmt =
             conn.prepare("SELECT id, pattern, cwd FROM exec_allowlist ORDER BY created_at DESC")?;
         let rows = stmt.query_map([], |row| {
@@ -300,6 +292,9 @@ pub fn is_exec_allowlisted(command: &str, cwd: Option<&str>) -> Result<bool> {
                 return Ok(true);
             }
         }
+        Ok(false)
+    })? {
+        return Ok(allowed);
     }
     Ok(false)
 }
@@ -387,83 +382,72 @@ pub(crate) fn validate_exec_allowlist_pattern(pattern: &str) -> Result<()> {
 }
 
 pub fn save_learned_routine(name: &str, steps_json: &str) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    if let Some(()) = with_write_conn_if_available(|conn| {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "INSERT OR REPLACE INTO learned_routines (name, steps_json, created_at) VALUES (?1, ?2, ?3)",
             params![name, steps_json, created_at],
         )?;
         Ok(())
-    } else {
-        Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(1),
-            Some("DB not initialized".to_string()),
-        ))
+    })? {
+        return Ok(());
     }
+    Err(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(1),
+        Some("DB not initialized".to_string()),
+    ))
 }
 
 pub fn get_learned_routine(name: &str) -> Result<Option<LearnedRoutine>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, name, steps_json, created_at FROM learned_routines WHERE name = ?1",
         )?;
         let mut rows = stmt.query(params![name])?;
 
         if let Some(row) = rows.next()? {
-            Ok(Some(LearnedRoutine {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                steps_json: row.get(2)?,
-                created_at: row.get(3)?,
-            }))
+            Ok(Some(map_learned_routine_row(row)?))
         } else {
             Ok(None)
         }
-    } else {
-        Ok(None)
+    }) {
+        Ok(routine) => Ok(routine),
+        Err(rusqlite::Error::InvalidQuery) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
 pub fn list_learned_routines() -> Result<Vec<LearnedRoutine>> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, name, steps_json, created_at
              FROM learned_routines
              ORDER BY created_at DESC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(LearnedRoutine {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                steps_json: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map([], map_learned_routine_row)?;
 
         let mut routines = Vec::new();
         for row in rows {
             routines.push(row?);
         }
         Ok(routines)
-    } else {
-        Ok(Vec::new())
+    }) {
+        Ok(routines) => Ok(routines),
+        Err(rusqlite::Error::InvalidQuery) => Ok(Vec::new()),
+        Err(error) => Err(error),
     }
 }
 
 pub fn delete_learned_routine(id: i64) -> Result<()> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    with_write_conn_if_available(|conn| {
         conn.execute("DELETE FROM learned_routines WHERE id = ?1", params![id])?;
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
 pub fn get_dashboard_stats() -> Result<DashboardStats> {
-    let mut lock = get_db_lock();
-    if let Some(conn) = lock.as_mut() {
+    match with_read_conn(|conn| {
         let (total_sessions, total_time_mins): (i64, i64) = conn
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(duration_sec)/60, 0) FROM sessions_v2",
@@ -507,13 +491,15 @@ pub fn get_dashboard_stats() -> Result<DashboardStats> {
             top_apps,
             rec_pending,
         })
-    } else {
-        Ok(DashboardStats {
+    }) {
+        Ok(stats) => Ok(stats),
+        Err(rusqlite::Error::InvalidQuery) => Ok(DashboardStats {
             total_sessions: 0,
             total_time_mins: 0,
             top_apps: vec![],
             rec_pending: 0,
-        })
+        }),
+        Err(error) => Err(error),
     }
 }
 

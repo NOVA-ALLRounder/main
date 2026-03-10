@@ -16,6 +16,7 @@ use crate::release_gate;
 use serde_json::json;
 use serial_test::serial;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -25,6 +26,45 @@ fn reset_memory_tables() {
     crate::db::clear_memory_admin_events_for_tests();
     crate::db::clear_launch_ops_events_for_tests();
     crate::db::clear_nl_runs_for_tests();
+}
+
+struct TestEnvGuard {
+    entries: Vec<(String, Option<String>)>,
+}
+
+impl TestEnvGuard {
+    fn capture(keys: &[&str]) -> Self {
+        Self {
+            entries: keys
+                .iter()
+                .map(|key| (key.to_string(), std::env::var(key).ok()))
+                .collect(),
+        }
+    }
+}
+
+impl Drop for TestEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.entries.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+async fn bind_test_listener_or_skip(context: &str) -> Option<tokio::net::TcpListener> {
+    match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {context}: loopback listener bind is not permitted in this environment"
+            );
+            None
+        }
+        Err(error) => panic!("bind test listener for {context}: {error}"),
+    }
 }
 
 fn test_plan(intent: IntentType) -> Plan {

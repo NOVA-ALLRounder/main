@@ -1,4 +1,5 @@
 use super::Planner;
+use crate::platform::AppRole;
 
 impl Planner {
     pub(super) fn scenario_mode_enabled() -> bool {
@@ -15,32 +16,6 @@ impl Planner {
             .any(|h| h.to_lowercase().contains(&needle_lower))
     }
 
-    pub(super) fn last_history_index_contains_case_insensitive(
-        history: &[String],
-        needle: &str,
-    ) -> Option<usize> {
-        let needle_lower = needle.to_lowercase();
-        history.iter().enumerate().rev().find_map(|(idx, entry)| {
-            if entry.to_lowercase().contains(&needle_lower) {
-                Some(idx)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub(super) fn last_opened_app_from_history(history: &[String]) -> Option<String> {
-        for entry in history.iter().rev() {
-            if let Some(rest) = entry.strip_prefix("Opened app: ") {
-                let app = rest.trim();
-                if !app.is_empty() {
-                    return Some(app.to_string());
-                }
-            }
-        }
-        None
-    }
-
     pub(super) fn goal_contains_any(goal_lower: &str, needles: &[&str]) -> bool {
         needles.iter().any(|needle| goal_lower.contains(needle))
     }
@@ -52,9 +27,8 @@ impl Planner {
     }
 
     pub(super) fn goal_requires_mail_send(goal: &str) -> bool {
-        let lower = goal.to_lowercase();
-        let mentions_mail =
-            lower.contains("mail") || lower.contains("메일") || lower.contains("이메일");
+        let lower = Self::normalize_text_for_matching(goal);
+        let mentions_mail = Self::goal_mentions_app_role(&lower, AppRole::MailClient);
         let mentions_send =
             lower.contains("send") || lower.contains("보내") || lower.contains("발송");
         mentions_mail && mentions_send
@@ -151,8 +125,7 @@ impl Planner {
             return;
         };
 
-        let opened_marker = format!("Opened app: {}", target_app);
-        if Self::history_contains_case_insensitive(history, &opened_marker) {
+        if Self::history_contains_opened_app(history, target_app) {
             *plan = serde_json::json!({ "action": "switch_app", "app": target_app });
             println!(
                 "   🔁 Rewrote click_visual dock/app action to switch_app: {}",
@@ -214,9 +187,9 @@ impl Planner {
 
     pub(super) fn in_mail_context(history: &[String]) -> bool {
         (match Self::last_opened_app(history) {
-            Some(app) => app.eq_ignore_ascii_case("Mail"),
+            Some(app) => Self::app_is_role(&app, AppRole::MailClient),
             None => false,
-        }) || Self::history_contains_case_insensitive(history, "Opened app: Mail")
+        }) || Self::history_contains_opened_role_app(history, AppRole::MailClient)
     }
 
     pub(super) fn history_has_mail_body(history: &[String]) -> bool {
@@ -268,7 +241,10 @@ impl Planner {
             return;
         }
 
-        *plan = serde_json::json!({ "action": "paste", "app": "Mail" });
+        *plan = serde_json::json!({
+            "action": "paste",
+            "app": Self::app_name_for_role(AppRole::MailClient)
+        });
         println!("   🔁 Rewrote Mail body click_visual to deterministic paste.");
     }
 
@@ -288,10 +264,16 @@ impl Planner {
                 return;
             }
             if !Self::history_has_mail_body(history) {
-                *plan = serde_json::json!({ "action": "paste", "app": "Mail" });
+                *plan = serde_json::json!({
+                    "action": "paste",
+                    "app": Self::app_name_for_role(AppRole::MailClient)
+                });
                 println!("   🔁 Rewrote snapshot to paste (Mail body pending).");
             } else {
-                *plan = serde_json::json!({ "action": "mail_send", "app": "Mail" });
+                *plan = serde_json::json!({
+                    "action": "mail_send",
+                    "app": Self::app_name_for_role(AppRole::MailClient)
+                });
                 println!("   🔁 Rewrote snapshot to mail_send (Mail send pending).");
             }
             return;
@@ -373,8 +355,8 @@ impl Planner {
             return false;
         }
 
-        let goal_lower = goal.to_lowercase();
-        let is_note_creation_goal = goal_lower.contains("notes")
+        let goal_lower = Self::normalize_text_for_matching(goal);
+        let is_note_creation_goal = Self::goal_mentions_app_role(&goal_lower, AppRole::NotesApp)
             && (goal_lower.contains("새 메모")
                 || goal_lower.contains("new note")
                 || goal_lower.contains("new memo"));
@@ -392,6 +374,7 @@ impl Planner {
             return false;
         }
 
-        Self::history_contains_case_insensitive(history, "Opened app: Notes")
+        Self::last_opened_app_from_history(history)
+            .is_some_and(|app| Self::app_is_role(&app, AppRole::NotesApp))
     }
 }

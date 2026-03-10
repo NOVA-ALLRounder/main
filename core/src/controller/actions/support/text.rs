@@ -1,4 +1,5 @@
 use crate::controller::actions::ActionRunner;
+use crate::platform::{app_matches_role, current_platform, AppRole};
 
 impl ActionRunner {
     pub(in crate::controller::actions) fn is_focus_noise_app(app: &str) -> bool {
@@ -14,9 +15,10 @@ impl ActionRunner {
     }
 
     pub(in crate::controller::actions) fn is_text_app(app: &str) -> bool {
-        app.eq_ignore_ascii_case("TextEdit")
-            || app.eq_ignore_ascii_case("Notes")
-            || app.eq_ignore_ascii_case("Mail")
+        let kind = current_platform().kind();
+        app_matches_role(kind, AppRole::TextEditor, app)
+            || app_matches_role(kind, AppRole::NotesApp, app)
+            || app_matches_role(kind, AppRole::MailClient, app)
     }
 
     pub(in crate::controller::actions) fn looks_like_calc_expression(text: &str) -> bool {
@@ -44,8 +46,7 @@ impl ActionRunner {
         history: &[String],
     ) -> Option<String> {
         for entry in history.iter().rev() {
-            if let Some(rest) = entry.strip_prefix("Opened app: ") {
-                let app = rest.trim();
+            if let Some(app) = Self::opened_app_from_history_entry(entry) {
                 if Self::is_text_app(app) {
                     return Some(app.to_string());
                 }
